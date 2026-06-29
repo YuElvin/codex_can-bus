@@ -1,0 +1,11 @@
+.DS_Store
+downloads/
+dev-tools/node_modules/
+dev-tools/.cache/
+build/
+cmake-build-*/
+*.elf
+*.hex
+*.bin
+*.map
+*.log

@@ -1,0 +1,20 @@
+{
+  "name": "can-bus-dev-tools",
+  "version": "0.1.0",
+  "private": true,
+  "xpack": {
+    "minimumXpmRequired": "0.20.5"
+  },
+  "scripts": {
+    "install-binaries": "node ../tools/install-xpack-binaries.mjs",
+    "xpm-install": "xpm install",
+    "doctor": "node ../tools/toolchain-doctor.mjs"
+  },
+  "devDependencies": {
+    "@xpack-dev-tools/arm-none-eabi-gcc": "^15.2.1-1.1.1",
+    "@xpack-dev-tools/cmake": "^3.31.9-1.1",
+    "@xpack-dev-tools/ninja-build": "^1.13.1-1.1",
+    "@xpack-dev-tools/openocd": "^0.12.0-7.1",
+    "xpm": "^0.23.2"
+  }
+}
