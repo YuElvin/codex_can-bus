@@ -1,0 +1,80 @@
+引脚分配，必须严格遵守
+
+### 1. 以太网 RMII，LAN8720 PHY，模块自带 50MHz 有源晶振
+
+| 引脚 | 功能 | 备注 |
+|------|------|------|
+| PA1 | ETH_RMII_REF_CLK | LAN8720 提供 50MHz 时钟输入 |
+| PA2 | ETH_MDIO | MDIO 数据 |
+| PA7 | ETH_RMII_CRS_DV | RMII 载波检测/数据有效 |
+| PC1 | ETH_MDC | MDIO 时钟 |
+| PC4 | ETH_RMII_RXD0 | RMII 接收数据 0 |
+| PC5 | ETH_RMII_RXD1 | RMII 接收数据 1 |
+| PB11 | ETH_RMII_TX_EN | RMII 发送使能 |
+| PB12 | ETH_RMII_TXD0 | RMII 发送数据 0 |
+| PB13 | ETH_RMII_TXD1 | RMII 发送数据 1 |
+
+### 2. QSPI，W25Q128 16MB 板载 Flash
+
+| 引脚 | 功能 |
+|------|------|
+| PB2 | QUADSPI_CLK |
+| PB10 | QUADSPI_BK1_NCS |
+| PD11 | QUADSPI_BK1_IO0 |
+| PD12 | QUADSPI_BK1_IO1 |
+| PE2 | QUADSPI_BK1_IO2 |
+| PD13 | QUADSPI_BK1_IO3 |
+
+### 3. SDMMC1，TF 卡
+
+| 引脚 | 功能 |
+|------|------|
+| PC8 | SDMMC1_D0 |
+| PC9 | SDMMC1_D1 |
+| PC10 | SDMMC1_D2 |
+| PC11 | SDMMC1_D3 |
+| PC12 | SDMMC1_CK |
+| PD2 | SDMMC1_CMD |
+| PA8 | SD_DETECT，GPIO 输入 |
+
+### 4. FDCAN1，一路 CAN-FD
+
+| 引脚 | 功能 | 备注 |
+|------|------|------|
+| PD0 | FDCAN1_RX | 5V 供电，RXD 空闲电压必须确认不超过 3.3V |
+| PD1 | FDCAN1_TX | - |
+
+二期预留：
+
+| 引脚 | 功能 |
+|------|------|
+| PB5 | FDCAN2_RX |
+| PB6 | FDCAN2_TX |
+
+### 5. 继电器，2 路，高电平触发，上电默认低/关闭
+
+| 引脚 | 功能 |
+|------|------|
+| PE7 | Relay1，GPIO 输出 |
+| PE8 | Relay2，GPIO 输出 |
+
+### 6. 调试 LED
+
+| 引脚 | 功能 |
+|------|------|
+| PE10 | DBG_LED1，心跳指示，高电平点亮 |
+| PE11 | DBG_LED2，空闲，按需用于调试 |
+
+### 7. 调试串口
+
+| 引脚 | 功能 | 参数 |
+|------|------|------|
+| PD5 | USART2_TX | 115200 8N1 |
+| PD6 | USART2_RX | 115200 8N1 |
+
+### 8. SWD 调试
+
+| 引脚 | 功能 |
+|------|------|
+| PA13 | SWDIO |
+| PA14 | SWCLK |
