@@ -2,10 +2,16 @@
 
 #include "platform/stm32h750_bringup.h"
 
+#include "bsp_driver_sd.h"
+
 #include <string.h>
 
 __attribute__((weak)) bool stm32h750_tf_card_detect(void) {
   return true;
+}
+
+uint8_t BSP_SD_IsDetected(void) {
+  return SD_PRESENT;
 }
 
 static TfCardResult build_fatfs_path(const Stm32TfCardContext *tf,
