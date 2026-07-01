@@ -28,6 +28,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "platform/stm32h750_bringup.h"
 
 /* USER CODE END Includes */
 
@@ -49,6 +50,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+volatile int g_tf_card_bringup_status = -1;
+volatile int g_lan8720_bringup_status = -1;
 
 /* USER CODE END PV */
 
@@ -100,6 +103,8 @@ int main(void)
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  g_tf_card_bringup_status = tf_card_bringup_run();
+  g_lan8720_bringup_status = lan8720_bringup_run();
 
   /* USER CODE END 2 */
 

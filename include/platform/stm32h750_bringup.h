@@ -1,7 +1,7 @@
 #ifndef STM32H750_BRINGUP_H
 #define STM32H750_BRINGUP_H
 
-#if defined(CAN_BUS_USE_STM32_HAL)
+#if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "ports/can_port.h"
 #include "ports/lan8720_port.h"
