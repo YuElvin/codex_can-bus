@@ -24,3 +24,4 @@
 - 用户反馈 TF 卡实际已插入开发板卡座；询问 ST-Link 只接 4 根线是否可以；并反馈 Windows 电脑执行 `ping 192.168.1.88 -S 192.168.1.100` 后显示“来自 192.168.1.100 的回复：无法访问目标主机”。
 - 用户要求启用 USART2 串口打印当前硬件验证信息，将 PHY 地址从 0 改为 1，跳过 PA8 插卡检查，然后完成编译、审查、反汇编检查；无错误后 commit 推送，再下载固件到开发板并检查 TF 卡功能。
 - 下载首版串口状态固件后，OpenOCD 读取 `g_lan8720_bringup_status=0`、`g_tf_card_bringup_status=2`；反汇编和代码核查确认项目自有 TF 检测已跳过 PA8，但 CubeMX/FatFs 底层 `BSP_SD_Init()` 仍会调用弱函数 `BSP_SD_IsDetected()` 并读取 PA8，因此需要覆盖 `BSP_SD_IsDetected()` 让底层挂载流程也跳过 PA8。
+- 覆盖 `BSP_SD_IsDetected()` 后再次下载运行，12 秒读回 TF/LAN 状态仍为初始 `-1`；45 秒后读回 `g_lan8720_bringup_status=0`、`g_tf_card_bringup_status=2`。OpenOCD PC 地址映射到 `SD_read`，代码核查发现 FatFs SD DMA 模板等待 `BSP_SD_ReadCpltCallback()`，但工程未启用 `SDMMC1_IRQn` 且缺少 `SDMMC1_IRQHandler()` 调用 `HAL_SD_IRQHandler(&hsd1)`，需要补齐 SDMMC1 中断路径。

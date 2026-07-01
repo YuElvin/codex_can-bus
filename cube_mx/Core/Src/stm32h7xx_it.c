@@ -57,6 +57,7 @@
 /* External variables --------------------------------------------------------*/
 extern FDCAN_HandleTypeDef hfdcan1;
 /* USER CODE BEGIN EV */
+extern SD_HandleTypeDef hsd1;
 
 /* USER CODE END EV */
 
@@ -212,5 +213,9 @@ void FDCAN1_IT1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+void SDMMC1_IRQHandler(void)
+{
+  HAL_SD_IRQHandler(&hsd1);
+}
 
 /* USER CODE END 1 */
