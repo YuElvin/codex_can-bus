@@ -17,3 +17,9 @@
 - 编译期间仍有 CubeMX/FatFs 第三方代码警告：`sd_diskio.c` 中 signed/unsigned 比较，以及 FatFs `ff.c` 中 implicit fallthrough；未发现阻断固件生成的错误。
 - 用户接入 ST-Link 和开发板 PD5/PD6 对应的 USB 串口后要求检查驱动。系统 USB 枚举到 `STM32 STLink`，OpenOCD 成功识别 `STLINK V2J37S7`、VID:PID `0483:3748`、目标电压约 `3.27 V`、STM32H7 Cortex-M7；USB 串口枚举为 `USB Serial`，VID:PID 为 `1a86:7523`，并生成 `/dev/cu.usbserial-12330` 与 `/dev/tty.usbserial-12330`，可通过串口设备节点访问。
 - 用户要求先进行 commit 并推送当前分支。
+- 用户要求把已生成固件下载到开发板，并给出开发板固件验证步骤和正常结果。
+- 已通过 OpenOCD/ST-Link 下载 `build/stm32h750/can_bus_gateway_stm32h750.hex` 到开发板，OpenOCD 输出 `Programming Finished`、`Verified OK`，目标电压约 `3.25 V`，随后复位目标板。
+- 下载后运行约 12 秒并读取状态变量：`0x24000000` 的 `g_lan8720_bringup_status` 为 `0`，表示 LAN8720 固件侧链路/IP 验证通过；`0x24000004` 的 `g_tf_card_bringup_status` 为 `1`，表示 TF 卡检测为未插入或检测脚未识别到卡。
+- 从当前电脑 ping `192.168.1.88` 失败，原因条件不充分：本机活动地址为 `10.22.30.218/24`，不在固件静态 IP 所在的 `192.168.1.0/24` 网段，路由表也未显示到开发板的直连网段。
+- 用户反馈 TF 卡实际已插入开发板卡座；询问 ST-Link 只接 4 根线是否可以；并反馈 Windows 电脑执行 `ping 192.168.1.88 -S 192.168.1.100` 后显示“来自 192.168.1.100 的回复：无法访问目标主机”。
+- 用户要求启用 USART2 串口打印当前硬件验证信息，将 PHY 地址从 0 改为 1，跳过 PA8 插卡检查，然后完成编译、审查、反汇编检查；无错误后 commit 推送，再下载固件到开发板并检查 TF 卡功能。

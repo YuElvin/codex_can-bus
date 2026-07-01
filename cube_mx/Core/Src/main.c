@@ -28,6 +28,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+
 #include "platform/stm32h750_bringup.h"
 
 /* USER CODE END Includes */
@@ -52,17 +55,53 @@
 /* USER CODE BEGIN PV */
 volatile int g_tf_card_bringup_status = -1;
 volatile int g_lan8720_bringup_status = -1;
+static uint32_t g_status_print_tick;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void bringup_print_status(const char *phase);
+static void bringup_uart_write(const char *text);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+extern struct netif gnetif;
+
+static void bringup_uart_write(const char *text)
+{
+  if (text == NULL) {
+    return;
+  }
+
+  (void)HAL_UART_Transmit(&huart2, (uint8_t *)text, (uint16_t)strlen(text), 1000u);
+}
+
+static void bringup_print_status(const char *phase)
+{
+  char line[192];
+  const uint32_t ip = gnetif.ip_addr.addr;
+  const unsigned int ip0 = ip & 0xffu;
+  const unsigned int ip1 = (ip >> 8u) & 0xffu;
+  const unsigned int ip2 = (ip >> 16u) & 0xffu;
+  const unsigned int ip3 = (ip >> 24u) & 0xffu;
+
+  (void)snprintf(line,
+                 sizeof(line),
+                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=1\r\n",
+                 phase,
+                 g_tf_card_bringup_status,
+                 g_lan8720_bringup_status,
+                 netif_is_link_up(&gnetif) ? 1u : 0u,
+                 ip0,
+                 ip1,
+                 ip2,
+                 ip3);
+  bringup_uart_write(line);
+}
 
 /* USER CODE END 0 */
 
@@ -103,8 +142,10 @@ int main(void)
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip phy=1\r\n");
   g_tf_card_bringup_status = tf_card_bringup_run();
   g_lan8720_bringup_status = lan8720_bringup_run();
+  bringup_print_status("init");
 
   /* USER CODE END 2 */
 
@@ -114,8 +155,12 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+  /* USER CODE BEGIN 3 */
     MX_LWIP_Process();
+    if (HAL_GetTick() - g_status_print_tick >= 1000u) {
+      g_status_print_tick = HAL_GetTick();
+      bringup_print_status("run");
+    }
   }
   /* USER CODE END 3 */
 }

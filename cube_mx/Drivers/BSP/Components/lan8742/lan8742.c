@@ -37,6 +37,7 @@
 /** @defgroup LAN8742_Private_Defines LAN8742 Private Defines
   * @{
   */
+#define LAN8742_FIRST_DEV_ADDR ((uint32_t)1U)
 #define LAN8742_MAX_DEV_ADDR   ((uint32_t)31U)
 /**
   * @}
@@ -82,7 +83,7 @@ int32_t  LAN8742_RegisterBusIO(lan8742_Object_t *pObj, lan8742_IOCtx_t *ioctx)
   */
  int32_t LAN8742_Init(lan8742_Object_t *pObj)
  {
-   uint32_t regvalue = 0, addr = 0;
+   uint32_t regvalue = 0, addr = LAN8742_FIRST_DEV_ADDR;
    int32_t status = LAN8742_STATUS_OK;
 
    if(pObj->Is_Initialized == 0)
@@ -97,7 +98,7 @@ int32_t  LAN8742_RegisterBusIO(lan8742_Object_t *pObj, lan8742_IOCtx_t *ioctx)
      pObj->DevAddr = LAN8742_MAX_DEV_ADDR + 1;
 
      /* Get the device address from special mode register */
-     for(addr = 0; addr <= LAN8742_MAX_DEV_ADDR; addr ++)
+     for(addr = LAN8742_FIRST_DEV_ADDR; addr <= LAN8742_MAX_DEV_ADDR; addr ++)
      {
        if(pObj->IO.ReadReg(addr, LAN8742_SMR, &regvalue) < 0)
        {
