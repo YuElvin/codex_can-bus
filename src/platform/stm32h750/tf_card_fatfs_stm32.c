@@ -6,12 +6,30 @@
 
 #include <string.h>
 
+extern SD_HandleTypeDef hsd1;
+
 __attribute__((weak)) bool stm32h750_tf_card_detect(void) {
   return true;
 }
 
 uint8_t BSP_SD_IsDetected(void) {
   return SD_PRESENT;
+}
+
+uint8_t BSP_SD_ReadBlocks_DMA(uint32_t *pData, uint32_t ReadAddr, uint32_t NumOfBlocks) {
+  if (HAL_SD_ReadBlocks(&hsd1, (uint8_t *)pData, ReadAddr, NumOfBlocks, SD_DATATIMEOUT) != HAL_OK) {
+    return MSD_ERROR;
+  }
+  BSP_SD_ReadCpltCallback();
+  return MSD_OK;
+}
+
+uint8_t BSP_SD_WriteBlocks_DMA(uint32_t *pData, uint32_t WriteAddr, uint32_t NumOfBlocks) {
+  if (HAL_SD_WriteBlocks(&hsd1, (uint8_t *)pData, WriteAddr, NumOfBlocks, SD_DATATIMEOUT) != HAL_OK) {
+    return MSD_ERROR;
+  }
+  BSP_SD_WriteCpltCallback();
+  return MSD_OK;
 }
 
 static TfCardResult build_fatfs_path(const Stm32TfCardContext *tf,

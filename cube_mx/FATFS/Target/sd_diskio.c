@@ -59,7 +59,7 @@
  * Notice: This is applicable only for cortex M7 based platform.
  */
 /* USER CODE BEGIN enableSDDmaCacheMaintenance */
-#define ENABLE_SD_DMA_CACHE_MAINTENANCE  1
+/* Disabled for the blocking SDMMC bring-up path. */
 /* USER CODE END enableSDDmaCacheMaintenance */
 
 /*

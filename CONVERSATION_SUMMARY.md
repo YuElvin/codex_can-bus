@@ -25,3 +25,4 @@
 - 用户要求启用 USART2 串口打印当前硬件验证信息，将 PHY 地址从 0 改为 1，跳过 PA8 插卡检查，然后完成编译、审查、反汇编检查；无错误后 commit 推送，再下载固件到开发板并检查 TF 卡功能。
 - 下载首版串口状态固件后，OpenOCD 读取 `g_lan8720_bringup_status=0`、`g_tf_card_bringup_status=2`；反汇编和代码核查确认项目自有 TF 检测已跳过 PA8，但 CubeMX/FatFs 底层 `BSP_SD_Init()` 仍会调用弱函数 `BSP_SD_IsDetected()` 并读取 PA8，因此需要覆盖 `BSP_SD_IsDetected()` 让底层挂载流程也跳过 PA8。
 - 覆盖 `BSP_SD_IsDetected()` 后再次下载运行，12 秒读回 TF/LAN 状态仍为初始 `-1`；45 秒后读回 `g_lan8720_bringup_status=0`、`g_tf_card_bringup_status=2`。OpenOCD PC 地址映射到 `SD_read`，代码核查发现 FatFs SD DMA 模板等待 `BSP_SD_ReadCpltCallback()`，但工程未启用 `SDMMC1_IRQn` 且缺少 `SDMMC1_IRQHandler()` 调用 `HAL_SD_IRQHandler(&hsd1)`，需要补齐 SDMMC1 中断路径。
+- 启用 SDMMC1 中断后再次下载运行，12 秒检查时目标进入 HardFault，SCB fault 寄存器 `CFSR=0x00000400`，异常栈 PC 映射到 `SD_read` 的 cache 维护路径；因此将当前 TF 验证固件改为阻塞式 SDMMC bring-up：关闭 `sd_diskio.c` 的 DMA cache 维护宏，并覆盖弱 `BSP_SD_ReadBlocks_DMA()`/`BSP_SD_WriteBlocks_DMA()` 为阻塞式 `HAL_SD_ReadBlocks()`/`HAL_SD_WriteBlocks()` 调用后手动触发完成回调。
