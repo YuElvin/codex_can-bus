@@ -124,6 +124,22 @@ __attribute__((section(".Rx_PoolSection"))) extern u8_t memp_memory_RX_POOL_base
 #endif
 
 /* USER CODE BEGIN 2 */
+volatile uint32_t g_eth_rx_packets;
+volatile uint32_t g_eth_rx_bytes;
+volatile uint32_t g_eth_rx_alloc_errors;
+volatile uint32_t g_eth_tx_packets;
+volatile uint32_t g_eth_tx_errors;
+volatile uint32_t g_eth_link_starts;
+volatile uint32_t g_eth_maccr;
+volatile uint32_t g_eth_macpfr;
+volatile uint32_t g_eth_dmadsr;
+volatile uint32_t g_eth_dmacsr;
+volatile uint32_t g_eth_mtlrqdr;
+volatile uint32_t g_eth_phy_bsr;
+volatile uint32_t g_eth_phy_physcsr;
+volatile uint32_t g_eth_phy_smr;
+volatile uint32_t g_eth_phy_secr;
+volatile uint32_t g_eth_phy_addr;
 
 /* USER CODE END 2 */
 
@@ -153,6 +169,44 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 void pbuf_free_custom(struct pbuf *p);
 
 /* USER CODE BEGIN 4 */
+void ethernetif_update_bringup_diag(void)
+{
+  uint32_t phy_reg = 0u;
+  const uint32_t phy_addr = LAN8742.DevAddr;
+
+  g_eth_maccr = ETH->MACCR;
+  g_eth_macpfr = ETH->MACPFR;
+  g_eth_dmadsr = ETH->DMADSR;
+  g_eth_dmacsr = ETH->DMACSR;
+  g_eth_mtlrqdr = ETH->MTLRQDR;
+  g_eth_phy_addr = phy_addr;
+
+  if (phy_addr > 31u)
+  {
+    g_eth_phy_bsr = 0xffffffffu;
+    g_eth_phy_physcsr = 0xffffffffu;
+    g_eth_phy_smr = 0xffffffffu;
+    g_eth_phy_secr = 0xffffffffu;
+    return;
+  }
+
+  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_BSR, &phy_reg) == 0)
+  {
+    g_eth_phy_bsr = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_PHYSCSR, &phy_reg) == 0)
+  {
+    g_eth_phy_physcsr = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_SMR, &phy_reg) == 0)
+  {
+    g_eth_phy_smr = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_SECR, &phy_reg) == 0)
+  {
+    g_eth_phy_secr = phy_reg;
+  }
+}
 
 /* USER CODE END 4 */
 
@@ -190,10 +244,20 @@ static void low_level_init(struct netif *netif)
   /* USER CODE END MACADDRESS */
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
+  if (hal_eth_init_status == HAL_OK)
+  {
+    ETH_MACFilterConfigTypeDef filter_config = {0};
+    filter_config.PromiscuousMode = ENABLE;
+    filter_config.ReceiveAllMode = ENABLE;
+    filter_config.PassAllMulticast = ENABLE;
+    filter_config.BroadcastFilter = DISABLE;
+    filter_config.ControlPacketsFilter = ETH_CTRLPACKETS_FORWARD_ALL;
+    (void)HAL_ETH_SetMACFilterConfig(&heth, &filter_config);
+  }
 
   memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
-  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
-  TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
+  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CRCPAD;
+  TxConfig.ChecksumCtrl = ETH_CHECKSUM_DISABLE;
   TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
 
   /* End ETH HAL Init */
@@ -304,7 +368,16 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
 
-  HAL_ETH_Transmit(&heth, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT);
+  if (HAL_ETH_Transmit(&heth, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT) == HAL_OK)
+  {
+    g_eth_tx_packets++;
+    (void)HAL_ETH_ReleaseTxPacket(&heth);
+  }
+  else
+  {
+    g_eth_tx_errors++;
+    errval = ERR_IF;
+  }
 
   return errval;
 }
@@ -347,6 +420,8 @@ void ethernetif_input(struct netif *netif)
     p = low_level_input( netif );
     if (p != NULL)
     {
+      g_eth_rx_packets++;
+      g_eth_rx_bytes += p->tot_len;
       if (netif->input( p, netif) != ERR_OK )
       {
         pbuf_free(p);
@@ -690,6 +765,7 @@ void ethernet_link_check_state(struct netif *netif)
       MACConf.Speed = speed;
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start(&heth);
+      g_eth_link_starts++;
       netif_set_up(netif);
       netif_set_link_up(netif);
     }
@@ -714,6 +790,7 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   else
   {
     RxAllocStatus = RX_ALLOC_ERROR;
+    g_eth_rx_alloc_errors++;
     *buff = NULL;
   }
 /* USER CODE END HAL ETH RxAllocateCallback */

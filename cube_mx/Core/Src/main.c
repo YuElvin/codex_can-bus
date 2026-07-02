@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ethernetif.h"
 #include "platform/stm32h750_bringup.h"
 
 /* USER CODE END Includes */
@@ -70,6 +71,21 @@ static void bringup_uart_write(const char *text);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 extern struct netif gnetif;
+extern volatile uint32_t g_eth_rx_packets;
+extern volatile uint32_t g_eth_rx_bytes;
+extern volatile uint32_t g_eth_rx_alloc_errors;
+extern volatile uint32_t g_eth_tx_packets;
+extern volatile uint32_t g_eth_tx_errors;
+extern volatile uint32_t g_eth_link_starts;
+extern volatile uint32_t g_eth_dmadsr;
+extern volatile uint32_t g_eth_dmacsr;
+extern volatile uint32_t g_eth_phy_bsr;
+extern volatile uint32_t g_eth_phy_physcsr;
+extern volatile uint32_t g_eth_phy_addr;
+extern volatile uint32_t g_tf_sd_last_hal_status;
+extern volatile uint32_t g_tf_sd_last_error;
+extern volatile uint32_t g_tf_sd_last_sta;
+extern volatile uint32_t g_tf_sd_last_dcount;
 
 static void bringup_uart_write(const char *text)
 {
@@ -82,7 +98,7 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[192];
+  char line[320];
   const uint32_t ip = gnetif.ip_addr.addr;
   const unsigned int ip0 = ip & 0xffu;
   const unsigned int ip1 = (ip >> 8u) & 0xffu;
@@ -91,7 +107,7 @@ static void bringup_print_status(const char *phase)
 
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=1\r\n",
+                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx psr=%04lx sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  g_tf_card_bringup_status,
                  g_lan8720_bringup_status,
@@ -99,7 +115,21 @@ static void bringup_print_status(const char *phase)
                  ip0,
                  ip1,
                  ip2,
-                 ip3);
+                 ip3,
+                 (unsigned long)g_eth_phy_addr,
+                 (unsigned long)g_eth_rx_packets,
+                 (unsigned long)g_eth_tx_packets,
+                 (unsigned long)g_eth_tx_errors,
+                 (unsigned long)g_eth_rx_alloc_errors,
+                 (unsigned long)g_eth_link_starts,
+                 (unsigned long)g_eth_dmadsr,
+                 (unsigned long)g_eth_dmacsr,
+                 (unsigned long)g_eth_phy_bsr,
+                 (unsigned long)g_eth_phy_physcsr,
+                 (unsigned long)g_tf_sd_last_hal_status,
+                 (unsigned long)g_tf_sd_last_error,
+                 (unsigned long)g_tf_sd_last_sta,
+                 (unsigned long)g_tf_sd_last_dcount);
   bringup_uart_write(line);
 }
 
@@ -142,9 +172,10 @@ int main(void)
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip phy=1\r\n");
+  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip phy=scan\r\n");
   g_tf_card_bringup_status = tf_card_bringup_run();
   g_lan8720_bringup_status = lan8720_bringup_run();
+  ethernetif_update_bringup_diag();
   bringup_print_status("init");
 
   /* USER CODE END 2 */
@@ -159,6 +190,7 @@ int main(void)
     MX_LWIP_Process();
     if (HAL_GetTick() - g_status_print_tick >= 1000u) {
       g_status_print_tick = HAL_GetTick();
+      ethernetif_update_bringup_diag();
       bringup_print_status("run");
     }
   }

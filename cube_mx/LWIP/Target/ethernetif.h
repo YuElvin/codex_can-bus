@@ -39,6 +39,7 @@ u32_t sys_jiffies(void);
 u32_t sys_now(void);
 
 /* USER CODE BEGIN 1 */
+void ethernetif_update_bringup_diag(void);
 
 /* USER CODE END 1 */
 #endif
