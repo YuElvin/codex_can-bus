@@ -40,6 +40,7 @@ u32_t sys_now(void);
 
 /* USER CODE BEGIN 1 */
 void ethernetif_update_bringup_diag(void);
+void ethernetif_run_phy_diagnostics(void);
 
 /* USER CODE END 1 */
 #endif

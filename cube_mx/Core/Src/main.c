@@ -82,6 +82,18 @@ extern volatile uint32_t g_eth_dmacsr;
 extern volatile uint32_t g_eth_phy_bsr;
 extern volatile uint32_t g_eth_phy_physcsr;
 extern volatile uint32_t g_eth_phy_addr;
+extern volatile uint32_t g_eth_hal_init_status;
+extern volatile uint32_t g_eth_hal_error_code;
+extern volatile uint32_t g_eth_syscfg_pmcr;
+extern volatile uint32_t g_eth_macmdioar;
+extern volatile uint32_t g_eth_hal_phy_found_addr;
+extern volatile uint32_t g_eth_hal_addr0_id;
+extern volatile uint32_t g_eth_hal_addr1_id;
+extern volatile uint32_t g_eth_bb_phy_found_addr;
+extern volatile uint32_t g_eth_bb_addr0_id;
+extern volatile uint32_t g_eth_bb_addr1_id;
+extern volatile uint32_t g_eth_bb_addr0_ta;
+extern volatile uint32_t g_eth_bb_addr1_ta;
 extern volatile uint32_t g_tf_sd_last_hal_status;
 extern volatile uint32_t g_tf_sd_last_error;
 extern volatile uint32_t g_tf_sd_last_sta;
@@ -98,7 +110,7 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[320];
+  char line[640];
   const uint32_t ip = gnetif.ip_addr.addr;
   const unsigned int ip0 = ip & 0xffu;
   const unsigned int ip1 = (ip >> 8u) & 0xffu;
@@ -107,7 +119,7 @@ static void bringup_print_status(const char *phase)
 
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx psr=%04lx sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx psr=%04lx hst=%lu her=%08lx pm=%08lx ma=%08lx hpa=%lu h0=%08lx h1=%08lx bpa=%lu b0=%08lx b1=%08lx bt0=%lu bt1=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  g_tf_card_bringup_status,
                  g_lan8720_bringup_status,
@@ -126,6 +138,18 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_eth_dmacsr,
                  (unsigned long)g_eth_phy_bsr,
                  (unsigned long)g_eth_phy_physcsr,
+                 (unsigned long)g_eth_hal_init_status,
+                 (unsigned long)g_eth_hal_error_code,
+                 (unsigned long)g_eth_syscfg_pmcr,
+                 (unsigned long)g_eth_macmdioar,
+                 (unsigned long)g_eth_hal_phy_found_addr,
+                 (unsigned long)g_eth_hal_addr0_id,
+                 (unsigned long)g_eth_hal_addr1_id,
+                 (unsigned long)g_eth_bb_phy_found_addr,
+                 (unsigned long)g_eth_bb_addr0_id,
+                 (unsigned long)g_eth_bb_addr1_id,
+                 (unsigned long)g_eth_bb_addr0_ta,
+                 (unsigned long)g_eth_bb_addr1_ta,
                  (unsigned long)g_tf_sd_last_hal_status,
                  (unsigned long)g_tf_sd_last_error,
                  (unsigned long)g_tf_sd_last_sta,
@@ -168,12 +192,12 @@ int main(void)
   MX_FDCAN2_Init();
   MX_QUADSPI_Init();
   MX_USART2_UART_Init();
-  MX_LWIP_Init();
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip phy=scan\r\n");
   g_tf_card_bringup_status = tf_card_bringup_run();
+  MX_LWIP_Init();
   g_lan8720_bringup_status = lan8720_bringup_run();
   ethernetif_update_bringup_diag();
   bringup_print_status("init");

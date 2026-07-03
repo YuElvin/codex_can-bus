@@ -48,6 +48,8 @@
 /* ETH_RX_BUFFER_SIZE parameter is defined in lwipopts.h */
 
 /* USER CODE BEGIN 1 */
+#define ETH_PHY_SCAN_NONE_ADDR 32u
+#define ETH_MDIO_GPIO_DELAY_CYCLES 80u
 
 /* USER CODE END 1 */
 
@@ -140,6 +142,23 @@ volatile uint32_t g_eth_phy_physcsr;
 volatile uint32_t g_eth_phy_smr;
 volatile uint32_t g_eth_phy_secr;
 volatile uint32_t g_eth_phy_addr;
+volatile uint32_t g_eth_hal_init_status;
+volatile uint32_t g_eth_hal_error_code;
+volatile uint32_t g_eth_syscfg_pmcr;
+volatile uint32_t g_eth_macmdioar;
+volatile uint32_t g_eth_macmdiodr;
+volatile uint32_t g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+volatile uint32_t g_eth_hal_addr0_id = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr1_id = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr0_smr = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr1_smr = 0xffffffffu;
+volatile uint32_t g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+volatile uint32_t g_eth_bb_addr0_id = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_id = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr0_smr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_smr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr0_ta = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_ta = 0xffffffffu;
 
 /* USER CODE END 2 */
 
@@ -169,6 +188,245 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 void pbuf_free_custom(struct pbuf *p);
 
 /* USER CODE BEGIN 4 */
+static uint32_t ethernetif_pack_phy_id(uint32_t id1, uint32_t id2)
+{
+  return ((id1 & 0xffffu) << 16u) | (id2 & 0xffffu);
+}
+
+static int ethernetif_valid_phy_id(uint32_t id1, uint32_t id2)
+{
+  return id1 != 0u && id1 != 0xffffu && id2 != 0u && id2 != 0xffffu;
+}
+
+static void mdio_gpio_delay(void)
+{
+  for (volatile uint32_t i = 0; i < ETH_MDIO_GPIO_DELAY_CYCLES; ++i)
+  {
+    __NOP();
+  }
+}
+
+static void mdio_gpio_set_mdio_output(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_set_mdio_input(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_prepare(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+
+  mdio_gpio_set_mdio_output();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+}
+
+static void mdio_gpio_restore_eth_af(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_write_bit(uint32_t bit)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, bit ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+  mdio_gpio_delay();
+}
+
+static uint32_t mdio_gpio_read_bit(void)
+{
+  uint32_t bit;
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
+  mdio_gpio_delay();
+  bit = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET ? 1u : 0u;
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+  mdio_gpio_delay();
+  return bit;
+}
+
+static void mdio_gpio_write_bits(uint32_t value, uint32_t bit_count)
+{
+  while (bit_count > 0u)
+  {
+    bit_count--;
+    mdio_gpio_write_bit((value >> bit_count) & 1u);
+  }
+}
+
+static uint32_t mdio_gpio_read_reg(uint32_t phy_addr, uint32_t reg_addr, uint32_t *turnaround)
+{
+  uint32_t value = 0u;
+  uint32_t ta;
+
+  mdio_gpio_set_mdio_output();
+  for (uint32_t i = 0u; i < 32u; ++i)
+  {
+    mdio_gpio_write_bit(1u);
+  }
+
+  mdio_gpio_write_bits(0x1u, 2u);
+  mdio_gpio_write_bits(0x2u, 2u);
+  mdio_gpio_write_bits(phy_addr, 5u);
+  mdio_gpio_write_bits(reg_addr, 5u);
+
+  mdio_gpio_set_mdio_input();
+  ta = mdio_gpio_read_bit() << 1u;
+  ta |= mdio_gpio_read_bit();
+  if (turnaround != NULL)
+  {
+    *turnaround = ta;
+  }
+
+  for (uint32_t i = 0u; i < 16u; ++i)
+  {
+    value = (value << 1u) | mdio_gpio_read_bit();
+  }
+
+  mdio_gpio_set_mdio_output();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+  return value;
+}
+
+static void ethernetif_reset_phy_diag_values(void)
+{
+  g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+  g_eth_hal_addr0_id = 0xffffffffu;
+  g_eth_hal_addr1_id = 0xffffffffu;
+  g_eth_hal_addr0_smr = 0xffffffffu;
+  g_eth_hal_addr1_smr = 0xffffffffu;
+  g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+  g_eth_bb_addr0_id = 0xffffffffu;
+  g_eth_bb_addr1_id = 0xffffffffu;
+  g_eth_bb_addr0_smr = 0xffffffffu;
+  g_eth_bb_addr1_smr = 0xffffffffu;
+  g_eth_bb_addr0_ta = 0xffffffffu;
+  g_eth_bb_addr1_ta = 0xffffffffu;
+}
+
+static void ethernetif_scan_phy_with_hal(void)
+{
+  for (uint32_t addr = 0u; addr <= 31u; ++addr)
+  {
+    uint32_t id1 = 0xffffffffu;
+    uint32_t id2 = 0xffffffffu;
+    uint32_t smr = 0xffffffffu;
+
+    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI1R, &id1);
+    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI2R, &id2);
+    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_SMR, &smr);
+
+    if (addr == 0u)
+    {
+      g_eth_hal_addr0_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_hal_addr0_smr = smr;
+    }
+    else if (addr == 1u)
+    {
+      g_eth_hal_addr1_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_hal_addr1_smr = smr;
+    }
+
+    if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+        ethernetif_valid_phy_id(id1, id2) &&
+        (smr & LAN8742_SMR_PHY_ADDR) == addr)
+    {
+      g_eth_hal_phy_found_addr = addr;
+    }
+  }
+}
+
+static void ethernetif_scan_phy_with_gpio_mdio(void)
+{
+  mdio_gpio_prepare();
+
+  for (uint32_t addr = 0u; addr <= 31u; ++addr)
+  {
+    uint32_t ta = 0xffffffffu;
+    const uint32_t id1 = mdio_gpio_read_reg(addr, LAN8742_PHYI1R, &ta);
+    const uint32_t id2 = mdio_gpio_read_reg(addr, LAN8742_PHYI2R, NULL);
+    const uint32_t smr = mdio_gpio_read_reg(addr, LAN8742_SMR, NULL);
+
+    if (addr == 0u)
+    {
+      g_eth_bb_addr0_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_bb_addr0_smr = smr;
+      g_eth_bb_addr0_ta = ta;
+    }
+    else if (addr == 1u)
+    {
+      g_eth_bb_addr1_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_bb_addr1_smr = smr;
+      g_eth_bb_addr1_ta = ta;
+    }
+
+    if (g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+        ethernetif_valid_phy_id(id1, id2) &&
+        (smr & LAN8742_SMR_PHY_ADDR) == addr)
+    {
+      g_eth_bb_phy_found_addr = addr;
+    }
+  }
+
+  mdio_gpio_restore_eth_af();
+  HAL_ETH_SetMDIOClockRange(&heth);
+}
+
+void ethernetif_run_phy_diagnostics(void)
+{
+  ethernetif_reset_phy_diag_values();
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
+
+  (void)ETH_PHY_IO_Init();
+  ethernetif_scan_phy_with_hal();
+  ethernetif_scan_phy_with_gpio_mdio();
+
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
+}
+
 void ethernetif_update_bringup_diag(void)
 {
   uint32_t phy_reg = 0u;
@@ -179,6 +437,9 @@ void ethernetif_update_bringup_diag(void)
   g_eth_dmadsr = ETH->DMADSR;
   g_eth_dmacsr = ETH->DMACSR;
   g_eth_mtlrqdr = ETH->MTLRQDR;
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
   g_eth_phy_addr = phy_addr;
 
   if (phy_addr > 31u)
@@ -244,6 +505,8 @@ static void low_level_init(struct netif *netif)
   /* USER CODE END MACADDRESS */
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
+  g_eth_hal_init_status = (uint32_t)hal_eth_init_status;
+  g_eth_hal_error_code = heth.ErrorCode;
   if (hal_eth_init_status == HAL_OK)
   {
     ETH_MACFilterConfigTypeDef filter_config = {0};
@@ -289,10 +552,20 @@ static void low_level_init(struct netif *netif)
   #endif /* LWIP_ARP */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
+  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
+  HAL_Delay(100u);
+  ethernetif_run_phy_diagnostics();
+  if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+      g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR)
+  {
+    LAN8742.DevAddr = ETH_PHY_SCAN_NONE_ADDR;
+    netif_set_link_down(netif);
+    netif_set_down(netif);
+    return;
+  }
 
 /* USER CODE END PHY_PRE_CONFIG */
   /* Set PHY IO functions */
-  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
   /* Initialize the LAN8742 ETH PHY */
   if(LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK)
