@@ -51,6 +51,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
   file(GLOB STM32_HAL_SOURCES CONFIGURE_DEPENDS
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Src/*.c
   )
+  list(FILTER STM32_HAL_SOURCES EXCLUDE REGEX ".*/stm32h7xx_hal_eth(_ex)?\\.c$")
 
   add_executable(can_bus_gateway_stm32h750
     ${CUBE_MX_DIR}/Core/Startup/startup_stm32h750vbtx.s
@@ -59,6 +60,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Core/Src/main.c
     ${CUBE_MX_DIR}/Core/Src/quadspi.c
     ${CUBE_MX_DIR}/Core/Src/sdmmc.c
+    ${CUBE_MX_DIR}/Core/Src/spi.c
     ${CUBE_MX_DIR}/Core/Src/stm32h7xx_hal_msp.c
     ${CUBE_MX_DIR}/Core/Src/stm32h7xx_it.c
     ${CUBE_MX_DIR}/Core/Src/syscalls.c
@@ -69,49 +71,16 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/FATFS/Target/bsp_driver_sd.c
     ${CUBE_MX_DIR}/FATFS/Target/fatfs_platform.c
     ${CUBE_MX_DIR}/FATFS/Target/sd_diskio.c
-    ${CUBE_MX_DIR}/LWIP/App/lwip.c
-    ${CUBE_MX_DIR}/LWIP/Target/ethernetif.c
-    ${CUBE_MX_DIR}/Drivers/BSP/Components/lan8742/lan8742.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/diskio.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/def.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/dns.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/inet_chksum.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/init.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ip.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/mem.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/memp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/netif.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/pbuf.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/raw.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/stats.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/sys.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/tcp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/tcp_in.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/tcp_out.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/timeouts.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/udp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/acd.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/autoip.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/dhcp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/etharp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/icmp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/igmp.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/ip4.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/ip4_addr.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/core/ipv4/ip4_frag.c
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/netif/ethernet.c
     ${STM32_HAL_SOURCES}
     src/ports/can_port.c
-    src/ports/lan8720_port.c
     src/ports/tf_card_port.c
     src/platform/stm32h750/fdcan_port_stm32.c
-    src/platform/stm32h750/lan8720_lwip_stm32.c
     src/platform/stm32h750/tf_card_fatfs_stm32.c
     firmware/bringup/can_bringup.c
-    firmware/bringup/lan8720_bringup.c
     firmware/bringup/tf_card_bringup.c
   )
 
@@ -124,28 +93,11 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Core/Inc
     ${CUBE_MX_DIR}/FATFS/App
     ${CUBE_MX_DIR}/FATFS/Target
-    ${CUBE_MX_DIR}/LWIP/App
-    ${CUBE_MX_DIR}/LWIP/Target
-    ${CUBE_MX_DIR}/Drivers/BSP/Components/lan8742
     ${CUBE_MX_DIR}/Drivers/CMSIS/Device/ST/STM32H7xx/Include
     ${CUBE_MX_DIR}/Drivers/CMSIS/Include
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/compat/posix
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/compat/posix/arpa
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/compat/posix/net
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/compat/posix/sys
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/compat/stdc
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/lwip
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/lwip/apps
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/lwip/priv
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/lwip/prot
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/netif
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/src/include/netif/ppp
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/system
-    ${CUBE_MX_DIR}/Middlewares/Third_Party/LwIP/system/arch
   )
 
   target_compile_definitions(can_bus_gateway_stm32h750 PRIVATE
