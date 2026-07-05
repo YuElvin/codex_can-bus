@@ -28,7 +28,7 @@
 #include "netif/etharp.h"
 #include "lwip/ethip6.h"
 #include "ethernetif.h"
-#include "lan8742.h"
+#include "dp83848.h"
 #include <string.h>
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
@@ -138,9 +138,9 @@ volatile uint32_t g_eth_dmadsr;
 volatile uint32_t g_eth_dmacsr;
 volatile uint32_t g_eth_mtlrqdr;
 volatile uint32_t g_eth_phy_bsr;
-volatile uint32_t g_eth_phy_physcsr;
-volatile uint32_t g_eth_phy_smr;
-volatile uint32_t g_eth_phy_secr;
+volatile uint32_t g_eth_phy_physts;
+volatile uint32_t g_eth_phy_phycr;
+volatile uint32_t g_eth_phy_recr;
 volatile uint32_t g_eth_phy_addr;
 volatile uint32_t g_eth_hal_init_status;
 volatile uint32_t g_eth_hal_error_code;
@@ -150,13 +150,13 @@ volatile uint32_t g_eth_macmdiodr;
 volatile uint32_t g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
 volatile uint32_t g_eth_hal_addr0_id = 0xffffffffu;
 volatile uint32_t g_eth_hal_addr1_id = 0xffffffffu;
-volatile uint32_t g_eth_hal_addr0_smr = 0xffffffffu;
-volatile uint32_t g_eth_hal_addr1_smr = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr0_phycr = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr1_phycr = 0xffffffffu;
 volatile uint32_t g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
 volatile uint32_t g_eth_bb_addr0_id = 0xffffffffu;
 volatile uint32_t g_eth_bb_addr1_id = 0xffffffffu;
-volatile uint32_t g_eth_bb_addr0_smr = 0xffffffffu;
-volatile uint32_t g_eth_bb_addr1_smr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr0_phycr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_phycr = 0xffffffffu;
 volatile uint32_t g_eth_bb_addr0_ta = 0xffffffffu;
 volatile uint32_t g_eth_bb_addr1_ta = 0xffffffffu;
 
@@ -173,12 +173,12 @@ int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal);
 int32_t ETH_PHY_IO_GetTick(void);
 
-lan8742_Object_t LAN8742;
-lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
-                                  ETH_PHY_IO_DeInit,
-                                  ETH_PHY_IO_WriteReg,
-                                  ETH_PHY_IO_ReadReg,
-                                  ETH_PHY_IO_GetTick};
+dp83848_Object_t DP83848;
+dp83848_IOCtx_t DP83848_IOCtx = {ETH_PHY_IO_Init,
+                                 ETH_PHY_IO_DeInit,
+                                 ETH_PHY_IO_WriteReg,
+                                 ETH_PHY_IO_ReadReg,
+                                 ETH_PHY_IO_GetTick};
 
 /* USER CODE BEGIN 3 */
 
@@ -332,13 +332,13 @@ static void ethernetif_reset_phy_diag_values(void)
   g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
   g_eth_hal_addr0_id = 0xffffffffu;
   g_eth_hal_addr1_id = 0xffffffffu;
-  g_eth_hal_addr0_smr = 0xffffffffu;
-  g_eth_hal_addr1_smr = 0xffffffffu;
+  g_eth_hal_addr0_phycr = 0xffffffffu;
+  g_eth_hal_addr1_phycr = 0xffffffffu;
   g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
   g_eth_bb_addr0_id = 0xffffffffu;
   g_eth_bb_addr1_id = 0xffffffffu;
-  g_eth_bb_addr0_smr = 0xffffffffu;
-  g_eth_bb_addr1_smr = 0xffffffffu;
+  g_eth_bb_addr0_phycr = 0xffffffffu;
+  g_eth_bb_addr1_phycr = 0xffffffffu;
   g_eth_bb_addr0_ta = 0xffffffffu;
   g_eth_bb_addr1_ta = 0xffffffffu;
 }
@@ -349,26 +349,26 @@ static void ethernetif_scan_phy_with_hal(void)
   {
     uint32_t id1 = 0xffffffffu;
     uint32_t id2 = 0xffffffffu;
-    uint32_t smr = 0xffffffffu;
+    uint32_t phycr = 0xffffffffu;
 
-    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI1R, &id1);
-    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_PHYI2R, &id2);
-    (void)ETH_PHY_IO_ReadReg(addr, LAN8742_SMR, &smr);
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYIDR1, &id1);
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYIDR2, &id2);
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYCR, &phycr);
 
     if (addr == 0u)
     {
       g_eth_hal_addr0_id = ethernetif_pack_phy_id(id1, id2);
-      g_eth_hal_addr0_smr = smr;
+      g_eth_hal_addr0_phycr = phycr;
     }
     else if (addr == 1u)
     {
       g_eth_hal_addr1_id = ethernetif_pack_phy_id(id1, id2);
-      g_eth_hal_addr1_smr = smr;
+      g_eth_hal_addr1_phycr = phycr;
     }
 
     if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
         ethernetif_valid_phy_id(id1, id2) &&
-        (smr & LAN8742_SMR_PHY_ADDR) == addr)
+        (phycr & DP83848_PHYCR_PHY_ADDR) == addr)
     {
       g_eth_hal_phy_found_addr = addr;
     }
@@ -382,26 +382,26 @@ static void ethernetif_scan_phy_with_gpio_mdio(void)
   for (uint32_t addr = 0u; addr <= 31u; ++addr)
   {
     uint32_t ta = 0xffffffffu;
-    const uint32_t id1 = mdio_gpio_read_reg(addr, LAN8742_PHYI1R, &ta);
-    const uint32_t id2 = mdio_gpio_read_reg(addr, LAN8742_PHYI2R, NULL);
-    const uint32_t smr = mdio_gpio_read_reg(addr, LAN8742_SMR, NULL);
+    const uint32_t id1 = mdio_gpio_read_reg(addr, DP83848_PHYIDR1, &ta);
+    const uint32_t id2 = mdio_gpio_read_reg(addr, DP83848_PHYIDR2, NULL);
+    const uint32_t phycr = mdio_gpio_read_reg(addr, DP83848_PHYCR, NULL);
 
     if (addr == 0u)
     {
       g_eth_bb_addr0_id = ethernetif_pack_phy_id(id1, id2);
-      g_eth_bb_addr0_smr = smr;
+      g_eth_bb_addr0_phycr = phycr;
       g_eth_bb_addr0_ta = ta;
     }
     else if (addr == 1u)
     {
       g_eth_bb_addr1_id = ethernetif_pack_phy_id(id1, id2);
-      g_eth_bb_addr1_smr = smr;
+      g_eth_bb_addr1_phycr = phycr;
       g_eth_bb_addr1_ta = ta;
     }
 
     if (g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
         ethernetif_valid_phy_id(id1, id2) &&
-        (smr & LAN8742_SMR_PHY_ADDR) == addr)
+        (phycr & DP83848_PHYCR_PHY_ADDR) == addr)
     {
       g_eth_bb_phy_found_addr = addr;
     }
@@ -430,7 +430,7 @@ void ethernetif_run_phy_diagnostics(void)
 void ethernetif_update_bringup_diag(void)
 {
   uint32_t phy_reg = 0u;
-  const uint32_t phy_addr = LAN8742.DevAddr;
+  const uint32_t phy_addr = DP83848.DevAddr;
 
   g_eth_maccr = ETH->MACCR;
   g_eth_macpfr = ETH->MACPFR;
@@ -445,27 +445,27 @@ void ethernetif_update_bringup_diag(void)
   if (phy_addr > 31u)
   {
     g_eth_phy_bsr = 0xffffffffu;
-    g_eth_phy_physcsr = 0xffffffffu;
-    g_eth_phy_smr = 0xffffffffu;
-    g_eth_phy_secr = 0xffffffffu;
+    g_eth_phy_physts = 0xffffffffu;
+    g_eth_phy_phycr = 0xffffffffu;
+    g_eth_phy_recr = 0xffffffffu;
     return;
   }
 
-  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_BSR, &phy_reg) == 0)
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_BMSR, &phy_reg) == 0)
   {
     g_eth_phy_bsr = phy_reg;
   }
-  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_PHYSCSR, &phy_reg) == 0)
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_PHYSTS, &phy_reg) == 0)
   {
-    g_eth_phy_physcsr = phy_reg;
+    g_eth_phy_physts = phy_reg;
   }
-  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_SMR, &phy_reg) == 0)
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_PHYCR, &phy_reg) == 0)
   {
-    g_eth_phy_smr = phy_reg;
+    g_eth_phy_phycr = phy_reg;
   }
-  if (ETH_PHY_IO_ReadReg(phy_addr, LAN8742_SECR, &phy_reg) == 0)
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_RECR, &phy_reg) == 0)
   {
-    g_eth_phy_secr = phy_reg;
+    g_eth_phy_recr = phy_reg;
   }
 }
 
@@ -552,13 +552,13 @@ static void low_level_init(struct netif *netif)
   #endif /* LWIP_ARP */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
-  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
+  DP83848_RegisterBusIO(&DP83848, &DP83848_IOCtx);
   HAL_Delay(100u);
   ethernetif_run_phy_diagnostics();
   if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
       g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR)
   {
-    LAN8742.DevAddr = ETH_PHY_SCAN_NONE_ADDR;
+    DP83848.DevAddr = ETH_PHY_SCAN_NONE_ADDR;
     netif_set_link_down(netif);
     netif_set_down(netif);
     return;
@@ -567,8 +567,8 @@ static void low_level_init(struct netif *netif)
 /* USER CODE END PHY_PRE_CONFIG */
   /* Set PHY IO functions */
 
-  /* Initialize the LAN8742 ETH PHY */
-  if(LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK)
+  /* Initialize the DP83848 ETH PHY */
+  if(DP83848_Init(&DP83848) != DP83848_STATUS_OK)
   {
     netif_set_link_down(netif);
     netif_set_down(netif);
@@ -994,34 +994,34 @@ void ethernet_link_check_state(struct netif *netif)
   int32_t PHYLinkState = 0;
   uint32_t linkchanged = 0U, speed = 0U, duplex = 0U;
 
-  PHYLinkState = LAN8742_GetLinkState(&LAN8742);
+  PHYLinkState = DP83848_GetLinkState(&DP83848);
 
-  if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
+  if(netif_is_link_up(netif) && (PHYLinkState <= DP83848_STATUS_LINK_DOWN))
   {
     HAL_ETH_Stop(&heth);
     netif_set_down(netif);
     netif_set_link_down(netif);
   }
-  else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
+  else if(!netif_is_link_up(netif) && (PHYLinkState > DP83848_STATUS_LINK_DOWN))
   {
     switch (PHYLinkState)
     {
-    case LAN8742_STATUS_100MBITS_FULLDUPLEX:
+    case DP83848_STATUS_100MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_100MBITS_HALFDUPLEX:
+    case DP83848_STATUS_100MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_10MBITS_FULLDUPLEX:
+    case DP83848_STATUS_10MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_10MBITS_HALFDUPLEX:
+    case DP83848_STATUS_10MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;

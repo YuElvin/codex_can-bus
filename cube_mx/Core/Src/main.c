@@ -80,7 +80,7 @@ extern volatile uint32_t g_eth_link_starts;
 extern volatile uint32_t g_eth_dmadsr;
 extern volatile uint32_t g_eth_dmacsr;
 extern volatile uint32_t g_eth_phy_bsr;
-extern volatile uint32_t g_eth_phy_physcsr;
+extern volatile uint32_t g_eth_phy_physts;
 extern volatile uint32_t g_eth_phy_addr;
 extern volatile uint32_t g_eth_hal_init_status;
 extern volatile uint32_t g_eth_hal_error_code;
@@ -119,7 +119,7 @@ static void bringup_print_status(const char *phase)
 
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx psr=%04lx hst=%lu her=%08lx pm=%08lx ma=%08lx hpa=%lu h0=%08lx h1=%08lx bpa=%lu b0=%08lx b1=%08lx bt0=%lu bt1=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx sts=%04lx hst=%lu her=%08lx pm=%08lx ma=%08lx hpa=%lu h0=%08lx h1=%08lx bpa=%lu b0=%08lx b1=%08lx bt0=%lu bt1=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  g_tf_card_bringup_status,
                  g_lan8720_bringup_status,
@@ -137,7 +137,7 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_eth_dmadsr,
                  (unsigned long)g_eth_dmacsr,
                  (unsigned long)g_eth_phy_bsr,
-                 (unsigned long)g_eth_phy_physcsr,
+                 (unsigned long)g_eth_phy_physts,
                  (unsigned long)g_eth_hal_init_status,
                  (unsigned long)g_eth_hal_error_code,
                  (unsigned long)g_eth_syscfg_pmcr,

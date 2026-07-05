@@ -71,7 +71,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/FATFS/Target/sd_diskio.c
     ${CUBE_MX_DIR}/LWIP/App/lwip.c
     ${CUBE_MX_DIR}/LWIP/Target/ethernetif.c
-    ${CUBE_MX_DIR}/Drivers/BSP/Components/lan8742/lan8742.c
+    ${CUBE_MX_DIR}/Drivers/BSP/Components/dp83848/dp83848.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/diskio.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
@@ -126,7 +126,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/FATFS/Target
     ${CUBE_MX_DIR}/LWIP/App
     ${CUBE_MX_DIR}/LWIP/Target
-    ${CUBE_MX_DIR}/Drivers/BSP/Components/lan8742
+    ${CUBE_MX_DIR}/Drivers/BSP/Components/dp83848
     ${CUBE_MX_DIR}/Drivers/CMSIS/Device/ST/STM32H7xx/Include
     ${CUBE_MX_DIR}/Drivers/CMSIS/Include
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc
