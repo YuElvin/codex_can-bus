@@ -19,6 +19,8 @@ typedef struct {
   bool fd_enabled;
   bool brs_enabled;
   bool internal_loopback;
+  bool external_loopback;
+  bool auto_retransmission;
 } CanPortConfig;
 
 typedef struct {

@@ -29,6 +29,7 @@ add_library(can_bus_ports
   src/ports/can_port.c
   src/ports/lan8720_port.c
   src/ports/tf_card_port.c
+  src/ports/w5500_port.c
 )
 
 target_include_directories(can_bus_ports
@@ -78,10 +79,13 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${STM32_HAL_SOURCES}
     src/ports/can_port.c
     src/ports/tf_card_port.c
+    src/ports/w5500_port.c
     src/platform/stm32h750/fdcan_port_stm32.c
     src/platform/stm32h750/tf_card_fatfs_stm32.c
+    src/platform/stm32h750/w5500_spi_stm32.c
     firmware/bringup/can_bringup.c
     firmware/bringup/tf_card_bringup.c
+    firmware/bringup/w5500_bringup.c
   )
 
   set_target_properties(can_bus_gateway_stm32h750 PROPERTIES
@@ -174,4 +178,8 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_lan8720_port tests/test_lan8720_port.c)
   target_link_libraries(test_lan8720_port PRIVATE can_bus_ports)
   add_test(NAME lan8720_port COMMAND test_lan8720_port)
+
+  add_executable(test_w5500_port tests/test_w5500_port.c)
+  target_link_libraries(test_w5500_port PRIVATE can_bus_ports)
+  add_test(NAME w5500_port COMMAND test_w5500_port)
 endif()
