@@ -85,6 +85,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/platform/stm32h750/w5500_spi_stm32.c
     firmware/bringup/can_bringup.c
     firmware/bringup/tf_card_bringup.c
+    firmware/bringup/w25q128_bringup.c
     firmware/bringup/w5500_bringup.c
   )
 

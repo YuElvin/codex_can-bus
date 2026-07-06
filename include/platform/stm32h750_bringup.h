@@ -43,6 +43,7 @@ int can_external_bringup_run(void);
 int can2_analyzer_bringup_run(void);
 int can2_analyzer_poll(void);
 int tf_card_bringup_run(void);
+int w25q128_bringup_run(void);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
 

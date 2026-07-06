@@ -55,6 +55,7 @@
 /* USER CODE BEGIN PV */
 volatile int g_tf_card_bringup_status = -1;
 volatile int g_w5500_bringup_status = -1;
+volatile int g_w25q128_bringup_status = -1;
 volatile int g_can_bringup_status = -1;
 volatile int g_can_external_bringup_status = -1;
 volatile int g_can2_analyzer_bringup_status = -1;
@@ -81,6 +82,13 @@ extern volatile uint32_t g_w5500_version;
 extern volatile uint32_t g_w5500_phycfgr;
 extern volatile uint32_t g_w5500_link_up;
 extern volatile uint32_t g_w5500_network_configured;
+extern volatile uint32_t g_w25q128_jedec_id;
+extern volatile uint32_t g_w25q128_status_reg1;
+extern volatile uint32_t g_w25q128_test_addr;
+extern volatile uint32_t g_w25q128_mismatch_index;
+extern volatile uint32_t g_w25q128_expected;
+extern volatile uint32_t g_w25q128_actual;
+extern volatile uint32_t g_w25q128_last_hal_status;
 extern volatile uint32_t g_can_tx_count;
 extern volatile uint32_t g_can_rx_count;
 extern volatile uint32_t g_can_error_count;
@@ -122,10 +130,10 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[720];
+  char line[900];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  g_can_bringup_status,
                  (unsigned long)g_can_tx_count,
@@ -159,6 +167,14 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_can2_rx_first_byte,
                  (unsigned long)g_can2_send_result,
                  (unsigned long)g_can2_poll_count,
+                 g_w25q128_bringup_status,
+                 (unsigned long)g_w25q128_jedec_id,
+                 (unsigned long)g_w25q128_status_reg1,
+                 (unsigned long)g_w25q128_test_addr,
+                 (unsigned long)g_w25q128_mismatch_index,
+                 (unsigned long)g_w25q128_expected,
+                 (unsigned long)g_w25q128_actual,
+                 (unsigned long)g_w25q128_last_hal_status,
                  g_tf_card_bringup_status,
                  g_w5500_bringup_status,
                  (unsigned long)g_w5500_init_result,
@@ -212,7 +228,9 @@ int main(void)
   MX_FATFS_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip lan=removed w5500=spi2 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
+  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip lan=removed w5500=spi2 qspi=w25q128 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
+  g_w25q128_bringup_status = w25q128_bringup_run();
+  bringup_print_status("w25q128");
   g_can_bringup_status = can_bringup_run();
   bringup_print_status("can");
   g_can_external_bringup_status = can_external_bringup_run();
