@@ -225,3 +225,81 @@
 ### 下一步建议
 
 - 推送完成后，下一阶段仍应烧录验证 FreeRTOS 固件运行态。
+
+## 2026-07-08 02:05:00 +08:00
+
+### 用户请求
+
+- 用户要求“现在按照进度继续开发所有目标功能”。
+
+### 本轮假设和成功标准
+
+1. 不一次性展开所有未实现功能，按项目文档和最新验证记录先推进下一阶段：FreeRTOS 多任务拆分。
+2. 先校准真实状态：`03_Context.md/01_Project_Plan.md/04_Features_ADR.md` 还写 FreeRTOS 待烧录，但本文件已有 FreeRTOS 烧录、ST-Link、ping 和用户侧 CAN 分析仪采集正常记录；因此本轮先同步状态，再继续开发。
+3. 成功标准：保持既有一次性 bring-up 顺序不变；只把运行态 CAN2 周期逻辑、W5500 轮询和状态打印拆成独立 FreeRTOS 任务；完成编译、反汇编、烧录和 ST-Link 变量复核。
+
+### 实际操作
+
+1. 读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、`pin_configuration.md` 和本文件，确认当前工作目录 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，当前分支 `codex/W5500`，起始工作区干净。
+2. 修改 `cube_mx/Core/Src/main.c`：保留 `bringup_default_task` 的一次性顺序 `W25Q128 -> CAN internal -> CAN external -> CAN2 analyzer -> W5500 -> TF`；自检通过后创建 `can2_periodic_task` 和 `w5500_periodic_task`，分别每秒调用 `can2_analyzer_poll()` 和 `w5500_bringup_poll()`；原 `bringup` 任务只负责每秒状态打印。
+3. 新增 ST-Link 可读诊断变量：`g_freertos_bringup_complete`、`g_can_task_started`、`g_can_task_loop_count`、`g_w5500_task_started`、`g_w5500_task_loop_count`，并把 `rdy/ctsk/ctlp/wtsk/wtlp` 加入串口状态行。
+4. 修正 `scripts/verify.sh`：首次运行失败 `cmake: command not found`，根因是 `env.sh` 被脚本 source 时用 `$0` 推导到 `scripts/` 并覆盖同名 `ROOT_DIR`。已改为 `PROJECT_ROOT` 并用真实项目根重新设置本地 xPack PATH。
+5. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和 `05_Lessons.md`：FreeRTOS 单任务改为已客观验证，基础多任务拆分改为部分/基础已验证，完整 TF/QSPI/HTTP/DBC/log 任务和队列/mutex 仍待实现。
+
+### 验证结果
+
+- `./scripts/verify.sh` 首次失败于 `cmake: command not found`；修正脚本后重新运行通过。
+- 主机 CTest：`build/host` 8 项全部通过。
+- STM32 固件：`build/stm32h750/can_bus_gateway_stm32h750.elf/.hex/.bin` 编译通过；FLASH `49952 B / 128 KB = 38.11%`，RAM_D1 `102456 B / 512 KB = 19.54%`。编译警告仍为既有 FatFs/SD signed/unsigned 和 implicit-fallthrough 警告。
+- `git diff --check` 通过。
+- 反汇编核查：
+  - `main` 仍在外设初始化后创建 4096 words 的 `bringup` 任务并调用 `vTaskStartScheduler()`。
+  - `bringup_default_task` 仍按 W25Q128、CAN 内回环、CAN external、CAN2、W5500、TF 顺序执行；随后创建 1024 words 的 CAN2 任务和 1024 words 的 W5500 任务。
+  - `can2_periodic_task` 反汇编确认循环调用 `can2_analyzer_poll()`、递增 `g_can_task_loop_count`、`vTaskDelay(1000)`。
+  - `w5500_periodic_task` 反汇编确认循环调用 `w5500_bringup_poll()`、递增 `g_w5500_task_loop_count`、`vTaskDelay(1000)`。
+  - `SysTick_Handler` 仍先调用 `HAL_IncTick()`，调度器启动后调用 `xPortSysTickHandler()`。
+- 烧录验证：OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.256 V`。
+- 运行约 12 秒后 ST-Link 读取：
+  - bring-up 状态：`g_can2_analyzer_bringup_status=0`、`g_can_external_bringup_status=0`、`g_can_bringup_status=0`、`g_w25q128_bringup_status=0`、`g_w5500_bringup_status=0`、`g_tf_card_bringup_status=0`。
+  - W5500：`g_w5500_phycfgr=0xbf`、`g_w5500_version=0x04`。
+  - 任务状态：`g_w5500_task_loop_count=0x0c`、`g_w5500_task_started=1`、`g_can_task_loop_count=0x0c`、`g_can_task_started=1`、`g_freertos_bringup_complete=1`、`g_freertos_loop_count=0x0b`、`g_freertos_task_started=1`。
+  - CAN2 运行态：`g_can2_poll_count=0x0c`、`g_can2_send_result=1`、`g_can2_bus_off=0`、`g_can2_error_count=9`、`g_can2_rx_count=0`、`g_can2_tx_count=4`。
+- 主机网络复核：`en2` 为 `192.168.1.100/24` 且 `100baseTX full-duplex active`，路由到 `192.168.1.88` 走 `en2`；`ping -c 4 -S 192.168.1.100 192.168.1.88` 成功 4/4，延迟约 `0.508-0.851 ms`。
+
+### 当前结论
+
+- FreeRTOS 基础多任务拆分已完成并上板验证：CAN2 周期任务、W5500 轮询任务和状态打印任务均已启动且 loop 递增；W5500 ping、TF、W25Q128、CAN bring-up 状态保持通过。
+- 本轮没有实现完整目标功能集合中的 HTTP/API、DBC 上传、日志、规则、静态文件服务，也没有拆 TF/FatFs、QSPI、配置保存任务；这些仍是后续阶段。
+
+### 问题点
+
+- CAN2 周期任务在本轮 ST-Link 读取时 `g_can2_send_result=1`、`g_can2_error_count=9`、`rx_count=0`，与此前未保持 CAN 分析仪/ACK 在线时的读数一致。需要 Windows CANtest/USBCAN 保持通道打开后再复核持续 ACK 和回测接收，不应把本轮读数写成“持续 CAN2 收发已验证”。
+- `scripts/verify.sh` 的环境加载问题已修复并记录到 `05_Lessons.md`，后续应优先使用该脚本。
+- W25Q128 自检仍会擦写最后 4KB 扇区 `0x00FFF000`，正式配置存储前必须移除上电擦写或改为按需触发。
+
+### 下一步建议
+
+1. Windows CANtest 保持通道打开后，复核多任务固件下 `g_can2_send_result/error_count/tx_count/rx_count`。
+2. 开始 W5500 socket/HTTP status 最小接口，先实现 `/api/status` 和 `/api/can/status`。
+3. 引入 TF/FatFs、QSPI、配置保存、DBC 或日志任务前，先定义 FreeRTOS 队列和 mutex 边界。
+
+## 2026-07-08 02:10:00 +08:00
+
+### 用户请求
+
+- 用户要求 commit 并推送当前改动。
+
+### 实际操作
+
+1. 复查当前工作目录 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`。
+2. 复查待提交范围：`cube_mx/Core/Src/main.c`、`scripts/verify.sh`、`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本对话记录。
+3. 本轮准备提交 FreeRTOS 基础多任务拆分、验证脚本修复、阶段状态同步和验证记录。
+
+### 验证结果
+
+- 提交前使用上一轮实际验证结果：`./scripts/verify.sh` 已通过，主机 CTest 8/8 通过，STM32 固件编译通过并完成反汇编、烧录、ST-Link 读数和 W5500 ping 验证。
+- 本次提交动作本身只追加对话记录，未再修改固件逻辑；提交前仍执行 `git diff --check` 和 `git status` 复核。
+
+### 问题点
+
+- CAN2 持续 ACK/回测接收仍需 Windows CANtest 保持在线后复核，不作为本次提交的已验证结论。

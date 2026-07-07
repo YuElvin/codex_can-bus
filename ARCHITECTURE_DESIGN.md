@@ -16,7 +16,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过 |
 | W25Q128 | QUADSPI | 已验证 | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
 | USART2 | PD5/PD6，115200 8N1 | 可用 | Windows 侧读取正常；macOS 侧曾出现乱码，必要时以 ST-Link 变量为准 |
-| FreeRTOS | SysTick/SVC/PendSV | 已接入并编译/反汇编验证 | 当前先以单个 `bringup` 任务承载已验证硬件流程 |
+| FreeRTOS | SysTick/SVC/PendSV | 基础多任务已上板验证 | 单 `bringup` 任务已验证通过；CAN2 周期任务、W5500 轮询任务和状态打印任务已拆出 |
 
 ### 1.2 当前不再使用的旧路径
 
@@ -74,9 +74,10 @@ TF 卡 + W25Q128 + FreeRTOS`。
 4. `can2_analyzer_bringup_run()`
 5. `w5500_bringup_run()`
 6. `tf_card_bringup_run()`
-7. 每秒执行 `can2_analyzer_poll()`、`w5500_bringup_poll()` 和状态打印
+7. 创建独立 CAN2 周期任务和 W5500 轮询任务
+8. 原 `bringup` 任务继续每秒打印状态
 
-这个单任务阶段用于验证“调度器接管后，已通过硬件功能仍保持通过”。多任务拆分必须等上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态仍正常后再进行。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。本轮只移动运行态周期逻辑，不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
 
 ### 4.2 目标任务拆分
 
@@ -229,8 +230,8 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 3 | W5500 SPI bring-up | 已验证 | `VERSIONR=0x04`、网络参数回读、ping `192.168.1.88` |
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
-| 6 | FreeRTOS 单任务迁移 | 已编译/反汇编验证，待烧录复核 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 待做 | CAN/W5500/TF 不互相阻塞，队列和 mutex 正常 |
+| 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 待做 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 待做 | `/www` 静态页、DBC 上传解析报告 |
 | 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
@@ -242,7 +243,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 风险 | 规避 |
 | --- | --- |
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
-| FreeRTOS 引入后旧硬件验证回归 | 先单任务迁移，上板读 `g_freertos_*` 和各模块状态，再拆任务 |
+| FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
 | TF/FatFs 并发损坏 | 全局 `fs_mutex`，写配置 tmp+rename，日志批量 flush |
 | W25Q128 上电自检擦写正式数据 | 正式配置备份前移除或改成按需触发最后扇区测试 |

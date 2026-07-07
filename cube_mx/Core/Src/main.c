@@ -63,6 +63,11 @@ volatile int g_can_external_bringup_status = -1;
 volatile int g_can2_analyzer_bringup_status = -1;
 volatile uint32_t g_freertos_task_started;
 volatile uint32_t g_freertos_loop_count;
+volatile uint32_t g_freertos_bringup_complete;
+volatile uint32_t g_can_task_started;
+volatile uint32_t g_can_task_loop_count;
+volatile uint32_t g_w5500_task_started;
+volatile uint32_t g_w5500_task_loop_count;
 
 /* USER CODE END PV */
 
@@ -72,6 +77,8 @@ void SystemClock_Config(void);
 static void bringup_print_status(const char *phase);
 static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
+static void can2_periodic_task(void *argument);
+static void w5500_periodic_task(void *argument);
 
 /* USER CODE END PFP */
 
@@ -134,13 +141,18 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[960];
+  char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
+                 (unsigned long)g_freertos_bringup_complete,
+                 (unsigned long)g_can_task_started,
+                 (unsigned long)g_can_task_loop_count,
+                 (unsigned long)g_w5500_task_started,
+                 (unsigned long)g_w5500_task_loop_count,
                  g_can_bringup_status,
                  (unsigned long)g_can_tx_count,
                  (unsigned long)g_can_rx_count,
@@ -195,6 +207,30 @@ static void bringup_print_status(const char *phase)
   bringup_uart_write(line);
 }
 
+static void can2_periodic_task(void *argument)
+{
+  (void)argument;
+
+  g_can_task_started = 1u;
+  for (;;) {
+    (void)can2_analyzer_poll();
+    g_can_task_loop_count++;
+    vTaskDelay(pdMS_TO_TICKS(1000u));
+  }
+}
+
+static void w5500_periodic_task(void *argument)
+{
+  (void)argument;
+
+  g_w5500_task_started = 1u;
+  for (;;) {
+    (void)w5500_bringup_poll();
+    g_w5500_task_loop_count++;
+    vTaskDelay(pdMS_TO_TICKS(1000u));
+  }
+}
+
 static void bringup_default_task(void *argument)
 {
   (void)argument;
@@ -213,12 +249,30 @@ static void bringup_default_task(void *argument)
   bringup_print_status("w5500");
   g_tf_card_bringup_status = tf_card_bringup_run();
   bringup_print_status("init");
+  g_freertos_bringup_complete = 1u;
+
+  if (xTaskCreate(can2_periodic_task,
+                  "can2",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 3u,
+                  NULL) != pdPASS) {
+    g_can_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  if (xTaskCreate(w5500_periodic_task,
+                  "w5500",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 2u,
+                  NULL) != pdPASS) {
+    g_w5500_task_started = 0xffffffffu;
+    Error_Handler();
+  }
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000u));
     g_freertos_loop_count++;
-    (void)can2_analyzer_poll();
-    (void)w5500_bringup_poll();
     bringup_print_status("run");
   }
 }

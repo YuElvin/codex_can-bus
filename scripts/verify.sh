@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT_DIR"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
 if [ -f "./env.sh" ]; then
   # shellcheck disable=SC1091
   . ./env.sh
 fi
+export PATH="$PROJECT_ROOT/dev-tools/node_modules/@xpack-dev-tools/arm-none-eabi-gcc/.content/bin:$PROJECT_ROOT/dev-tools/node_modules/@xpack-dev-tools/cmake/.content/bin:$PROJECT_ROOT/dev-tools/node_modules/@xpack-dev-tools/ninja-build/.content/bin:$PROJECT_ROOT/dev-tools/node_modules/@xpack-dev-tools/openocd/.content/bin:$PATH"
 
 cmake -S . -B build/host -G Ninja
 cmake --build build/host

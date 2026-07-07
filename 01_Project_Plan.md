@@ -23,8 +23,8 @@
 | 3 | W5500 SPI bring-up | [客观已验证] | `VERSIONR=0x04`、网络参数回读、主机 ping `192.168.1.88` 通过 |
 | 4 | FDCAN2 外部 CAN 收发 | [客观已验证] | Windows CANtest 可收开发板帧，开发板可收 Windows 发帧 |
 | 5 | W25Q128 QSPI | [客观已验证] | JEDEC ID、擦除、写入、读回匹配 |
-| 6 | FreeRTOS 单任务迁移 | [实现中] | 已编译/反汇编；待烧录后确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
-| 7 | FreeRTOS 多任务拆分 | [待实现] | CAN/W5500/TF/QSPI 不互相长时间阻塞 |
+| 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
+| 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [待实现] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [待实现] | `/www` 静态页可访问，DBC 上传有解析报告 |
 | 10 | 实时解码、日志、规则 | [待实现] | Web 显示信号，CSV 稳定写入，继电器规则可验证 |
@@ -40,8 +40,7 @@
 | 风险 | 当前处理 |
 | --- | --- |
 | 128KB Flash 空间紧张 | Web/DBC/日志放 TF，固件裁剪 HAL 和字符串 |
-| FreeRTOS 后硬件功能回归 | 先单 `bringup` 任务上板复核，再拆多任务 |
+| FreeRTOS 多任务后硬件功能回归 | CAN2/W5500 低风险周期任务已上板复核；再拆 TF/QSPI/HTTP 前必须先定义共享资源保护 |
 | W5500 网络服务阻塞 CAN | 后续用单网络任务或 mutex 限制临界区 |
 | TF/FatFs 并发损坏 | 后续用全局 `fs_mutex` 和 tmp+rename 保存策略 |
 | QSPI 自检擦写正式数据 | 正式存储前移除或改成按需触发 |
-
