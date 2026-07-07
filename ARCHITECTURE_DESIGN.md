@@ -1,168 +1,262 @@
 # STM32H750 CAN/CAN-FD 数据采集解析网关软件架构设计方案
 
-## 1. 总体架构
+本文档按当前 `can_bus_W5500` 工程状态同步更新。旧 LAN8720/RMII/lwIP
+路线已经停止使用；当前硬件主路径是 `STM32H750VBTx + W5500 + MCP2562FD +
+TF 卡 + W25Q128 + FreeRTOS`。
 
-### 1.1 分层
+## 1. 当前基线和边界
+
+### 1.1 已验证硬件基线
+
+| 模块 | 当前接口 | 验证状态 | 结论 |
+| --- | --- | --- | --- |
+| W5500 网络 | SPI2: PB13/PB14/PB15，PB12 CS，PB11 RST，PA7 INT | 已验证 | W5500 `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
+| CAN 收发器 | FDCAN2: PB5 RX，PB6 TX，经 MCP2562FD 到 USBCAN-2E-U | 已验证 | Windows CANtest 可接收开发板周期帧，也可发送帧被开发板收到 |
+| FDCAN1 | PD0 RX，PD1 TX | 诊断/保留 | 当前用于 internal/external loopback 诊断，不作为已验证外部主通道 |
+| TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过 |
+| W25Q128 | QUADSPI | 已验证 | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
+| USART2 | PD5/PD6，115200 8N1 | 可用 | Windows 侧读取正常；macOS 侧曾出现乱码，必要时以 ST-Link 变量为准 |
+| FreeRTOS | SysTick/SVC/PendSV | 已接入并编译/反汇编验证 | 当前先以单个 `bringup` 任务承载已验证硬件流程 |
+
+### 1.2 当前不再使用的旧路径
+
+| 旧路径 | 当前状态 | 说明 |
+| --- | --- | --- |
+| LAN8720 / RMII | 已移除 | MDIO/HAL/bit-bang 均无有效 PHY 响应，硬件风险过高 |
+| ETH HAL / LwIP / ethernetif | 不在活动固件路径 | 网络功能改由 W5500 SPI 和后续 WIZnet/socket 层承担 |
+| PA1/PA2/PC1/PC4/PC5 RMII 相关脚 | 已释放 | PB11/PB12/PB13/PA7 已复用于 W5500 |
+
+### 1.3 一期目标
+
+一期目标从“LAN8720 + lwIP 网关”调整为：
+
+1. 用 FreeRTOS 承载已验证的 W5500、CAN2、TF、W25Q128 功能。
+2. 以 FDCAN2 + MCP2562FD 作为外部 CAN 主通道，支持经典 CAN 500 kbit/s 起步。
+3. 用 W5500 提供静态 IP 网络服务，先实现状态查询和文件/配置接口，再扩展完整 Web UI。
+4. TF 卡保存 Web、DBC、日志、配置文件；W25Q128 保存关键配置备份和最小恢复信息。
+5. 保持可反汇编验证、可 ST-Link 读取诊断变量、可分模块回归验证。
+
+## 2. 分层架构
 
 | 层级 | 模块 | 职责 |
-|---|---|---|
-| BSP/HAL | 时钟、GPIO、FDCAN1、SDMMC1、ETH、QSPI、USART2、Cache/MPU | 外设初始化、DMA 缓冲区布局、中断入口 |
-| OS/驱动服务 | FreeRTOS、lwIP、FatFs、内存池、时间服务 | 任务调度、网络栈、文件系统、统一时间戳 |
+| --- | --- | --- |
+| BSP/HAL | 时钟、GPIO、FDCAN1/FDCAN2、SPI2、SDMMC1、QUADSPI、USART2、NVIC | 外设初始化、中断入口、底层寄存器/HAL 适配 |
+| OS/驱动服务 | FreeRTOS、W5500 驱动、FatFs、时间服务、状态监控 | 任务调度、网络收发、文件系统串行化、诊断状态 |
 | 核心业务 | CAN RX/TX、DBC 解析/编码、信号缓存、日志、规则引擎、配置管理 | 数据采集、解析、控制、持久化 |
-| 接口层 | HTTP Server、REST API、静态文件服务 | Web 配置、文件上传下载、状态查询 |
-| 前端 | `/www/index.html`、`app.js`、`style.css` | 单页中文界面，无框架 |
+| 接口层 | W5500 socket 服务、HTTP/REST、静态文件服务 | Web 配置、文件上传下载、状态查询 |
+| 前端 | `/www/index.html`、`app.js`、`style.css` | 单页中文界面，轻量无框架 |
 
-### 1.2 存储与内存策略
+## 3. 存储与内存策略
 
 | 资源 | 一期用途 | 策略 |
-|---|---|---|
-| 内部 Flash 128KB | 启动、HAL 裁剪版、FreeRTOS、lwIP 最小配置、FatFs、HTTP API、核心业务 | 严禁放 Web、DBC、日志；关闭不用外设；减少 printf 浮点；字符串常量集中裁剪 |
-| DTCM RAM | CAN RX/TX 队列、规则引擎临时状态、实时任务栈 | CPU 访问快，但 DMA 不可访问 |
-| AXI SRAM | DBC 数据库、信号缓存、HTTP 临时缓冲、日志批量缓冲 | 大块数据优先放此处 |
-| D2 SRAM | Ethernet DMA 描述符和收发 buffer、SDMMC DMA buffer | MPU 配置为 non-cacheable 或显式 cache clean/invalidate |
+| --- | --- | --- |
+| 内部 Flash 128KB | 启动、HAL 裁剪版、FreeRTOS、W5500 驱动、FatFs、HTTP API、核心业务 | 严禁放 Web/DBC/日志；裁剪不用外设；减少 printf 浮点 |
+| DTCM RAM | 实时任务栈、CAN 队列、规则引擎临时状态 | CPU 访问快，但 DMA 不可访问 |
+| AXI SRAM / RAM_D1 | FreeRTOS heap、DBC 数据库、信号缓存、HTTP 临时缓冲、日志缓冲 | 大块数据优先放此处；当前 FreeRTOS heap 先放 RAM_D1 |
+| D2 SRAM | 后续 DMA buffer 预留 | 当前 W5500 SPI、保守 SDMMC 路径不依赖 ETH DMA |
 | TF 卡 | `/www/`、`/dbc/`、`/log/`、`/config/` | 一期主要资源存储介质 |
-| QSPI W25Q128 | 配置备份、最小 Web 资源备份、版本信息；预留 XIP | 一期建议只做读写驱动和备份，不依赖 XIP |
+| QSPI W25Q128 | 配置备份、最小 Web/恢复信息、版本信息 | 当前只做读写验证；正式使用前移除上电擦写测试扇区 |
 
-一期边界：单 FDCAN1、REST 轮询、轻量 DBC、CSV 日志、两路继电器。二期通过 `can_if[]`、`transport_if`、`dbc_feature_flags`、`stream_backend` 扩展 FDCAN2、WiFi、WebSocket/SSE、J1939、Multiplex、VAL_、OTA 和登录权限。
+当前 FreeRTOS 编译基线：FLASH 约 37.90%，RAM_D1 约 19.54%。后续每次引入网络服务、HTTP、DBC 或日志，都要复查 Flash/RAM 水位。
 
-## 2. FreeRTOS 任务设计
+## 4. FreeRTOS 任务设计
 
-| 任务 | 优先级 | 栈 | 触发 | 职责 | 队列/共享资源 |
-|---|---:|---:|---|---|---|
-| `CanRxTask` | 高 | 1024-1536B | FDCAN RX 中断给 semaphore | 从 FDCAN FIFO 取帧，填 `CanFrame`，入 RX 队列，统计错误 | `can_rx_q`，不访问 TF/DBC |
-| `DbcDecodeTask` | 高 | 3072-4096B | `can_rx_q` | 查当前 DBC，解码信号，更新缓存，发布日志/规则事件 | DBC 快照、信号缓存、`log_sample_q` |
-| `CanTxTask` | 高 | 1536-2048B | `can_tx_q` + 周期 timer | 原始帧/DBC 编码帧发送，处理 TX FIFO 满 | `can_tx_q`、周期发送快照 |
-| `RuleTask` | 中高 | 2048B | 20-50ms 周期 | 执行手动/失效保护/自动规则/默认优先级，控制 PE7/PE8 | 信号缓存快照、规则快照、继电器 mutex |
-| `LogTask` | 中 | 3072B | 100ms 采样 + buffer 阈值 | 生成 CSV 行，批量写 TF 卡 | FatFs mutex、日志 buffer、信号快照 |
-| `HttpTask` | 中低 | 4096-6144B | lwIP 连接 | 静态文件、REST、上传下载 | FatFs mutex、配置 mutex、DBC 管理命令 |
-| `ConfigTask` | 低 | 2048B | 命令队列/事件 | 配置校验、保存、备份到 QSPI、应用变更 | `cfg_cmd_q`、FatFs mutex |
-| `MonitorTask` | 低 | 1024B | 500ms/1s | LED 心跳、资源统计、总线状态、看门狗喂狗 | 系统状态 |
+### 4.1 当前迁移状态
 
-优先级原则：CAN 收发和解码不被 Web/TF 卡阻塞；所有 FatFs 操作集中由低优先级路径串行化；Web 只读快照，不长时间持锁。
+当前已经手动接入 FreeRTOS Kernel V10.6.2。外设初始化仍在调度器启动前完成，
+`main()` 创建一个 `bringup` 任务并启动 `vTaskStartScheduler()`。
 
-## 3. 数据流设计
+当前 `bringup` 任务顺序：
 
-CAN 接收：FDCAN 中断只释放 semaphore；`CanRxTask` 搬运硬件 FIFO 到 `can_rx_q`；`DbcDecodeTask` 按 `(id, ide)` 查 `DbcMessage`，生成 `SignalValue`，用双缓冲更新 `SignalCache`；规则、日志、Web 读取缓存快照。
+1. `w25q128_bringup_run()`
+2. `can_bringup_run()`
+3. `can_external_bringup_run()`
+4. `can2_analyzer_bringup_run()`
+5. `w5500_bringup_run()`
+6. `tf_card_bringup_run()`
+7. 每秒执行 `can2_analyzer_poll()`、`w5500_bringup_poll()` 和状态打印
 
-CAN 发送：Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 发送先按当前 DBC 将物理值反向编码到 data，再入队；`CanTxTask` 统一调用 FDCAN HAL 发送并记录结果。
+这个单任务阶段用于验证“调度器接管后，已通过硬件功能仍保持通过”。多任务拆分必须等上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态仍正常后再进行。
 
-DBC 切换：HTTP 上传流式写入 `/dbc/name.tmp`，校验后改名；ConfigTask 解析到候选 `DbcDatabase` 内存池；解析成功后用指针原子切换 `active_dbc`，旧库延迟释放；失败不影响当前 DBC。
+### 4.2 目标任务拆分
 
-日志：LogTask 按配置周期从信号缓存取快照，写入 RAM 行缓冲；达到 4-16KB 或 1s flush；文件按启动时间命名，TF 不可用时进入 `log_degraded` 状态并丢弃或环形缓存最近 N 行。
+| 任务 | 优先级 | 栈建议 | 触发 | 职责 | 共享资源 |
+| --- | ---: | ---: | --- | --- | --- |
+| `CanRxTask` | 高 | 1024-1536 words | FDCAN2 RX 中断/semaphore | 从 RX FIFO 搬运帧，入 `can_rx_q`，统计错误 | `can_rx_q` |
+| `CanTxTask` | 高 | 1024-1536 words | `can_tx_q` + 周期 timer | 发送原始帧/周期帧，处理 TX FIFO 满 | `can_tx_q` |
+| `DbcDecodeTask` | 高 | 3072-4096 words | `can_rx_q` | DBC 查表、信号解码、更新 `SignalCache` | DBC 快照、信号缓存 |
+| `RuleTask` | 中高 | 2048 words | 20-50ms 周期 | 继电器规则、超时保护、默认状态 | 信号缓存、规则快照、继电器 |
+| `LogTask` | 中 | 3072 words | 100ms 采样 + buffer 阈值 | CSV 行缓冲，批量写 TF 卡 | FatFs mutex、日志 buffer |
+| `NetTask` | 中 | 3072-4096 words | W5500 socket 事件/轮询 | W5500 socket 服务、连接维护 | W5500 mutex/socket 状态 |
+| `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | REST、静态文件、上传下载 | FatFs mutex、配置 mutex、命令队列 |
+| `ConfigTask` | 低 | 2048 words | 命令队列 | 配置校验、保存、备份到 W25Q128 | `cfg_cmd_q`、FatFs mutex、QSPI mutex |
+| `MonitorTask` | 低 | 1024 words | 500ms/1s | LED 心跳、状态统计、看门狗、诊断打印 | 系统状态 |
 
-关键结构关系：`CanFrame -> DbcMessage -> DbcSignal -> SignalValue -> SignalCache`；`Rule` 引用 `signal_key`；`LogConfig` 决定采样周期；`PeriodicTxItem` 引用 raw frame 或 DBC signal set。
+优先级原则：CAN 收发和解码不被 Web、TF 卡和 W5500 长操作阻塞；FatFs 和 W25Q128 写操作串行化；Web 读取快照，不长时间持锁。
 
-## 4. 共享资源与同步
+## 5. 数据流设计
+
+### 5.1 CAN 接收
+
+FDCAN2 中断只释放 semaphore 或设置通知；`CanRxTask` 从硬件 FIFO 取帧，转换为统一 `CanFrame`，写入 `can_rx_q`；`DbcDecodeTask` 按 `(ide,id)` 查当前 DBC，生成 `SignalValue`，用双缓冲更新 `SignalCache`；规则、日志、Web 读取缓存快照。
+
+### 5.2 CAN 发送
+
+Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 发送先按当前 DBC 将物理值反向编码到 data，再入队；`CanTxTask` 统一调用 FDCAN2 HAL 发送并记录结果。
+
+### 5.3 W5500 网络
+
+当前 W5500 bring-up 已完成 SPI 寄存器级验证和 ping。下一步网络服务层按以下顺序推进：
+
+1. 引入或封装 WIZnet socket 层，保持 W5500 驱动与业务接口分离。
+2. 先实现 `GET /api/status` 和 `GET /api/can/status`。
+3. 再实现 TF 静态文件服务 `/www/` 和 DBC/日志文件接口。
+4. 最后增加配置保存、周期发送、规则接口。
+
+不再使用 lwIP `netif`、`ethernetif_input()` 或 ETH DMA 描述符路径。
+
+### 5.4 DBC 切换
+
+HTTP 上传流式写入 `/dbc/name.tmp`，校验后改名；`ConfigTask` 解析候选 `DbcDatabase`；解析成功后用指针原子切换 `active_dbc`，旧库延迟释放；失败不影响当前 DBC。
+
+### 5.5 日志
+
+`LogTask` 按配置周期从信号缓存取快照，写入 RAM 行缓冲；达到 4-16KB 或 1s flush；文件按启动时间命名。TF 不可用时进入 `log_degraded` 状态并丢弃或环形缓存最近 N 行，同时统计丢弃次数。
+
+## 6. 共享资源与同步
 
 | 资源 | 机制 | 原因 |
-|---|---|---|
+| --- | --- | --- |
 | CAN RX/TX | FreeRTOS Queue，固定深度，如 RX 128、TX 64 | 中断/任务解耦，背压可统计 |
-| 信号缓存 | 双缓冲 + 版本号 + 短临界区换指针 | Web/规则/日志可无长锁读取一致快照 |
-| 当前 DBC | RCU 风格指针切换 + `dbc_mutex` 管理生命周期 | 切换时不中断解码，旧库无人读后释放 |
-| FatFs/TF | 全局 `fs_mutex` + 单次操作超时 | FatFs 通常非完全可重入，避免并发损坏 |
-| 配置文件 | `config_mutex` + ConfigTask 串行保存 | 防止 Web 多请求交叉写 |
-| 周期发送/规则列表 | 写时复制快照 | 执行任务使用稳定数组，Web 编辑不阻塞实时路径 |
+| W5500 SPI/socket | 单 W5500 任务或 mutex | 防止多个任务同时访问 SPI/socket 寄存器 |
+| 信号缓存 | 双缓冲 + 版本号 + 短临界区换指针 | Web/规则/日志读取一致快照 |
+| 当前 DBC | RCU 风格指针切换 + `dbc_mutex` 管理生命周期 | 切换时不中断解码 |
+| FatFs/TF | 全局 `fs_mutex` + 单次操作超时 | 避免并发损坏文件系统 |
+| W25Q128 | `qspi_mutex` + ConfigTask 串行写 | 防止配置备份与其他 QSPI 操作冲突 |
+| 配置文件 | `config_mutex` + ConfigTask 串行保存 | 防止多请求交叉写 |
+| 周期发送/规则列表 | 写时复制快照 | 执行任务使用稳定数组 |
 | 继电器状态 | `relay_mutex` + 最终状态集中提交 | 保证手动/安全/自动优先级一致 |
-| 系统事件 | EventGroup | TF mounted、ETH up、DBC active、CAN bus off、log enabled 等状态广播 |
+| 系统事件 | EventGroup | TF mounted、W5500 link、DBC active、CAN bus off、log enabled 等状态广播 |
 
-## 5. DBC 解析器设计
+## 7. DBC 解析器设计
 
-核心结构：`DbcDatabase{messages[], id_index[], signal_pool, string_pool}`；`DbcMessage{id, ide, dlc, name_off, first_signal, signal_count}`；`DbcSignal{name_off, start_bit, bit_len, byte_order, is_signed, factor, offset, min, max, unit_off}`。字符串存入受控 string pool，消息和信号使用固定上限或内存池，例如 512 messages、4096 signals，可由配置裁剪。
+核心结构：`DbcDatabase{messages[], id_index[], signal_pool, string_pool}`；
+`DbcMessage{id, ide, dlc, name_off, first_signal, signal_count}`；
+`DbcSignal{name_off, start_bit, bit_len, byte_order, is_signed, factor, offset, min, max, unit_off}`。
 
-逐行解析：按行读取 DBC，不把整文件载入 RAM；只识别 `BO_` 和 `SG_`。`BO_` 提取 message id、name、dlc；`SG_` 提取 signal name、start|len@endian+sign、factor/offset、min/max、unit。其他行跳过并计数。解析后构建按 CAN ID 排序索引或开地址 hash，查找键为 `(ide,id)`。
+解析策略：
 
-Intel 提取：DBC start_bit 为 LSB 位置，按 little-endian 位序从 `start_bit` 递增读取 `bit_len` 位组装 raw；写入时反向逐位清零/置位。
+- 逐行读取 DBC，不把整文件载入 RAM。
+- 一期只识别 `BO_` 和 `SG_`，其他行跳过并计数。
+- 解析后构建按 CAN ID 排序索引或开地址 hash，查找键为 `(ide,id)`。
+- 超过上限立即失败，不激活半解析 DBC。
+- Motorola 位序必须用独立 bit iterator，读写共用同一序列，单元测试覆盖跨字节场景。
+- signed 信号提取后按 bit_len 做符号扩展；反向编码先 clamp，再 `(physical-offset)/factor` 四舍五入。
 
-Motorola 提取：DBC start_bit 为信号 MSB，按 big-endian DBC 位序遍历：同一字节 bit 从高到低，跨字节跳到下一字节高位。建议实现统一 `dbc_motorola_next_bit(pos)`，测试覆盖 1bit、8bit、12bit、16bit、跨 2/3/8 字节、起点 7/0/3。写入使用同一 bit 序列，按 raw 的 MSB 到 LSB 写入，避免读写定义不一致。
+## 8. REST API 设计
 
-signed 处理：提取 unsigned raw 后按 bit_len 做符号扩展；物理值 `raw * factor + offset`。反向编码先 clamp min/max，再 `(physical-offset)/factor` 四舍五入到整数，signed 检查范围，最后按 byte order 写入。
+| Method | Path | 功能 | 摘要 |
+| --- | --- | --- | --- |
+| GET | `/api/status` | 系统状态 | `{uptime,rtos,w5500,tf,qspi,heap}` |
+| GET | `/api/can/status` | CAN 状态 | `{bitrate,busOff,tec,rec,rx,tx}` |
+| GET | `/api/signals?filter=&page=1` | 实时信号 | `{items:[{name,value,unit,ts,timeout}]}` |
+| POST | `/api/dbc/upload` | 上传 DBC | multipart，返回 `{ok,report}` |
+| GET | `/api/dbc` | DBC 列表 | `{files:[...]}` |
+| POST | `/api/dbc/active` | 激活 DBC | `{"file":"x.dbc"}` |
+| DELETE | `/api/dbc/{name}` | 删除 DBC | `{ok}` |
+| POST | `/api/can/send_raw` | 原始发送 | `{id,ide,fd,brs,data}` |
+| POST | `/api/can/send_signal` | 按 DBC 发送 | `{message,signals:{rpm:1200}}` |
+| GET/POST/PUT/DELETE | `/api/can/periodic` | 周期发送管理 | `{items:[...]}` |
+| POST | `/api/log/control` | 日志开关/周期 | `{enabled,period_ms}` |
+| GET | `/api/log/files` | 日志列表 | `{files:[{name,size,time}]}` |
+| GET | `/api/log/download/{name}` | 下载日志 | `text/csv` |
+| DELETE | `/api/log/{name}` | 删除日志 | `{ok}` |
+| GET/POST/PUT/DELETE | `/api/rules` | 规则 CRUD | `{rules:[...]}` |
+| POST | `/api/relay/manual` | 手动控制 | `{mode:"manual",relay:1,state:true}` |
+| GET/PUT | `/api/settings` | 系统设置 | `{ip,can,fd,time,defaults}` |
+| POST | `/api/reboot` | 重启 | `{delay_ms:500}` |
 
-错误处理：行号、错误码、截断原因写入解析报告；超过上限立即失败；激活新 DBC 必须全部解析成功。Motorola 单元测试用已知 DBC/frame/raw 三元组校验提取和写入互逆。
+API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列表分页；上传和下载必须分块处理，避免阻塞 CAN 任务。
 
-## 6. REST API 设计
+## 9. 前端页面计划
 
-| Method | Path | 功能 | 示例请求/响应摘要 | 模块 |
-|---|---|---|---|---|
-| GET | `/api/status` | 系统状态 | `{uptime,tf,dbc,relay,heap}` | Monitor |
-| GET | `/api/can/status` | CAN 状态 | `{bitrate,busOff,tec,rec,rx,tx}` | CAN |
-| GET | `/api/signals?filter=&page=1` | 实时信号 | `{items:[{name,value,unit,ts,timeout}]}` | SignalCache |
-| POST | `/api/dbc/upload` | 上传 DBC | multipart，返回 `{ok,report}` | HTTP/DBC |
-| GET | `/api/dbc` | DBC 列表 | `{files:[...]}` | FS |
-| POST | `/api/dbc/active` | 激活 | `{"file":"x.dbc"}` | DBC/Config |
-| DELETE | `/api/dbc/{name}` | 删除 | `{ok}` | FS/DBC |
-| POST | `/api/can/send_raw` | 原始发送 | `{id,ide,fd,brs,data}` | CAN TX |
-| POST | `/api/can/send_signal` | 按 DBC 发送 | `{message,signals:{rpm:1200}}` | DBC/CAN TX |
-| GET/POST/PUT/DELETE | `/api/can/periodic` | 周期发送管理 | `{items:[...]}` | CAN TX/Config |
-| POST | `/api/log/control` | 日志开关/周期 | `{enabled,period_ms}` | Log/Config |
-| GET | `/api/log/files` | 日志列表 | `{files:[{name,size,time}]}` | FS |
-| GET | `/api/log/download/{name}` | 下载 | `text/csv` | HTTP/FS |
-| DELETE | `/api/log/{name}` | 删除 | `{ok}` | FS |
-| GET/POST/PUT/DELETE | `/api/rules` | 规则 CRUD | `{rules:[...]}` | Rule/Config |
-| POST | `/api/relay/manual` | 手动控制 | `{mode:"manual",relay:1,state:true}` | Rule/Relay |
-| GET/PUT | `/api/settings` | 系统设置 | `{ip,can,fd,time,defaults}` | Config |
-| POST | `/api/reboot` | 重启 | `{delay_ms:500}` | System |
+SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志、规则、系统设置。
 
-API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列表分页；下载和上传使用流式处理。
+资源限制：
 
-## 7. 前端页面组件树
+- HTML/CSS/JS 总量建议 <150KB，压缩后放 `/www/`。
+- 不引入大型框架和图标库。
+- 表格分页，不一次渲染数千信号。
+- 实时数据默认 1s 轮询，二期再换 SSE/WebSocket。
+- 错误提示中文化，上传显示字节进度。
 
-SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志、规则、系统设置。公共组件：顶部状态条、侧边/顶部 Tab、Toast、ConfirmDialog、分页表格、表单校验。
+## 10. 文件系统与配置
 
-页面/API：概览调用 `/api/status`、`/api/can/status`；实时数据 1s 调 `/api/signals`，搜索本地防抖 300ms；DBC 管理调用 upload/list/active/delete，并显示解析报告；CAN 发送包含 RawForm、SignalForm、PeriodicTable；日志页控制开关、周期、文件列表、下载删除；规则页 RuleEditor 和 RelayManualPanel；设置页读取/保存 `/api/settings` 并触发重启。
+启动流程：
 
-资源限制：HTML/CSS/JS 总量建议 <150KB，压缩后放 `/www/`；不用框架和图标库；表格虚拟分页，不一次渲染数千信号；日志列表分页；上传显示字节进度；错误用中文 toast 和字段级提示；避免低于 1s 的实时轮询，二期再换 SSE/WebSocket。
+1. 初始化 SDMMC/FatFs；当前固件跳过 PA8 检卡。
+2. 挂载成功后创建 `/www /dbc /log /config /sys`。
+3. 读取配置并校验版本和 CRC。
+4. 失败则加载默认值，并尝试从 W25Q128 备份恢复。
 
-## 8. 文件系统与配置
+配置文件：
 
-挂载流程：启动检测 PA8；初始化 SDMMC/FatFs；挂载成功后创建 `/www /dbc /log /config /sys`；读取配置并校验版本和 CRC；失败则加载默认值并尝试从 QSPI 备份恢复。
+- `config.json`：`version`、`device_name`、`network{ip,mask,gateway}`、`can{nominal_bitrate,data_bitrate,fd,brs,filters[]}`、`dbc{active}`、`log{enabled,period_ms,max_file_mb}`、`relay_defaults{r1,r2}`、`time{epoch,timezone}`、`web{refresh_ms}`。
+- `rules.json`：规则列表、手动状态、默认安全状态。
+- `can_tx.json`：周期发送列表。
 
-`config.json`：`version`、`device_name`、`network{ip,mask,gateway}`、`can{nominal_bitrate,data_bitrate,fd,brs,filters[]}`、`dbc{active}`、`log{enabled,period_ms,max_file_mb}`、`relay_defaults{r1,r2}`、`time{epoch,timezone}`、`web{refresh_ms}`。
+写配置采用 `file.tmp -> flush -> rename`；失败时保持旧配置，Web 返回错误，运行态继续使用内存配置。
 
-`rules.json`：`version`、`rules[{id,enabled,signal,op,threshold,on_threshold,off_threshold,relay,action,delay_ms,timeout_ms,safe_state,default_state}]`、`manual{enabled,r1,r2}`。
-
-`can_tx.json`：`version`、`periodic[{id,enabled,period_ms,mode:"raw|dbc",frame{can_id,ide,fd,brs,data},dbc{message,signals}}]`。
-
-CSV 字段：`timestamp_ms,datetime,can_id,ide,dlc,signal_name,physical_value,unit,raw_value,message_name,quality`。写配置采用 `file.tmp -> flush -> rename`；失败时保持旧配置，Web 返回错误，运行态继续使用内存配置。
-
-## 9. 继电器规则引擎
+## 11. 继电器规则引擎
 
 规则结构：`Rule{id, enabled, signal_key, op, threshold, on_th, off_th, relay, action_state, delay_ms, timeout_ms, safe_state, default_state, latched_state, condition_since}`。
 
-执行周期 20-50ms。每轮读取信号缓存快照和信号更新时间。优先级固定：手动模式直接覆盖；关键信号超过 timeout 进入 safe_state；否则执行自动规则；无命中则 default_state。比较运算符统一返回 boolean；滞回规则用 `off->on` 采用 `on_threshold`，`on->off` 采用 `off_threshold`；延时要求条件连续满足 N ms，条件断开清零计时。
+执行周期 20-50ms。优先级固定：
 
-多规则冲突：同一继电器按规则列表顺序和显式 `priority` 二选一；建议一期使用列表顺序，后匹配覆盖前匹配，并在 Web 显示冲突提示。上电先 GPIO 低电平关闭，配置加载后才应用默认状态；CAN/DBC 未就绪时只允许手动或默认安全状态。
+1. 手动模式最高。
+2. 关键信号超时进入 safe_state。
+3. 自动规则判断。
+4. 无命中则 default_state。
 
-## 10. 开发阶段拆分
+滞回规则用 `off->on` 采用 `on_threshold`，`on->off` 采用 `off_threshold`；延时要求条件连续满足 N ms，条件断开清零计时。上电先 GPIO 低电平关闭，配置加载后才应用默认状态。
 
-| 阶段 | 目标 | 可验证结果 | 主要风险 |
-|---|---|---|---|
-| 1 | 时钟/GPIO/USART/LED | 串口日志、心跳 LED | H750 时钟和供电配置 |
-| 2 | FDCAN1 收发 | CAN 工具收发标准/扩展/FD 帧 | timing、收发器 RX 电平 |
-| 3 | SDMMC+FatFs | 创建目录和读写文件 | TF 兼容、DMA cache |
-| 4 | lwIP+LAN8720 | ping `192.168.1.88`、HTTP hello | RMII 时钟、PHY 地址 |
-| 5 | REST 框架 | status/can/status 可用 | HTTP 阻塞实时任务 |
-| 6 | DBC 上传解析 | DBC 列表、解析报告 | RAM 上限、语法兼容 |
-| 7 | 实时解码 | Web 显示物理值 | Motorola 位序 |
-| 8 | 日志系统 | 100ms CSV 稳定写入 | TF 写入抖动 |
-| 9 | 规则/继电器 | 延时、滞回、超时动作正确 | 误动作 |
-| 10 | 前端整合 | 七个页面闭环配置 | 静态资源过大 |
-| 11 | 稳定性测试 | 长跑、拔卡、总线关闭、上传大文件 | 资源泄漏、文件损坏 |
+## 12. 开发阶段拆分
 
-推荐开发环境：底层 bring-up 用 STM32CubeIDE 生成和调试初始化更快；正式工程建议迁移到 CMake/Makefile，便于裁剪、CI、单元测试和版本管理。保持 CubeMX `.ioc` 作为外设配置来源，但业务代码放独立目录，避免重新生成覆盖。
+| 阶段 | 目标 | 当前状态 | 可验证结果 |
+| --- | --- | --- | --- |
+| 1 | 时钟/GPIO/USART/LED | 已完成基础路径 | 串口或 ST-Link 状态变量可读 |
+| 2 | TF 卡 SDMMC + FatFs | 已验证 | smoke test 读写通过 |
+| 3 | W5500 SPI bring-up | 已验证 | `VERSIONR=0x04`、网络参数回读、ping `192.168.1.88` |
+| 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
+| 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
+| 6 | FreeRTOS 单任务迁移 | 已编译/反汇编验证，待烧录复核 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
+| 7 | FreeRTOS 多任务拆分 | 待做 | CAN/W5500/TF 不互相阻塞，队列和 mutex 正常 |
+| 8 | W5500 socket/HTTP status | 待做 | `/api/status`、`/api/can/status` 可用 |
+| 9 | TF 静态文件和 DBC 上传 | 待做 | `/www` 静态页、DBC 上传解析报告 |
+| 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
+| 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
+| 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
-## 11. 风险与规避
+## 13. 风险与规避
 
 | 风险 | 规避 |
-|---|---|
-| 128KB Flash 不足 | 裁剪 HAL/lwIP/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志全放 TF；必要时二期 QSPI XIP |
-| 协议栈和业务同时引入资源压力 | 模块化编译开关；静态上限；启动时打印内存水位 |
-| Ethernet DMA 与 D-Cache | DMA 区放 D2 SRAM non-cacheable，或每次 clean/invalidate；描述符 32 字节对齐 |
-| SDMMC/FatFs 并发 | 全局 fs mutex，批量写，Web 下载限速 |
-| 上传 DBC 占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
-| Motorola 编码错误 | 独立 bit iterator，读写共用测试向量，PC 端单元测试先行 |
-| CAN-FD timing 复杂 | 预置常用参数表，Web 只选档位；高级参数隐藏 |
-| TF 拔插/损坏 | PA8 检测、写失败降级、配置 tmp+rename、日志可关闭 |
-| 高频日志阻塞 | RAM buffer 批量 flush，LogTask 低于 CAN 优先级，丢弃计数可见 |
+| --- | --- |
+| 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
+| FreeRTOS 引入后旧硬件验证回归 | 先单任务迁移，上板读 `g_freertos_*` 和各模块状态，再拆任务 |
+| W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
+| TF/FatFs 并发损坏 | 全局 `fs_mutex`，写配置 tmp+rename，日志批量 flush |
+| W25Q128 上电自检擦写正式数据 | 正式配置备份前移除或改成按需触发最后扇区测试 |
+| DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
+| Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |
+| CAN-FD timing 复杂 | 一期外部通道先用 FDCAN2 classic CAN 500 kbit/s；FDCAN1 FD 保留诊断 |
+| 串口在 macOS 偶发乱码 | 关键结论以 ST-Link 诊断变量、主机 ping、CANtest 实测为准 |
 | Web 阻塞实时任务 | HTTP 只操作快照/队列，长文件操作分块，限制并发连接 |
 | 继电器误动作 | 上电默认低；优先级集中决策；手动最高；超时安全；状态变化记录日志 |
 
+## 14. 维护规则
+
+- 引脚以 `pin_configuration.md`、`.ioc`、源码和实际验证记录共同确认。
+- 修改固件后必须编译并反汇编检查关键逻辑。
+- 烧录后优先用 ST-Link 全局变量确认各模块状态，再结合外部工具验证。
+- `CONVERSATION_SUMMARY.md` 必须记录每次关键修改、问题点、验证命令和结果。
+- 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。

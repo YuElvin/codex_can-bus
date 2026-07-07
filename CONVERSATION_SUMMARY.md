@@ -164,3 +164,60 @@
 - 同步更新 `cube_mx/README.md`：引用从 `../pin_configuration.txt` 改为 `../pin_configuration.md`，CubeMX 打开路径改为 `/Users/elvin/Desktop/project/can_bus_W5500/cube_mx/can_bus_gateway.ioc`，Configured Peripherals 和 Clock Tree 改成当前 W5500/SPI2、FDCAN2、FDCAN1 诊断、SDMMC1、QSPI、USART2、SWD 方案，并删除旧 LAN8720/ETH RMII 作为活动配置的描述。本轮只改文档，没有修改固件源码，因此未执行编译或反汇编。
 - 用户要求 commit 并推送当前改动。本轮复查当前分支为 `codex/W5500`，远端为 `origin git@github.com:YuElvin/codex_can-bus.git`；`git diff --check` 通过。待提交范围包含 FreeRTOS 手动接入、默认 bring-up 任务、FreeRTOS Cortex-M7 中断入口、`pin_configuration.md` 新引脚说明、`cube_mx/README.md` 更新、删除旧 `pin_configuration.txt` 和本对话记录。
 - 已完成提交并推送：提交 `db533fa Enable FreeRTOS and update pin docs`，包含 FreeRTOS 接入、默认 bring-up 任务、FreeRTOS 中断入口、Markdown 引脚说明和 CubeMX README 更新；`git push origin codex/W5500` 成功，远端 `codex/W5500` 从 `b1ea060` 更新到 `db533fa`。
+- 用户要求同步更新项目计划 `ARCHITECTURE_DESIGN.md`。本轮按当前 `can_bus_W5500` 实际状态重写架构计划：明确旧 LAN8720/RMII/lwIP 路线停止使用，当前硬件主路径为 W5500/SPI2、FDCAN2 PB5/PB6 + MCP2562FD、TF 卡、W25Q128 和 FreeRTOS；把一期目标改为 FreeRTOS 承载已验证硬件、FDCAN2 作为外部 CAN 主通道、W5500 提供静态 IP 网络服务、TF/W25Q128 负责资源和配置存储。
+- 新版 `ARCHITECTURE_DESIGN.md` 同步更新了分层架构、存储/内存策略、FreeRTOS 当前单 `bringup` 任务状态和后续多任务拆分、W5500 socket/HTTP 数据流、共享资源同步、REST API、文件系统配置、开发阶段拆分、风险规避和维护规则；明确下一阶段应先烧录 FreeRTOS 固件验证 `g_freertos_task_started/g_freertos_loop_count` 及各硬件状态，再拆分 CAN/W5500/TF/HTTP 等任务。本轮只修改文档和对话记录，没有修改固件源码，因此未执行编译或反汇编。
+
+## 2026-07-08 00:00:00 +08:00
+
+### 用户请求
+
+- 用户要求把 `/Users/elvin/Desktop/project/JUN/MediaTools-v2/PROJECT_GOVERNANCE_METHOD.md` 的项目治理要求加入当前项目的 `AGENTS.md`，并按该要求整理规整当前项目文件。
+
+### 实际操作
+
+1. 读取当前 `AGENTS.md`、`CONVERSATION_SUMMARY.md`、外部治理文档和当前项目状态，确认工作目录 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`。
+2. 在 `AGENTS.md` 增加治理工作流、文档更新规则和固件验证规则，明确每轮任务需读取 `03_Context.md`、查 `05_Lessons.md`，并更新中文对话摘要。
+3. 新增治理文件：`01_Project_Plan.md`、`02_Engineering_Rules.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`，分别承载项目计划、工程规则、当前快照、Feature/ADR 和可复用经验。
+4. 新增统一验证入口 `scripts/verify.sh`，包含主机 CTest 和 STM32 固件 CMake 构建流程；脚本末尾提示固件逻辑改动后仍需定向反汇编检查。
+5. 创建 `docs/archive/` 目录用于后续长历史归档；本轮未移动现有长摘要，避免破坏用户要求的完整对话记录。
+
+### 验证结果
+
+- 已执行 `git diff --check`，通过，无输出错误。
+- 已执行 `bash -n scripts/verify.sh`，通过，无语法错误。
+- 本轮只修改治理文档和验证脚本，没有修改固件源码，因此未执行固件编译，也未执行反汇编检查。
+
+### 问题点
+
+- 当前工作区在本轮开始前已有 `ARCHITECTURE_DESIGN.md` 和 `CONVERSATION_SUMMARY.md` 未提交改动；本轮保留这些已有内容，只在其后追加治理记录。
+- `CONVERSATION_SUMMARY.md` 已经很长，但用户明确要求每次问答都记录到该文件；后续如果要压缩入口上下文，可把长复盘另写入 `docs/archive/`，但不应删除本文件中的记录。
+
+### 下一步建议
+
+- 若后续修改固件源码，先运行 `./scripts/verify.sh`，再对生成 ELF 做定向反汇编核查。
+- FreeRTOS 下一步仍是烧录验证 `g_freertos_task_started/g_freertos_loop_count` 及 W5500/CAN/TF/W25Q128 状态。
+
+## 2026-07-08 00:00:00 +08:00
+
+### 用户请求
+
+- 用户要求把当前项目所有改动 commit 并推送。
+
+### 实际操作
+
+1. 复查当前分支为 `codex/W5500`，工作目录 `/Users/elvin/Desktop/project/can_bus` 实际指向 `/Users/elvin/Desktop/project/can_bus_W5500`。
+2. 复查待提交改动范围：治理入口 `AGENTS.md`，项目计划/工程规则/当前上下文/Feature ADR/经验教训文档，`scripts/verify.sh`，`docs/archive/README.md`，以及此前同步更新的 `ARCHITECTURE_DESIGN.md` 和本对话摘要。
+3. 本轮准备按用户要求提交当前全部工作区改动并推送到 `origin/codex/W5500`。
+
+### 验证结果
+
+- 提交前计划执行 `git diff --check` 和 `bash -n scripts/verify.sh`。
+- 当前改动为文档和验证脚本整理，没有修改固件源码；因此本轮不执行固件编译，也不执行反汇编检查。
+
+### 问题点
+
+- 无新的代码问题；需要注意 `ARCHITECTURE_DESIGN.md` 是上一轮已存在的未提交文档更新，本次按“所有改动”一并提交。
+
+### 下一步建议
+
+- 推送完成后，下一阶段仍应烧录验证 FreeRTOS 固件运行态。
