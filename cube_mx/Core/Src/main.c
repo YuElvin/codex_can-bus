@@ -31,7 +31,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
+#include "task.h"
 
 /* USER CODE END Includes */
 
@@ -59,7 +61,8 @@ volatile int g_w25q128_bringup_status = -1;
 volatile int g_can_bringup_status = -1;
 volatile int g_can_external_bringup_status = -1;
 volatile int g_can2_analyzer_bringup_status = -1;
-static uint32_t g_status_print_tick;
+volatile uint32_t g_freertos_task_started;
+volatile uint32_t g_freertos_loop_count;
 
 /* USER CODE END PV */
 
@@ -68,6 +71,7 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 static void bringup_print_status(const char *phase);
 static void bringup_uart_write(const char *text);
+static void bringup_default_task(void *argument);
 
 /* USER CODE END PFP */
 
@@ -130,11 +134,13 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[900];
+  char line[960];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
+                 (unsigned long)g_freertos_task_started,
+                 (unsigned long)g_freertos_loop_count,
                  g_can_bringup_status,
                  (unsigned long)g_can_tx_count,
                  (unsigned long)g_can_rx_count,
@@ -189,6 +195,34 @@ static void bringup_print_status(const char *phase)
   bringup_uart_write(line);
 }
 
+static void bringup_default_task(void *argument)
+{
+  (void)argument;
+
+  g_freertos_task_started = 1u;
+  bringup_uart_write("\r\n[bringup] task start rtos=freertos\r\n");
+  g_w25q128_bringup_status = w25q128_bringup_run();
+  bringup_print_status("w25q128");
+  g_can_bringup_status = can_bringup_run();
+  bringup_print_status("can");
+  g_can_external_bringup_status = can_external_bringup_run();
+  bringup_print_status("can_ext");
+  g_can2_analyzer_bringup_status = can2_analyzer_bringup_run();
+  bringup_print_status("can2");
+  g_w5500_bringup_status = w5500_bringup_run();
+  bringup_print_status("w5500");
+  g_tf_card_bringup_status = tf_card_bringup_run();
+  bringup_print_status("init");
+
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000u));
+    g_freertos_loop_count++;
+    (void)can2_analyzer_poll();
+    (void)w5500_bringup_poll();
+    bringup_print_status("run");
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -228,19 +262,18 @@ int main(void)
   MX_FATFS_Init();
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
-  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip lan=removed w5500=spi2 qspi=w25q128 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
-  g_w25q128_bringup_status = w25q128_bringup_run();
-  bringup_print_status("w25q128");
-  g_can_bringup_status = can_bringup_run();
-  bringup_print_status("can");
-  g_can_external_bringup_status = can_external_bringup_run();
-  bringup_print_status("can_ext");
-  g_can2_analyzer_bringup_status = can2_analyzer_bringup_run();
-  bringup_print_status("can2");
-  g_w5500_bringup_status = w5500_bringup_run();
-  bringup_print_status("w5500");
-  g_tf_card_bringup_status = tf_card_bringup_run();
-  bringup_print_status("init");
+  bringup_uart_write("\r\n[bringup] boot stm32h750 rtos=freertos usart2=115200 sd_detect=skip lan=removed w5500=spi2 qspi=w25q128 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
+  if (xTaskCreate(bringup_default_task,
+                  "bringup",
+                  4096u,
+                  NULL,
+                  tskIDLE_PRIORITY + 1u,
+                  NULL) != pdPASS) {
+    g_freertos_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  vTaskStartScheduler();
+  Error_Handler();
 
   /* USER CODE END 2 */
 
@@ -251,12 +284,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (HAL_GetTick() - g_status_print_tick >= 1000u) {
-      g_status_print_tick = HAL_GetTick();
-      (void)can2_analyzer_poll();
-      (void)w5500_bringup_poll();
-      bringup_print_status("run");
-    }
   }
   /* USER CODE END 3 */
 }

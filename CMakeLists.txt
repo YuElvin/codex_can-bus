@@ -72,6 +72,11 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/FATFS/Target/bsp_driver_sd.c
     ${CUBE_MX_DIR}/FATFS/Target/fatfs_platform.c
     ${CUBE_MX_DIR}/FATFS/Target/sd_diskio.c
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/list.c
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1/port.c
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/queue.c
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/tasks.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/diskio.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
@@ -102,6 +107,8 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Drivers/CMSIS/Include
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc
     ${CUBE_MX_DIR}/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/include
+    ${CUBE_MX_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src
   )
 
