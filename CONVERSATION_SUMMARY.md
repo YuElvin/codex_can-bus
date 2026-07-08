@@ -303,3 +303,101 @@
 ### 问题点
 
 - CAN2 持续 ACK/回测接收仍需 Windows CANtest 保持在线后复核，不作为本次提交的已验证结论。
+
+## 2026-07-08 02:45:00 +08:00
+
+### 用户请求
+
+- 用户要求继续按计划执行。
+
+### 本轮假设和成功标准
+
+1. 按当前计划，阶段 8 是 W5500 socket/HTTP status；CANtest 持续 ACK 复核需要 Windows 工具在线配合，因此本轮先推进可独立验证的 W5500 HTTP 最小接口。
+2. 本轮只实现 `GET /api/status` 和 `GET /api/can/status`，不实现 TF 静态文件、DBC 上传、日志、规则或复杂 HTTP 解析。
+3. 成功标准：主机测试通过、STM32 固件编译通过、关键路径反汇编通过、烧录后 `curl` 可访问两个接口，并用 ST-Link 读取 `g_w5500_http_*` 变量交叉确认。
+
+### 实际操作
+
+1. 读取项目治理文档、当前上下文、经验教训、工程规则、计划和 ADR，确认当前分支 `codex/W5500`、工作区起始干净，下一步为 W5500 HTTP/API。
+2. 扩展 `include/ports/w5500_port.h` 和 `src/ports/w5500_port.c`：新增 `w5500_port_read_block()`、`w5500_port_write_block()`，支持 W5500 common block 以外的 socket register/TX/RX block 访问；原 common 寄存器读写继续复用该路径。
+3. 更新 `tests/test_w5500_port.c`：fake W5500 增加 block 解析，新增非 common block 读写测试，覆盖 socket/TX buffer 所需控制字。
+4. 扩展 `firmware/bringup/w5500_bringup.c`：基于 socket0 实现 TCP 80 最小 HTTP 轮询服务，支持 `/api/status`、`/api/can/status` 和未知路径 404；新增 ST-Link 诊断变量 `g_w5500_http_status/g_w5500_http_socket_sr/g_w5500_http_request_count/g_w5500_http_last_path/g_w5500_http_last_code/g_w5500_http_last_rx_size/g_w5500_http_last_tx_size/g_w5500_http_error_count`。
+5. 修改 `cube_mx/Core/Src/main.c`：W5500 周期任务每 50ms 执行 `w5500_bringup_poll()` 和 `w5500_http_status_poll()`；状态行新增 `http/hsr/hreq/hpath/hcode/herr` 字段。
+6. 同步更新 `03_Context.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和 `05_Lessons.md`，记录 W5500 HTTP 最小接口已验证，后续进入 TF 静态文件/DBC 前需要先定义 FatFs mutex 和文件传输边界。
+
+### 验证结果
+
+- 第一次 `./scripts/verify.sh`：主机 CTest 8/8 通过；STM32 固件编译失败，错误为 `g_w5500_bringup_status` 未声明。已补充 extern 声明。
+- 第二次 `./scripts/verify.sh`：通过；主机 CTest 8/8 通过；STM32 固件 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex/.bin` 编译通过。FLASH `52136 B / 128 KB = 39.78%`，RAM_D1 `102488 B / 512 KB = 19.55%`。
+- `git diff --check` 通过。
+- 反汇编核查：
+  - `w5500_periodic_task` 反汇编确认每 50ms 调用 `w5500_bringup_poll()`、`w5500_http_status_poll()` 并递增任务 loop。
+  - `w5500_http_status_poll` 反汇编确认存在 socket0 TCP 80 open/listen、ESTABLISHED/CLOSE_WAIT 处理、RX_RSR 读取、DISCON/CLOSE 路径。
+  - `http_handle_request` 反汇编确认存在 RX buffer 读取、`/api/status`、`/api/can/status` 路径匹配、JSON 构造、TX buffer 写入和 SEND 命令。
+  - ELF `.rodata` 中确认存在 `HTTP/1.1` 和 `application/json` 字符串。
+- 烧录验证：OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.256 V`。
+- 主机网络验证：到 `192.168.1.88` 路由走 `en2`，`ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.538-1.203 ms`；ARP 显示 MAC `02:00:00:12:34:56`。
+- HTTP 验证：
+  - `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 包含 `rtos.started=1`、`rtos.ready=1`、`w5500.status=0`、`w5500.link=1`、`w5500.version=4`、`tf.status=0`、`qspi.status=0`。
+  - `curl -i http://192.168.1.88/api/can/status` 返回 `HTTP/1.1 200 OK`，JSON 包含 CAN2 状态、tx/rx/error/TEC/REC/sendResult/poll。
+  - `curl -i http://192.168.1.88/nope` 返回 `HTTP/1.1 404 Not Found` 和 JSON 错误体。
+- ST-Link 读数：
+  - 初次暂停读到 `g_w5500_http_socket_sr=0x14`、`g_w5500_http_status=0`、`g_w5500_http_request_count=3`、`g_w5500_http_last_code=404`、`g_w5500_http_last_rx_size=0x4f`、`g_w5500_http_last_tx_size=0xa0`、`g_w5500_http_error_count=0`。
+  - 初次同批读数中 `g_w5500_version` 异常为 `0x50`，但 `/api/status` 已返回 version 4；复位运行后重新 `curl /api/status` 和 ST-Link 读取确认 `g_w5500_version=0x04`、`g_w5500_phycfgr=0xbf`，判断为暂停瞬间读数异常，不作为稳定故障。
+
+### 当前结论
+
+- W5500 socket0 HTTP 最小状态接口已实现并上板验证，阶段 8 的 `/api/status` 与 `/api/can/status` 验收条件已满足。
+- 该实现仍是最小轮询 HTTP：只支持 GET 状态接口和 404，不支持静态文件、上传、分块传输、并发连接或持久连接。
+
+### 问题点
+
+- `/api/can/status` 当前显示 `sendResult=1/errors=9/tec=128/rx=0`，与此前 CANtest/ACK 未持续在线时的风险一致；需要 Windows CANtest 保持通道打开后复核持续 CAN2 ACK 和回测接收。
+- W5500 HTTP 服务目前与 W5500 polling 共用同一任务，后续如果加入文件服务或大响应，必须限制单次处理时间并加 FatFs mutex。
+- W25Q128 自检仍会擦写 `0x00FFF000`，正式配置存储前仍需处理。
+
+### 下一步建议
+
+1. 在 Windows CANtest 保持在线时重新访问 `/api/can/status`，确认 `sendResult/error_count/tec/rx_count`。
+2. 进入阶段 9 前先定义 `fs_mutex` 和 HTTP 文件传输上限，再实现 TF `/www` 静态文件读取。
+3. DBC 上传接口应先实现落盘和解析报告，不要一次性加入完整 Web UI。
+
+## 2026-07-08 03:00:00 +08:00
+
+### 用户请求
+
+- 用户反馈 CAN 数据接收正常，要求 commit，然后进行下一步。
+
+### 实际操作
+
+1. 将用户侧 CAN 数据接收正常的确认写入 `03_Context.md`，移除“需要 Windows CANtest/USBCAN 保持在线复核持续 ACK/收发”的当前风险项。
+2. 保留阶段 8 W5500 HTTP/API 的全部代码、文档和验证记录作为本次提交范围。
+3. 准备提交后进入阶段 9：TF 静态文件和 DBC 上传；按上一轮结论，先定义 HTTP 文件传输边界和 FatFs mutex，再实现 `/www` 静态文件读取最小闭环。
+
+### 验证结果
+
+- 本条只记录用户侧 CAN 验证反馈并更新文档，没有再次修改固件逻辑。
+- 当前待提交固件改动已在上一轮通过 `./scripts/verify.sh`、反汇编、烧录、`curl` 和 ST-Link 读数验证。
+
+### 提交结果
+
+- 提交前 `git diff --check` 通过，待提交范围为 12 个预期文件。
+- 执行 `git add ...` 失败，错误为 `fatal: Unable to create '/Users/elvin/Desktop/project/can_bus_W5500/.git/index.lock': Operation not permitted`。
+- 当前环境的权限配置只允许读取 `.git`，不允许写 Git 索引，因此本轮无法完成 commit。为避免在未提交状态上继续叠加阶段 9 改动，本轮未开始下一阶段代码修改。
+
+## 2026-07-08 22:20:00 +08:00
+
+### 用户请求
+
+- 用户要求再次尝试提交推送，如果提交推送有问题就修复这个问题。
+
+### 实际操作
+
+1. 复查当前工作目录实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，当前分支为 `codex/W5500`。
+2. 复查 `.git/index` 存在且当前没有 `.git/index.lock`，当前环境已不再阻止写 Git 索引。
+3. 本轮准备重新执行 `git diff --check`、暂存 12 个阶段 8 相关文件、提交并推送。
+
+### 验证说明
+
+- 当前待提交固件改动沿用上一轮已完成的 `./scripts/verify.sh`、反汇编、烧录、`curl` 和 ST-Link 读数验证。
+- 本条只追加提交重试记录，没有再次修改固件逻辑。

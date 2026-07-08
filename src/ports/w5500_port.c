@@ -26,8 +26,8 @@ static bool has_required_ops(const W5500Port *port) {
          port->ops->delay_ms != NULL && port->ops->transfer != NULL;
 }
 
-static uint8_t control_byte(uint8_t control) {
-  return (uint8_t)((W5500_BLOCK_COMMON << 3) | control);
+static uint8_t control_byte(uint8_t block, uint8_t control) {
+  return (uint8_t)((block << 3) | control);
 }
 
 static W5500Result transfer_byte(W5500Port *port, uint8_t tx, uint8_t *rx) {
@@ -35,7 +35,7 @@ static W5500Result transfer_byte(W5500Port *port, uint8_t tx, uint8_t *rx) {
   return port->ops->transfer(port->ctx, tx, rx == NULL ? &ignored : rx);
 }
 
-static W5500Result read_buffer(W5500Port *port, uint16_t address, uint8_t *data, size_t len) {
+W5500Result w5500_port_read_block(W5500Port *port, uint8_t block, uint16_t address, uint8_t *data, size_t len) {
   if (!has_required_ops(port) || data == NULL) {
     return W5500_ERROR;
   }
@@ -46,7 +46,7 @@ static W5500Result read_buffer(W5500Port *port, uint16_t address, uint8_t *data,
     result = transfer_byte(port, (uint8_t)address, NULL);
   }
   if (result == W5500_OK) {
-    result = transfer_byte(port, control_byte(W5500_CONTROL_READ), NULL);
+    result = transfer_byte(port, control_byte(block, W5500_CONTROL_READ), NULL);
   }
   for (size_t i = 0u; result == W5500_OK && i < len; ++i) {
     result = transfer_byte(port, 0x00u, &data[i]);
@@ -55,7 +55,7 @@ static W5500Result read_buffer(W5500Port *port, uint16_t address, uint8_t *data,
   return result;
 }
 
-static W5500Result write_buffer(W5500Port *port, uint16_t address, const uint8_t *data, size_t len) {
+W5500Result w5500_port_write_block(W5500Port *port, uint8_t block, uint16_t address, const uint8_t *data, size_t len) {
   if (!has_required_ops(port) || data == NULL) {
     return W5500_ERROR;
   }
@@ -66,7 +66,7 @@ static W5500Result write_buffer(W5500Port *port, uint16_t address, const uint8_t
     result = transfer_byte(port, (uint8_t)address, NULL);
   }
   if (result == W5500_OK) {
-    result = transfer_byte(port, control_byte(W5500_CONTROL_WRITE), NULL);
+    result = transfer_byte(port, control_byte(block, W5500_CONTROL_WRITE), NULL);
   }
   for (size_t i = 0u; result == W5500_OK && i < len; ++i) {
     result = transfer_byte(port, data[i], NULL);
@@ -80,12 +80,12 @@ static W5500Result write_u16(W5500Port *port, uint16_t address, uint16_t value) 
     (uint8_t)(value >> 8),
     (uint8_t)value,
   };
-  return write_buffer(port, address, data, sizeof(data));
+  return w5500_port_write_block(port, W5500_BLOCK_COMMON, address, data, sizeof(data));
 }
 
 static bool same_bytes(W5500Port *port, uint16_t address, const uint8_t *expected, size_t len) {
   uint8_t actual[6] = {0};
-  return len <= sizeof(actual) && read_buffer(port, address, actual, len) == W5500_OK &&
+  return len <= sizeof(actual) && w5500_port_read_block(port, W5500_BLOCK_COMMON, address, actual, len) == W5500_OK &&
          memcmp(actual, expected, len) == 0;
 }
 
@@ -116,11 +116,11 @@ W5500Result w5500_port_read_reg(W5500Port *port, uint16_t address, uint8_t *valu
   if (value == NULL) {
     return W5500_ERROR;
   }
-  return read_buffer(port, address, value, 1u);
+  return w5500_port_read_block(port, W5500_BLOCK_COMMON, address, value, 1u);
 }
 
 W5500Result w5500_port_write_reg(W5500Port *port, uint16_t address, uint8_t value) {
-  return write_buffer(port, address, &value, 1u);
+  return w5500_port_write_block(port, W5500_BLOCK_COMMON, address, &value, 1u);
 }
 
 W5500Result w5500_port_init(W5500Port *port, const W5500Config *config) {
@@ -146,10 +146,10 @@ W5500Result w5500_port_init(W5500Port *port, const W5500Config *config) {
 
   const uint16_t retry_time = config->retry_time_100us == 0u ? 2000u : config->retry_time_100us;
   const uint8_t retry_count = config->retry_count == 0u ? 8u : config->retry_count;
-  if (write_buffer(port, W5500_REG_GAR, config->gateway, sizeof(config->gateway)) != W5500_OK ||
-      write_buffer(port, W5500_REG_SUBR, config->netmask, sizeof(config->netmask)) != W5500_OK ||
-      write_buffer(port, W5500_REG_SHAR, config->mac, sizeof(config->mac)) != W5500_OK ||
-      write_buffer(port, W5500_REG_SIPR, config->ip, sizeof(config->ip)) != W5500_OK ||
+  if (w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_GAR, config->gateway, sizeof(config->gateway)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SUBR, config->netmask, sizeof(config->netmask)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SHAR, config->mac, sizeof(config->mac)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SIPR, config->ip, sizeof(config->ip)) != W5500_OK ||
       write_u16(port, W5500_REG_RTR, retry_time) != W5500_OK ||
       w5500_port_write_reg(port, W5500_REG_RCR, retry_count) != W5500_OK) {
     return W5500_ERROR;

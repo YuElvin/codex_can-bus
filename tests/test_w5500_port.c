@@ -20,9 +20,10 @@
 #define W5500_REG_VERSIONR 0x0039u
 
 typedef struct {
-  uint8_t regs[0x10000u];
+  uint8_t regs[8][512];
   uint8_t header[3];
   uint16_t address;
+  uint8_t block;
   size_t header_len;
   bool selected;
   bool write;
@@ -59,15 +60,19 @@ static W5500Result fake_transfer(void *ctx, uint8_t tx, uint8_t *rx) {
     fake->header[fake->header_len++] = tx;
     if (fake->header_len == sizeof(fake->header)) {
       fake->address = (uint16_t)(((uint16_t)fake->header[0] << 8) | fake->header[1]);
+      fake->block = (uint8_t)(fake->header[2] >> 3);
       fake->write = (fake->header[2] & 0x04u) != 0u;
     }
     return W5500_OK;
   }
 
+  if (fake->block >= 8u || fake->address >= 512u) {
+    return W5500_ERROR;
+  }
   if (fake->write) {
-    fake->regs[fake->address++] = tx;
+    fake->regs[fake->block][fake->address++] = tx;
   } else {
-    *rx = fake->regs[fake->address++];
+    *rx = fake->regs[fake->block][fake->address++];
   }
   return W5500_OK;
 }
@@ -82,8 +87,8 @@ static const W5500PortOps fake_ops = {
 
 static int init_writes_and_verifies_network_registers(void) {
   FakeW5500 fake = {0};
-  fake.regs[W5500_REG_VERSIONR] = 0x04u;
-  fake.regs[W5500_REG_PHYCFGR] = 0x01u;
+  fake.regs[0][W5500_REG_VERSIONR] = 0x04u;
+  fake.regs[0][W5500_REG_PHYCFGR] = 0x01u;
 
   W5500Port port;
   w5500_port_bind(&port, &fake, &fake_ops);
@@ -100,11 +105,11 @@ static int init_writes_and_verifies_network_registers(void) {
   ASSERT_TRUE(w5500_port_init(&port, &config) == W5500_OK);
   ASSERT_TRUE(fake.reset_high);
   ASSERT_TRUE(fake.delays >= 57u);
-  ASSERT_TRUE(memcmp(&fake.regs[W5500_REG_GAR], config.gateway, sizeof(config.gateway)) == 0);
-  ASSERT_TRUE(memcmp(&fake.regs[W5500_REG_SUBR], config.netmask, sizeof(config.netmask)) == 0);
-  ASSERT_TRUE(memcmp(&fake.regs[W5500_REG_SHAR], config.mac, sizeof(config.mac)) == 0);
-  ASSERT_TRUE(memcmp(&fake.regs[W5500_REG_SIPR], config.ip, sizeof(config.ip)) == 0);
-  ASSERT_TRUE(fake.regs[W5500_REG_RCR] == config.retry_count);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_GAR], config.gateway, sizeof(config.gateway)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SUBR], config.netmask, sizeof(config.netmask)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SHAR], config.mac, sizeof(config.mac)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SIPR], config.ip, sizeof(config.ip)) == 0);
+  ASSERT_TRUE(fake.regs[0][W5500_REG_RCR] == config.retry_count);
 
   W5500Status status;
   ASSERT_TRUE(w5500_port_get_status(&port, &status) == W5500_OK);
@@ -132,11 +137,29 @@ static int rejects_missing_or_wrong_version(void) {
   return 0;
 }
 
+static int supports_non_common_blocks(void) {
+  FakeW5500 fake = {0};
+  W5500Port port;
+  w5500_port_bind(&port, &fake, &fake_ops);
+
+  const uint8_t tx_data[3] = {0xaau, 0xbbu, 0xccu};
+  uint8_t rx_data[3] = {0};
+  ASSERT_TRUE(w5500_port_write_block(&port, 2u, 0x0024u, tx_data, sizeof(tx_data)) == W5500_OK);
+  ASSERT_TRUE(memcmp(&fake.regs[2][0x0024u], tx_data, sizeof(tx_data)) == 0);
+  ASSERT_TRUE(w5500_port_read_block(&port, 2u, 0x0024u, rx_data, sizeof(rx_data)) == W5500_OK);
+  ASSERT_TRUE(memcmp(rx_data, tx_data, sizeof(rx_data)) == 0);
+  ASSERT_TRUE(fake.header[2] == (uint8_t)(2u << 3));
+  return 0;
+}
+
 int main(void) {
   if (init_writes_and_verifies_network_registers() != 0) {
     return 1;
   }
   if (rejects_missing_or_wrong_version() != 0) {
+    return 1;
+  }
+  if (supports_non_common_blocks() != 0) {
     return 1;
   }
   return 0;

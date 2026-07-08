@@ -93,6 +93,12 @@ extern volatile uint32_t g_w5500_version;
 extern volatile uint32_t g_w5500_phycfgr;
 extern volatile uint32_t g_w5500_link_up;
 extern volatile uint32_t g_w5500_network_configured;
+extern volatile uint32_t g_w5500_http_status;
+extern volatile uint32_t g_w5500_http_socket_sr;
+extern volatile uint32_t g_w5500_http_request_count;
+extern volatile uint32_t g_w5500_http_last_path;
+extern volatile uint32_t g_w5500_http_last_code;
+extern volatile uint32_t g_w5500_http_error_count;
 extern volatile uint32_t g_w25q128_jedec_id;
 extern volatile uint32_t g_w25q128_status_reg1;
 extern volatile uint32_t g_w25q128_test_addr;
@@ -144,7 +150,7 @@ static void bringup_print_status(const char *phase)
   char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -200,6 +206,12 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_w5500_phycfgr,
                  (unsigned long)g_w5500_link_up,
                  (unsigned long)g_w5500_network_configured,
+                 (unsigned long)g_w5500_http_status,
+                 (unsigned long)g_w5500_http_socket_sr,
+                 (unsigned long)g_w5500_http_request_count,
+                 (unsigned long)g_w5500_http_last_path,
+                 (unsigned long)g_w5500_http_last_code,
+                 (unsigned long)g_w5500_http_error_count,
                  (unsigned long)g_tf_sd_last_hal_status,
                  (unsigned long)g_tf_sd_last_error,
                  (unsigned long)g_tf_sd_last_sta,
@@ -226,8 +238,9 @@ static void w5500_periodic_task(void *argument)
   g_w5500_task_started = 1u;
   for (;;) {
     (void)w5500_bringup_poll();
+    (void)w5500_http_status_poll();
     g_w5500_task_loop_count++;
-    vTaskDelay(pdMS_TO_TICKS(1000u));
+    vTaskDelay(pdMS_TO_TICKS(50u));
   }
 }
 

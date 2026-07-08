@@ -46,6 +46,7 @@ int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
+int w5500_http_status_poll(void);
 
 #endif
 

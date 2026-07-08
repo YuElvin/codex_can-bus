@@ -44,6 +44,8 @@ typedef struct {
 
 void w5500_port_bind(W5500Port *port, void *ctx, const W5500PortOps *ops);
 W5500Result w5500_port_init(W5500Port *port, const W5500Config *config);
+W5500Result w5500_port_read_block(W5500Port *port, uint8_t block, uint16_t address, uint8_t *data, size_t len);
+W5500Result w5500_port_write_block(W5500Port *port, uint8_t block, uint16_t address, const uint8_t *data, size_t len);
 W5500Result w5500_port_read_reg(W5500Port *port, uint16_t address, uint8_t *value);
 W5500Result w5500_port_write_reg(W5500Port *port, uint16_t address, uint8_t value);
 W5500Result w5500_port_get_status(W5500Port *port, W5500Status *status);

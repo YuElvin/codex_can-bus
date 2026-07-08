@@ -107,11 +107,11 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.3 W5500 网络
 
-当前 W5500 bring-up 已完成 SPI 寄存器级验证和 ping。下一步网络服务层按以下顺序推进：
+当前 W5500 bring-up 已完成 SPI 寄存器级验证和 ping。最小 HTTP 状态接口已经完成：
 
-1. 引入或封装 WIZnet socket 层，保持 W5500 驱动与业务接口分离。
-2. 先实现 `GET /api/status` 和 `GET /api/can/status`。
-3. 再实现 TF 静态文件服务 `/www/` 和 DBC/日志文件接口。
+1. 已引入 W5500 socket0 TCP 80 最小轮询服务。
+2. 已实现并烧录验证 `GET /api/status` 和 `GET /api/can/status`。
+3. 下一步实现 TF 静态文件服务 `/www/` 和 DBC/日志文件接口。
 4. 最后增加配置保存、周期发送、规则接口。
 
 不再使用 lwIP `netif`、`ethernetif_input()` 或 ETH DMA 描述符路径。
@@ -232,7 +232,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
-| 8 | W5500 socket/HTTP status | 待做 | `/api/status`、`/api/can/status` 可用 |
+| 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 待做 | `/www` 静态页、DBC 上传解析报告 |
 | 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
