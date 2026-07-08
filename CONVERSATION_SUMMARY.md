@@ -467,3 +467,144 @@
 - 并行 HTTP 请求可能因为单 socket 最小实现失败；后续不能把当前实现当作并发 Web 服务。
 - DBC 上传尚未实现；下一步应先实现 `/dbc/*.tmp` 落盘和解析报告，再考虑 Web UI。
 - QSPI 配置保存或日志任务前仍需补齐共享资源 mutex/队列边界。
+
+## 2026-07-08 22:34:11 +08:00
+
+### 用户请求
+
+- 用户要求检查最新进度和功能验证。
+
+### 实际操作
+
+1. 按项目规约读取 `AGENTS.md`、`03_Context.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md` 和 `05_Lessons.md`，确认当前仓库、阶段状态和风险。
+2. 复查 Git 状态：工作目录实际路径为 `/Users/elvin/Desktop/project/can_bus_W5500`，当前分支 `codex/W5500` 与 `origin/codex/W5500` 同步，HEAD 为 `c398295 Serve default TF web page`。
+3. 执行 `./scripts/verify.sh`。
+4. 对当前 ELF 执行 `arm-none-eabi-size`、`arm-none-eabi-nm` 和定向 `arm-none-eabi-objdump`，复核阶段 9 相关关键路径。
+5. 检查当前运行板网络状态：`route -n get`、`ping`、顺序 `curl` 访问 `/`、`/index.html`、`/api/status`、`/api/can/status`，并读取 ARP。
+6. 使用 OpenOCD/ST-Link 暂停读取 TF/W5500/HTTP/CAN2 关键全局变量后恢复运行。
+
+### 验证结果
+
+- Git：`codex/W5500...origin/codex/W5500` 干净同步；最近提交依次为 `c398295 Serve default TF web page`、`d952580 Add W5500 HTTP status API`、`dfe841b Split FreeRTOS periodic bringup tasks`。
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 通过；STM32 构建目标当前为 `ninja: no work to do`，已有 ELF 可用。
+- ELF 尺寸：text `54568`、data `184`、bss `102336`、dec `157088`。
+- ELF 符号确认存在：`stm32h750_fs_mutex_init`、`stm32h750_tf_ensure_default_www`、`stm32h750_tf_read_file_locked`、`http_handle_request`、`w5500_http_status_poll`、`xQueueCreateMutex`、`xQueueSemaphoreTake`、`xQueueGenericSend`、TF/W5500/CAN2 诊断变量。
+- 反汇编结论：
+  - `main` 中 `stm32h750_fs_mutex_init` 在 `xTaskCreate` 前调用。
+  - `http_handle_request` 中仍存在 `/`、`/index.html` 分支，调用 `stm32h750_tf_read_file_locked`，文件读取上限为 384 字节，并保留 200/404 响应路径。
+- 当前运行板网络：
+  - 到 `192.168.1.88` 路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.579-0.751 ms`。
+  - `curl -i http://192.168.1.88/` 返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+  - `curl -i http://192.168.1.88/index.html` 返回同一 171 字节默认 HTML。
+  - `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`、`jedec=15679512`。
+  - `curl -i http://192.168.1.88/api/can/status` 返回 `HTTP/1.1 200 OK`，但当前读数为 `tx=4`、`rx=0`、`errors=487`、`tec=128`、`sendResult=1`、`poll=490`。
+  - ARP 显示 `192.168.1.88` MAC 为 `02:00:00:12:34:56`。
+- ST-Link/OpenOCD 当前读数：
+  - 目标电压约 `3.250368 V`。
+  - `g_tf_www_index_status=0`，`g_tf_www_index_len=171`，`g_tf_fs_lock_result=0`，`g_tf_fs_mutex_ready=1`。
+  - `g_w5500_http_static_read_result=0`，`g_w5500_http_socket_sr=0x14`，`g_w5500_http_status=0`，`g_w5500_phycfgr=0xbf`，`g_w5500_version=4`，`g_w5500_link_up=1`。
+  - `g_w5500_http_static_count=2`，`g_w5500_http_error_count=0`，`g_w5500_http_last_code=200`，`g_w5500_http_last_path=2`，`g_w5500_http_request_count=4`，`g_w5500_network_configured=1`。
+  - CAN2 当前读数按符号顺序解释为 `g_can2_poll_count=513`、`g_can2_send_result=1`、`g_can2_rx_count=0`、`g_can2_tx_count=4`、`g_can2_error_count=510`、`g_can2_tec=128`、`g_can2_rec=0`、`g_can2_bus_off=0`。
+
+### 当前结论
+
+- 最新提交和远端同步；阶段 9 第一小步仍是当前最新进度。
+- 软件侧验证通过：host tests、STM32 ELF、关键符号和反汇编均符合当前功能。
+- 当前板上 W5500、TF 默认静态页、`/api/status` 运行正常。
+- 当前 `/api/can/status` 接口正常返回，但 CAN2 现场读数显示没有 ACK/接收闭环；这应视为当前现场验证未满足，而不是推翻此前用户确认的 CAN 数据接收正常。需要 CANtest/分析仪在线后再复测 CAN2。
+
+### 问题点
+
+- HTTP 静态页仍是单 socket、小文件最小实现，不支持并发、分块或上传。
+- DBC 上传尚未实现。
+- 当前 CAN2 运行态需要外部分析仪在线复核，否则 `sendResult=1/tec=128/errors` 会继续提示 ACK 风险。
+
+## 2026-07-08 22:41:08 +08:00
+
+### 用户请求
+
+- 用户说明已经把 CAN 分析仪的接收和发送都打开，要求再次检查最新进度和功能。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：用户当前 CAN 分析仪已保持在线，FDCAN2 外部通道应恢复 ACK 和接收闭环。
+- 成功标准：`/api/can/status` 返回 200，`sendResult=0`、`tec=0`、`busOff=0`，`rx_count` 和 `tx_count` 随时间增长；同时 W5500/TF 静态页和 `/api/status` 仍正常。
+- 验证方式：读取治理文档和经验记录；执行 `./scripts/verify.sh`；对当前 ELF 做尺寸、符号、反汇编复核；通过 `route`、`ping`、顺序 `curl`、ARP 和 OpenOCD/ST-Link 读数交叉验证。
+
+### 实际操作
+
+1. 读取 `AGENTS.md`、`03_Context.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md` 和 `05_Lessons.md`，确认当前阶段仍为阶段 9 第一小步，DBC 上传未实现。
+2. 检查 Git 状态：当前分支 `codex/W5500` 与 `origin/codex/W5500` 同步，工作树存在上一轮文档记录修改 `03_Context.md`、`CONVERSATION_SUMMARY.md`，源码无未提交改动。
+3. 执行 `./scripts/verify.sh`。
+4. 对 `build/stm32h750/can_bus_gateway_stm32h750.elf` 执行 `arm-none-eabi-size`、`arm-none-eabi-nm` 和定向 `arm-none-eabi-objdump`。
+5. 通过主机网络顺序访问 `192.168.1.88` 的 `/`、`/index.html`、`/api/status`、`/api/can/status`。
+6. 使用 OpenOCD/ST-Link 读取 TF/W5500/HTTP/CAN2 诊断变量。
+
+### 验证结果
+
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 构建目标为 `ninja: no work to do`。
+- ELF 尺寸：text `54568`、data `184`、bss `102336`、dec `157088`。
+- ELF 符号确认存在：`stm32h750_fs_mutex_init`、`stm32h750_tf_read_file_locked`、`stm32h750_tf_ensure_default_www`、`http_handle_request`、`w5500_http_status_poll`、CAN2/W5500/TF 关键诊断变量。
+- 反汇编复核：
+  - `main` 中 `stm32h750_fs_mutex_init` 在 `xTaskCreate` 前调用。
+  - `http_handle_request` 中存在 `/`、`/index.html` 分支，调用 `stm32h750_tf_read_file_locked`，并保留 384 字节小文件上限、200/404 响应路径。
+- 主机网络：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.489-0.597 ms`。
+  - `curl /` 和 `curl /index.html` 返回 `HTTP/1.1 200 OK`，`Content-Type: text/html; charset=utf-8`，`Content-Length: 171`。
+  - 顺序重试 `curl /api/status` 返回 `HTTP/1.1 200 OK`，两次重复读数均显示 `w5500.version=4`、`link=1`、`tf.status=0`、`qspi.status=0`。
+  - 一次 `/api/status` 曾返回 `w5500.version=80`，随后两次顺序重读恢复为 `4`；结合 ping/HTTP 正常和后续 ST-Link `g_w5500_version=4`，记录为诊断变量瞬时异常。
+  - ARP 显示 MAC `02:00:00:12:34:56`。
+- CAN2 HTTP 验证：
+  - 第一次 `curl /api/can/status`：`tx=359`、`rx=141`、`errors=544`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`、`poll=902`。
+  - 间隔约 2 秒后再次读取：`tx=373`、`rx=155`、`errors=544`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`、`poll=916`。
+  - 顺序最终读取：`tx=380`、`rx=162`、`errors=544`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`、`poll=923`。
+  - 结论：分析仪收发打开后 CAN2 ACK 恢复，发送和接收计数均增长。
+- ST-Link/OpenOCD 当前读数：
+  - 目标电压约 `3.251976 V`。
+  - `g_tf_www_index_status=0`、`g_tf_www_index_len=171`、`g_tf_fs_lock_result=0`、`g_tf_fs_mutex_ready=1`。
+  - `g_w5500_http_static_read_result=0`、`g_w5500_http_socket_sr=0x14`、`g_w5500_http_status=0`、`g_w5500_phycfgr=0xbf`、`g_w5500_version=4`、`g_w5500_link_up=1`。
+  - CAN2 符号顺序解释：`g_can2_tx_sequence=944`、`g_can2_poll_count=944`、`g_can2_send_result=0`、`g_can2_rx_first_byte=0xb6`、`g_can2_rx_dlc=8`、`g_can2_rx_id=0x123`、`g_can2_rec=0`、`g_can2_tec=0`、`g_can2_bus_off=0`、`g_can2_error_count=544`、`g_can2_rx_count=183`、`g_can2_tx_count=401`。
+  - HTTP 诊断：`g_w5500_http_static_count=4`、`g_w5500_http_error_count=0`、`g_w5500_http_last_code=200`、`g_w5500_http_last_path=1`、`g_w5500_http_request_count=12`、`g_w5500_network_configured=1`。
+
+### 当前结论
+
+- 最新进度未变化：当前仍在阶段 9 第一小步，TF 默认静态页已可通过 W5500 HTTP 访问，DBC 上传尚未实现。
+- 本轮在 CAN 分析仪收发均打开后，FDCAN2 外部 CAN 当前验证通过：ACK 正常、接收计数增长、发送计数增长、`tec=0`、`busOff=0`。
+- W5500/HTTP/TF/QSPI 当前状态正常；静态页和状态 API 可访问。
+
+### 问题点
+
+- CAN2 历史错误计数 `errors=544` 未清零，这是分析仪未在线期间累积的历史值；当前健康状态应看 `sendResult=0`、`tec=0`、`busOff=0`、rx/tx 递增。
+- HTTP 仍是单 socket 最小实现；并行访问仍可能触发连接失败，功能验证应优先顺序访问。
+- `/api/status` 曾短暂显示 `w5500.version=80`，重复读数和 ST-Link 已恢复为 `4`；后续如复现频繁，需要检查 W5500 状态读取和 SPI/socket 访问时序。
+
+## 2026-07-08 22:46:33 +08:00
+
+### 用户请求
+
+- 用户询问当前功能是否符合目标；如果符合当前进度目标，则提交推送，并新开一个对话继续按计划开发。
+
+### 判断依据
+
+- 当前阶段目标仍为阶段 9 第一小步：TF 默认静态页可通过 W5500 HTTP 访问；阶段 8 HTTP 状态 API 保持可用；FDCAN2 在分析仪在线时保持收发闭环。
+- DBC 上传、完整静态文件服务、并发 HTTP、分块传输、日志和规则引擎不属于当前已完成小步的验收范围，仍按计划进入后续开发。
+
+### 验证结果
+
+- Git 初始状态：`codex/W5500...origin/codex/W5500`，源码无未提交改动，只有上一轮验证记录文件 `03_Context.md` 和 `CONVERSATION_SUMMARY.md` 未提交。
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 构建目标为 `ninja: no work to do`。
+- `curl http://192.168.1.88/api/status` 返回 JSON：`rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+- `curl http://192.168.1.88/api/can/status` 返回 JSON：`status=0`、`tx=728`、`rx=508`、`errors=544`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`、`poll=1271`。
+- 并发轻量复查中 `curl /` 曾出现一次 `curl: (7)`，符合当前单 socket HTTP 已知限制；随后顺序访问 `/` 和 `/index.html` 均返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+
+### 当前结论
+
+- 当前功能符合本阶段已声明的小步目标，可以提交推送当前验证记录。
+- 当前后续计划仍是：先扩展 HTTP 静态文件服务的分块读取或文件大小边界，再做 DBC 上传落盘到 `/dbc/*.tmp` 和解析报告。
+
+### 提交准备
+
+- 本轮没有修改固件源码，因此没有新的反汇编需求；当前固件 ELF 和关键路径反汇编已在上一轮及本轮 `./scripts/verify.sh` 基础上复核过。
+- 准备提交范围只包含 `03_Context.md` 和 `CONVERSATION_SUMMARY.md`。

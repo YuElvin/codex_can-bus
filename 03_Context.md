@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-08 22:45 +08:00
+更新时间：2026-07-08 22:46 +08:00
 
 ## 当前仓库
 
@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
 | W5500 HTTP/API | [客观已验证] | 已烧录验证 `GET /api/status`、`GET /api/can/status` 返回 `HTTP/1.1 200 OK` JSON；未知路径返回 404 JSON |
-| FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；用户确认当前 CAN 数据接收正常 |
+| FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
 | TF 静态文件服务 | [部分客观已验证] | 已启用 FatFs mutex，缺省创建 `/www/index.html`；`GET /` 和 `GET /index.html` 返回 `text/html` 默认页 |
 | W25Q128 | [客观已验证] | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
@@ -30,6 +30,7 @@
 
 - 后续继续拆分 TF/FatFs、QSPI、HTTP 和配置任务时，共享资源必须加串行化或 mutex。
 - 当前 HTTP 静态页服务仍是单 socket 最小实现，不支持并发连接；静态文件读取上限为当前 384 字节缓冲，尚不是完整文件服务。
+- 2026-07-08 22:34 当前复查中 `/api/can/status` 可访问，但现场读数为 `rx=0/errors=487/tec=128/sendResult=1`；2026-07-08 22:46 用户打开 CAN 分析仪收发后复查恢复为 `sendResult=0`、`rx_count=508`、`tx_count=728`、`tec=0`、`bus_off=0`。
 - `CONVERSATION_SUMMARY.md` 已经较长，但仍按用户要求保留为完整对话摘要；当前快照以本文件为准。
 - macOS 串口曾出现乱码，硬件结论优先用 ST-Link 变量和外部工具确认。
 
