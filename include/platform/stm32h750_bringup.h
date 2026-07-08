@@ -38,6 +38,10 @@ int stm32h750_tf_read_file_chunk_locked(const char *path,
                                         uint8_t *data,
                                         size_t len,
                                         size_t *read_len);
+int stm32h750_tf_replace_file_locked(const char *tmp_path,
+                                     const char *final_path,
+                                     const uint8_t *data,
+                                     size_t len);
 int stm32h750_tf_ensure_default_www(void);
 void stm32h750_w5500_bind(W5500Port *port,
                           Stm32W5500Context *ctx,

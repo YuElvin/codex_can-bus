@@ -25,6 +25,14 @@ volatile uint32_t g_w5500_http_static_count = 0u;
 volatile uint32_t g_w5500_http_static_read_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_static_file_size = 0u;
 volatile uint32_t g_w5500_http_static_bytes_sent = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_count = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_dbc_upload_bytes = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_lines = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_messages = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_signals = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_skipped = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_errors = 0u;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -78,14 +86,32 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_STATUS 1u
 #define W5500_HTTP_PATH_CAN_STATUS 2u
 #define W5500_HTTP_PATH_INDEX 3u
+#define W5500_HTTP_PATH_DBC_UPLOAD 4u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
+#define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
+#define W5500_HTTP_UPLOAD_BODY_MAX 1024u
 #define W5500_HTTP_STATIC_OK 0
 #define W5500_HTTP_STATIC_SEND_ERROR 1
 #define W5500_HTTP_STATIC_NOT_FOUND 2
+#define W5500_HTTP_HANDLE_OK 0
+#define W5500_HTTP_HANDLE_ERROR 1
+#define W5500_HTTP_HANDLE_WAIT 2
+
+typedef struct {
+  size_t bytes;
+  size_t lines;
+  size_t messages;
+  size_t signals;
+  size_t skipped;
+  size_t errors;
+} DbcUploadReport;
 
 static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
 static uint8_t g_w5500_bound;
+static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
+static char g_http_response_body[384];
+static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
   return w5500_port_read_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, value, 1u);
@@ -186,13 +212,33 @@ static int http_open_listener(void) {
   return 0;
 }
 
-static bool request_path_is(const char *request, const char *path) {
+static bool request_path_is(const char *request, const char *method, const char *path) {
+  const size_t method_len = strlen(method);
   const size_t path_len = strlen(path);
-  if (strncmp(request, "GET ", 4u) != 0) {
+  if (strncmp(request, method, method_len) != 0 || request[method_len] != ' ') {
     return false;
   }
-  const char *actual = request + 4u;
+  const char *actual = request + method_len + 1u;
   return strncmp(actual, path, path_len) == 0 && (actual[path_len] == ' ' || actual[path_len] == '?');
+}
+
+static const char *http_status_text(uint16_t code) {
+  switch (code) {
+    case 200u:
+      return "OK";
+    case 400u:
+      return "Bad Request";
+    case 404u:
+      return "Not Found";
+    case 405u:
+      return "Method Not Allowed";
+    case 413u:
+      return "Payload Too Large";
+    case 500u:
+      return "Internal Server Error";
+    default:
+      return "Error";
+  }
 }
 
 static size_t build_status_body(char *body, size_t len) {
@@ -232,6 +278,140 @@ static size_t build_can_status_body(char *body, size_t len) {
 
 static size_t build_not_found_body(char *body, size_t len) {
   return (size_t)snprintf(body, len, "{\"ok\":false,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}");
+}
+
+static size_t build_error_body(char *body, size_t len, const char *code, const char *message) {
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+                          code,
+                          message);
+}
+
+static size_t build_dbc_upload_body(char *body, size_t len, const DbcUploadReport *report) {
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"path\":\"/dbc/upload.tmp\",\"bytes\":%lu,"
+                          "\"lines\":%lu,\"messages\":%lu,\"signals\":%lu,"
+                          "\"skipped\":%lu,\"errors\":%lu,\"valid\":%s}}",
+                          (unsigned long)report->bytes,
+                          (unsigned long)report->lines,
+                          (unsigned long)report->messages,
+                          (unsigned long)report->signals,
+                          (unsigned long)report->skipped,
+                          (unsigned long)report->errors,
+                          report->errors == 0u ? "true" : "false");
+}
+
+static const char *skip_http_space(const char *text) {
+  while (*text == ' ' || *text == '\t') {
+    ++text;
+  }
+  return text;
+}
+
+static bool parse_decimal_size(const char *text, const char *end, size_t *value) {
+  size_t result = 0u;
+  bool has_digit = false;
+  text = skip_http_space(text);
+  while (text < end && *text >= '0' && *text <= '9') {
+    result = (result * 10u) + (size_t)(*text - '0');
+    has_digit = true;
+    ++text;
+  }
+  if (!has_digit) {
+    return false;
+  }
+  *value = result;
+  return true;
+}
+
+static bool http_parse_content_length(const char *request, const char *header_end, size_t *content_length) {
+  const char *line = request;
+  static const char header_name[] = "Content-Length:";
+  while (line < header_end) {
+    const char *line_end = strstr(line, "\r\n");
+    if (line_end == NULL || line_end > header_end) {
+      line_end = header_end;
+    }
+    if ((size_t)(line_end - line) > sizeof(header_name) - 1u &&
+        strncmp(line, header_name, sizeof(header_name) - 1u) == 0) {
+      return parse_decimal_size(line + sizeof(header_name) - 1u, line_end, content_length);
+    }
+    if (line_end == header_end) {
+      break;
+    }
+    line = line_end + 2u;
+  }
+  return false;
+}
+
+static void dbc_parse_report_line(DbcUploadReport *report, const char *line) {
+  const char *trimmed = skip_http_space(line);
+  if (*trimmed == '\0') {
+    report->skipped++;
+    return;
+  }
+  if (strncmp(trimmed, "BO_ ", 4u) == 0) {
+    unsigned long id = 0u;
+    unsigned int dlc = 0u;
+    char name[32] = {0};
+    if (sscanf(trimmed, "BO_ %lu %31[^:]: %u", &id, name, &dlc) == 3 && dlc <= 64u) {
+      report->messages++;
+    } else {
+      report->errors++;
+    }
+    return;
+  }
+  if (strncmp(trimmed, "SG_ ", 4u) == 0) {
+    char name[32] = {0};
+    char endian = '\0';
+    char sign = '\0';
+    unsigned int start_bit = 0u;
+    unsigned int bit_length = 0u;
+    if (report->messages > 0u &&
+        sscanf(trimmed, "SG_ %31s : %u|%u@%c%c", name, &start_bit, &bit_length, &endian, &sign) == 5 &&
+        start_bit <= 511u &&
+        bit_length > 0u &&
+        bit_length <= 64u &&
+        (endian == '0' || endian == '1') &&
+        (sign == '+' || sign == '-')) {
+      report->signals++;
+    } else {
+      report->errors++;
+    }
+    return;
+  }
+  report->skipped++;
+}
+
+static void dbc_parse_upload_report(const uint8_t *data, size_t len, DbcUploadReport *report) {
+  size_t offset = 0u;
+  char line[128];
+  memset(report, 0, sizeof(*report));
+  report->bytes = len;
+  while (offset < len) {
+    size_t line_len = 0u;
+    while (offset + line_len < len && data[offset + line_len] != '\n') {
+      ++line_len;
+    }
+    size_t copy_len = line_len;
+    if (copy_len > 0u && data[offset + copy_len - 1u] == '\r') {
+      --copy_len;
+    }
+    report->lines++;
+    if (copy_len >= sizeof(line)) {
+      report->errors++;
+    } else {
+      memcpy(line, &data[offset], copy_len);
+      line[copy_len] = '\0';
+      dbc_parse_report_line(report, line);
+    }
+    offset += line_len;
+    if (offset < len && data[offset] == '\n') {
+      ++offset;
+    }
+  }
 }
 
 static int http_send_bytes(const uint8_t *data, size_t len) {
@@ -283,7 +463,7 @@ static int http_send_bytes(const uint8_t *data, size_t len) {
 
 static int http_send_header(uint16_t code, const char *content_type, size_t body_len) {
   char header[192];
-  const char *status_text = code == 200u ? "OK" : "Not Found";
+  const char *status_text = http_status_text(code);
   const int header_len = snprintf(header,
                                   sizeof(header),
                                   "HTTP/1.1 %u %s\r\n"
@@ -313,7 +493,6 @@ static int http_send_response(uint16_t code, const char *content_type, const cha
 }
 
 static int http_send_static_index(void) {
-  uint8_t chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
   size_t file_size = 0u;
   size_t offset = 0u;
 
@@ -332,15 +511,19 @@ static int http_send_static_index(void) {
   while (offset < file_size) {
     size_t chunk_len = file_size - offset;
     size_t read_len = 0u;
-    if (chunk_len > sizeof(chunk)) {
-      chunk_len = sizeof(chunk);
+    if (chunk_len > sizeof(g_http_static_chunk)) {
+      chunk_len = sizeof(g_http_static_chunk);
     }
     g_w5500_http_static_read_result =
-      (uint32_t)stm32h750_tf_read_file_chunk_locked("/www/index.html", offset, chunk, chunk_len, &read_len);
+      (uint32_t)stm32h750_tf_read_file_chunk_locked("/www/index.html",
+                                                    offset,
+                                                    g_http_static_chunk,
+                                                    chunk_len,
+                                                    &read_len);
     if (g_w5500_http_static_read_result != 0u || read_len == 0u || read_len > chunk_len) {
       return W5500_HTTP_STATIC_SEND_ERROR;
     }
-    if (http_send_bytes(chunk, read_len) != 0) {
+    if (http_send_bytes(g_http_static_chunk, read_len) != 0) {
       return W5500_HTTP_STATIC_SEND_ERROR;
     }
     offset += read_len;
@@ -350,36 +533,138 @@ static int http_send_static_index(void) {
   return W5500_HTTP_STATIC_OK;
 }
 
+static int http_consume_rx(uint16_t rx_rd, uint16_t rx_size) {
+  return s0_write_u16(W5500_S0_RX_RD, (uint16_t)(rx_rd + rx_size)) == W5500_OK &&
+         s0_command(W5500_S0_CR_RECV) == W5500_OK
+           ? 0
+           : 1;
+}
+
+static int http_send_json_error(uint16_t code, const char *error_code, const char *message) {
+  char body[192];
+  const size_t body_len = build_error_body(body, sizeof(body), error_code, message);
+  if (body_len >= sizeof(body)) {
+    return 1;
+  }
+  return http_send_response(code, "application/json", body, body_len);
+}
+
+static void http_record_request(uint32_t path_code, uint16_t code) {
+  g_w5500_http_request_count++;
+  g_w5500_http_last_path = path_code;
+  g_w5500_http_last_code = code;
+}
+
+static int http_handle_dbc_upload(const uint8_t *body_start, size_t content_length) {
+  DbcUploadReport report;
+
+  dbc_parse_upload_report(body_start, content_length, &report);
+  g_w5500_http_dbc_upload_result =
+    (uint32_t)stm32h750_tf_replace_file_locked("/dbc/upload.write.tmp",
+                                               "/dbc/upload.tmp",
+                                               body_start,
+                                               content_length);
+  g_w5500_http_dbc_upload_bytes = (uint32_t)report.bytes;
+  g_w5500_http_dbc_upload_lines = (uint32_t)report.lines;
+  g_w5500_http_dbc_upload_messages = (uint32_t)report.messages;
+  g_w5500_http_dbc_upload_signals = (uint32_t)report.signals;
+  g_w5500_http_dbc_upload_skipped = (uint32_t)report.skipped;
+  g_w5500_http_dbc_upload_errors = (uint32_t)report.errors;
+
+  if (g_w5500_http_dbc_upload_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
+    return http_send_json_error(500u, "save_failed", "dbc tmp save failed");
+  }
+
+  const size_t response_len = build_dbc_upload_body(g_http_response_body, sizeof(g_http_response_body), &report);
+  if (response_len >= sizeof(g_http_response_body)) {
+    return 1;
+  }
+  g_w5500_http_dbc_upload_count++;
+  http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+}
+
 static int http_handle_request(uint16_t rx_size) {
-  char request[160];
-  char body[384];
+  char *request = g_http_request_buffer;
+  char *body = g_http_response_body;
   uint16_t rx_rd = 0u;
   size_t read_len = rx_size;
-  if (read_len >= sizeof(request)) {
-    read_len = sizeof(request) - 1u;
+  if (read_len >= W5500_HTTP_REQUEST_BUFFER_SIZE) {
+    read_len = W5500_HTTP_REQUEST_BUFFER_SIZE - 1u;
   }
   if (s0_read_u16(W5500_S0_RX_RD, &rx_rd) != W5500_OK ||
-      socket_buffer_read(W5500_S0_RX_BLOCK, rx_rd, (uint8_t *)request, read_len) != W5500_OK ||
-      s0_write_u16(W5500_S0_RX_RD, (uint16_t)(rx_rd + rx_size)) != W5500_OK ||
-      s0_command(W5500_S0_CR_RECV) != W5500_OK) {
+      socket_buffer_read(W5500_S0_RX_BLOCK, rx_rd, (uint8_t *)request, read_len) != W5500_OK) {
     return 1;
   }
   request[read_len] = '\0';
   g_w5500_http_last_rx_size = rx_size;
 
+  const char *header_end = strstr(request, "\r\n\r\n");
+  if (request_path_is(request, "POST", "/api/dbc/upload")) {
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 400u);
+      return http_send_json_error(400u, "bad_request", "header too large");
+    }
+    const size_t body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) {
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    size_t content_length = 0u;
+    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 400u);
+      return http_send_json_error(400u, "bad_request", "missing content length");
+    }
+    if (content_length > W5500_HTTP_UPLOAD_BODY_MAX) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 413u);
+      return http_send_json_error(413u, "payload_too_large", "dbc upload too large");
+    }
+    if ((size_t)rx_size < body_offset + content_length) {
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    if (body_offset + content_length > read_len) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 413u);
+      return http_send_json_error(413u, "payload_too_large", "dbc request too large");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    const int upload_result = http_handle_dbc_upload((const uint8_t *)&request[body_offset], content_length);
+    return upload_result == 0 ? W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+  }
+
+  if (rx_size > read_len || http_consume_rx(rx_rd, rx_size) != 0) {
+    return W5500_HTTP_HANDLE_ERROR;
+  }
+
   uint16_t code = 404u;
   uint32_t path_code = 0u;
   size_t body_len = 0u;
   const char *content_type = "application/json";
-  if (request_path_is(request, "/api/status")) {
+  if (request_path_is(request, "GET", "/api/status")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_STATUS;
-    body_len = build_status_body(body, sizeof(body));
-  } else if (request_path_is(request, "/api/can/status")) {
+    body_len = build_status_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/can/status")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_STATUS;
-    body_len = build_can_status_body(body, sizeof(body));
-  } else if (request_path_is(request, "/") || request_path_is(request, "/index.html")) {
+    body_len = build_can_status_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {
       g_w5500_http_request_count++;
@@ -391,12 +676,12 @@ static int http_handle_request(uint16_t rx_size) {
       return 1;
     }
     code = 404u;
-    body_len = build_not_found_body(body, sizeof(body));
+    body_len = build_not_found_body(body, sizeof(g_http_response_body));
   } else {
-    body_len = build_not_found_body(body, sizeof(body));
+    body_len = build_not_found_body(body, sizeof(g_http_response_body));
   }
 
-  if (body_len >= sizeof(body)) {
+  if (body_len >= sizeof(g_http_response_body)) {
     return 1;
   }
   g_w5500_http_request_count++;
@@ -484,11 +769,17 @@ int w5500_http_status_poll(void) {
       g_w5500_http_error_count++;
       return 1;
     }
-    if (rx_size > 0u && http_handle_request(rx_size) != 0) {
-      g_w5500_http_status = 5u;
-      g_w5500_http_error_count++;
-      (void)http_close_socket();
-      return 1;
+    if (rx_size > 0u) {
+      const int request_result = http_handle_request(rx_size);
+      if (request_result == W5500_HTTP_HANDLE_WAIT) {
+        return 0;
+      }
+      if (request_result != W5500_HTTP_HANDLE_OK) {
+        g_w5500_http_status = 5u;
+        g_w5500_http_error_count++;
+        (void)http_close_socket();
+        return 1;
+      }
     }
     (void)s0_command(W5500_S0_CR_DISCON);
     (void)http_close_socket();

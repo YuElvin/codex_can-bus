@@ -12,3 +12,5 @@
 - L-010：W5500 HTTP 功能验证要同时看 `ping`、`curl -i` 响应、ARP MAC 和 ST-Link `g_w5500_http_*` 变量；如果暂停瞬间读数异常，应复位运行后用 HTTP 响应和再次 mdw 交叉确认。
 - L-011：阶段 9 的静态文件服务先用 FatFs mutex 和小文件闭环验证；当前 socket0 HTTP 是单连接最小实现，并行 curl 可能失败，不能把它当作并发 HTTP 服务。
 - L-012：静态文件从 TF 分块读取时，验证不要只看 `curl` 返回 200；还要用反汇编确认 `http_handle_request` 走文件大小读取、循环 `f_lseek/f_read` 和多次 `SEND` 路径，并用 ST-Link 读取 `g_w5500_http_static_file_size/g_w5500_http_static_bytes_sent`。
+- L-013：HTTP 上传接口要先处理 RX 半包边界；`Content-Length` 对应 body 未完整到达时不能推进 `S0_RX_RD`，否则会消费掉未完成请求并关闭连接。
+- L-014：把大 HTTP 请求/响应缓冲放入静态 BSS，避免 W5500 任务在上传路径叠加 FatFs `FIL` 栈帧后逼近 4KB 任务栈。

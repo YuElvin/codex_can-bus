@@ -21,6 +21,8 @@ volatile uint32_t g_tf_write_open_result;
 volatile uint32_t g_tf_write_result;
 volatile uint32_t g_tf_write_close_result;
 volatile uint32_t g_tf_write_len;
+volatile uint32_t g_tf_replace_unlink_result;
+volatile uint32_t g_tf_replace_rename_result;
 volatile uint32_t g_tf_read_open_result;
 volatile uint32_t g_tf_read_result;
 volatile uint32_t g_tf_read_close_result;
@@ -321,6 +323,51 @@ int stm32h750_tf_read_file_chunk_locked(const char *path,
   g_tf_read_len = read;
   *read_len = read;
   return g_tf_read_result == FR_OK && g_tf_read_close_result == FR_OK ? 0 : 1;
+}
+
+int stm32h750_tf_replace_file_locked(const char *tmp_path,
+                                     const char *final_path,
+                                     const uint8_t *data,
+                                     size_t len) {
+  FIL file;
+  UINT written = 0u;
+  char tmp_full_path[64];
+  char final_full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (tmp_path == NULL || final_path == NULL || data == NULL || len == 0u ||
+      build_fatfs_path(&ctx, tmp_path, tmp_full_path, sizeof(tmp_full_path)) != TF_CARD_OK ||
+      build_fatfs_path(&ctx, final_path, final_full_path, sizeof(final_full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+
+  g_tf_write_open_result = f_open(&file, tmp_full_path, FA_CREATE_ALWAYS | FA_WRITE);
+  if (g_tf_write_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_result = f_write(&file, data, (UINT)len, &written);
+  g_tf_write_close_result = f_close(&file);
+  g_tf_write_len = written;
+  if (g_tf_write_result != FR_OK || g_tf_write_close_result != FR_OK || written != len) {
+    (void)f_unlink(tmp_full_path);
+    tf_fs_unlock();
+    return 1;
+  }
+
+  g_tf_replace_unlink_result = f_unlink(final_full_path);
+  if (g_tf_replace_unlink_result != FR_OK && g_tf_replace_unlink_result != FR_NO_FILE) {
+    (void)f_unlink(tmp_full_path);
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_replace_rename_result = f_rename(tmp_full_path, final_full_path);
+  tf_fs_unlock();
+  return g_tf_replace_rename_result == FR_OK ? 0 : 1;
 }
 
 int stm32h750_tf_ensure_default_www(void) {

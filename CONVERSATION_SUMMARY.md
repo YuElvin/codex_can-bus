@@ -699,3 +699,108 @@
 
 - 本轮判断基于刚完成的实际验证：`git diff --check`、`./scripts/verify.sh`、ELF 符号与反汇编检查、OpenOCD/ST-Link 烧录、`ping/curl/arp`、ST-Link `mdw` 变量读取均已通过。
 - 提交前将再执行一次 `git diff --check` 和 `./scripts/verify.sh`，确保当前暂存前工作树仍可通过验证。
+
+## 2026-07-08 23:11:51 +08:00
+
+### 用户请求
+
+- 委托继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 当前已提交推送 `f23a985 Serve TF static files in chunks`；要求先按 `AGENTS.md` 读取治理文档和当前记录，再按下一步实现 DBC 上传接口。
+- 明确目标：先落盘到 `/dbc/*.tmp` 并返回解析报告，不一次性加入完整 Web UI；源码改动后必须 `./scripts/verify.sh`、反汇编检查、硬件交叉验证并更新本文件。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮只实现 `POST /api/dbc/upload` 最小闭环；上传体为单个 HTTP 请求内的 DBC 文本；不实现 Web UI、并发连接、通用上传、最终 DBC 配置启用、信号缓存接入或大文件分片上传。
+- 成功标准：HTTP 上传体保存到 TF `/dbc/upload.tmp`；写入路径使用 FatFs mutex，并采用 `/dbc/upload.write.tmp` 写入后 rename 到 `/dbc/upload.tmp`；接口返回轻量解析报告，统计 bytes/lines/messages/signals/skipped/errors/valid；原 `/`、`/api/status`、`/api/can/status` 不回归。
+- 验证方式：读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md` 和本文件；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-size/nm/objdump` 做关键路径反汇编；OpenOCD/ST-Link 烧录；主机 `route/ping/curl/arp`；OpenOCD `mdw` 读取上传和 FatFs 诊断变量。
+
+### 实际操作
+
+1. 确认当前路径实际为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500...origin/codex/W5500`，起始工作区干净，最近提交为 `f23a985 Serve TF static files in chunks`。
+2. 读取治理文档和当前上下文，确认阶段 9 下一步为 DBC 上传接口，当前 HTTP 仍是 socket0 单连接最小实现。
+3. 在 `include/platform/stm32h750_bringup.h` 与 `src/platform/stm32h750/tf_card_fatfs_stm32.c` 新增 `stm32h750_tf_replace_file_locked()`：
+   - 先构造 tmp/final FatFs 路径。
+   - 在 `tf_fs_lock()` 保护下 `f_open(FA_CREATE_ALWAYS|FA_WRITE)` 写 `/dbc/upload.write.tmp`。
+   - 写入和关闭成功后 `f_unlink("/dbc/upload.tmp")`，允许 `FR_NO_FILE`，再 `f_rename()` 为 `/dbc/upload.tmp`。
+   - 新增 `g_tf_replace_unlink_result/g_tf_replace_rename_result` 诊断变量。
+4. 在 `firmware/bringup/w5500_bringup.c` 新增 `POST /api/dbc/upload`：
+   - 请求缓冲上限 `1536` 字节，上传 body 上限 `1024` 字节。
+   - `Content-Length` 对应 body 未完整到达时返回内部等待状态，不推进 `S0_RX_RD`，等待下一轮轮询。
+   - 超过上限返回 413，缺少 content length 返回 400，保存失败返回 500。
+   - 轻量解析报告识别 `BO_` 消息行和 `SG_` 信号行，统计 skipped/errors；完整 DBC 数据库和信号缓存接入留到后续阶段。
+   - 新增 `g_w5500_http_dbc_upload_*` 诊断变量。
+5. 代码复查发现并修复两个真实问题：
+   - 初版上传分支在 body 未完整到达时会先消费 RX 再返回错误，已修正为未收全时不推进 RX 指针。
+   - 将 HTTP body 缓冲从数组改为静态指针后，`sizeof(body)` 变为 4，编译器提示 JSON 会截断；已改为 `sizeof(g_http_response_body)`。
+6. 为降低 W5500 任务栈风险，将 1536 字节请求缓冲、384 字节响应缓冲和 512 字节静态文件 chunk 缓冲移到静态 BSS。
+7. 同步更新 `03_Context.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录 DBC 上传最小接口已验证、当前限制、资源水位和上传半包/任务栈经验。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- 第一次 `./scripts/verify.sh` 在移动静态 chunk 缓冲后失败，原因是 `http_send_static_index()` 仍残留 `sizeof(chunk)`；已修复为 `sizeof(g_http_static_chunk)`。
+- 第二次 `./scripts/verify.sh` 通过但出现 JSON 截断警告，原因是 `body` 指针的 `sizeof(body)` 为 4；已修复。
+- 最终 `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `61248 B / 128 KB = 46.73%`，RAM_D1 `105008 B / 512 KB = 20.03%`。
+  - ELF 尺寸：`text=61052`、`data=188`、`bss=104820`、`dec=166060`。
+- ELF 符号确认存在：`stm32h750_tf_replace_file_locked`、`http_consume_rx`、`http_send_json_error`、`g_w5500_http_dbc_upload_*`、`g_tf_replace_unlink_result/g_tf_replace_rename_result`、`g_http_request_buffer/g_http_response_body/g_http_static_chunk`。
+- 反汇编结论：
+  - `stm32h750_tf_replace_file_locked` 包含 `tf_fs_lock`、`f_open`、`f_write`、`f_close`、`f_unlink`、`f_rename`、`tf_fs_unlock`。
+  - 上传处理被 `-Os` 内联进 `w5500_http_status_poll`；反汇编确认存在请求读取、`POST /api/dbc/upload` 判断、`\r\n\r\n` 查找、`Content-Length` 解析、1024 字节上限判断、body 未完整时不消费 RX 的等待路径、`BO_`/`SG_` 行扫描、调用 `stm32h750_tf_replace_file_locked`、以及 200/400/413/500 JSON 响应路径。
+  - `w5500_http_status_poll` 栈帧约 244 字节；大 HTTP 缓冲已在 BSS，不再压 W5500 任务栈。
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.250368 V`。
+- 主机网络验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.554-0.760 ms`。
+  - `arp -n 192.168.1.88` 显示 MAC `02:00:00:12:34:56`。
+  - `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - `curl -i -H 'Content-Type: text/plain' --data-binary <小 DBC 文本> http://192.168.1.88/api/dbc/upload` 返回 `HTTP/1.1 200 OK`，JSON 为 `path=/dbc/upload.tmp`、`bytes=164`、`lines=4`、`messages=1`、`signals=2`、`skipped=1`、`errors=0`、`valid=true`。
+  - `curl -i http://192.168.1.88/` 返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+  - `curl -i http://192.168.1.88/api/can/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `status=0`、`tx=38`、`rx=37`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。
+- ST-Link/OpenOCD 当前读数：
+  - `g_w5500_http_dbc_upload_result=0`。
+  - `g_tf_replace_rename_result=0`、`g_tf_replace_unlink_result=4`，其中 `4` 为 `FR_NO_FILE`，表示首次上传前目标 `/dbc/upload.tmp` 不存在，按代码允许。
+  - `g_tf_write_len=0xA4`、`g_tf_write_close_result=0`、`g_tf_write_result=0`、`g_tf_write_open_result=0`。
+  - 上传报告变量：`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA4`、`upload_count=1`。
+  - HTTP 最近请求变量在最后一次 `/api/can/status` 后为 `last_code=200`、`last_path=2`、`request_count=4`、`network_configured=1`。
+
+### 当前结论
+
+- DBC 上传最小接口已完成并上板验证：`POST /api/dbc/upload` 可保存到 TF `/dbc/upload.tmp`，并返回轻量解析报告。
+- W5500/HTTP 状态 API、TF 静态页、CAN2 状态 API、TF 写入和 rename 诊断均保持正常。
+- 当前仍不是完整 DBC 配置系统：未实现大文件分片上传、并发 HTTP、最终文件启用、完整 DBC 数据库加载、信号缓存接入或 Web UI。
+
+### 问题点
+
+- 当前上传 body 上限为 1024 字节，只适合最小验证；实际 DBC 文件通常更大，后续需要定义分片上传或文件传输策略。
+- 当前轻量解析报告只识别基础 `BO_`/`SG_` 行，不等同于已有 portable DBC parser 的完整数据库能力。
+- HTTP 仍是 socket0 单连接最小实现，验证时继续使用顺序 curl，不能按并发 Web 服务理解。
+
+## 2026-07-08 23:16:19 +08:00
+
+### 用户请求
+
+- 用户询问当前功能是否符合当前进度目标；如果符合，则提交推送，并新开一个对话继续按计划开发。
+
+### 判断依据
+
+- 当前阶段目标是阶段 9 的 DBC 上传最小闭环：先把 DBC 请求体落盘到 `/dbc/*.tmp` 并返回解析报告，不一次性加入完整 Web UI 或完整 DBC 配置生效流程。
+- 本轮已经通过构建、反汇编、烧录、`ping/curl/arp` 和 ST-Link 变量读数验证 `POST /api/dbc/upload`。
+- 原有 `/api/status`、`/api/can/status` 和 `/` 静态页均已顺序 curl 回归通过。
+
+### 当前结论
+
+- 当前功能符合本阶段小步目标，可以提交推送。
+- 本轮提交范围应包含 DBC 上传最小接口源码、FatFs tmp+rename 保存函数、治理/架构文档和本对话记录。
+
+### 提交前验证计划
+
+- 提交前重新执行 `git diff --check` 和 `./scripts/verify.sh`。
+- 若验证通过，提交并推送到 `origin/codex/W5500`。
+
+### 提交前验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 固件构建为 `ninja: no work to do`，沿用本轮已完成的编译、反汇编、烧录和 HTTP/ST-Link 验证结果。
