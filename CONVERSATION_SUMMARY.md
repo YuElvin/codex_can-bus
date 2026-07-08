@@ -608,3 +608,94 @@
 
 - 本轮没有修改固件源码，因此没有新的反汇编需求；当前固件 ELF 和关键路径反汇编已在上一轮及本轮 `./scripts/verify.sh` 基础上复核过。
 - 准备提交范围只包含 `03_Context.md` 和 `CONVERSATION_SUMMARY.md`。
+
+## 2026-07-08 22:52:02 +08:00
+
+### 用户请求
+
+- 委托新对话继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 要求先按 `AGENTS.md` 读取治理文档和当前对话记录，再按计划继续开发；当前下一步优先扩展 HTTP 静态文件服务的分块读取或明确文件大小上限。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮只做阶段 9 的小步推进，把 `/` 和 `/index.html` 的静态页读取从 384 字节 body 缓冲改为文件大小 + 循环分块读取发送；不实现并发连接、目录映射、HTTP Range、上传或 DBC 解析。
+- 成功标准：固件源码编译通过；`http_handle_request` 静态页分支不再一次性读入 384 字节 body，而是读取文件大小、发送 `Content-Length`、按 512 字节分块读 TF 并发送；板上 `/`、`/index.html`、`/api/status`、`/api/can/status` 保持可访问。
+- 验证方式：按治理文件读取当前状态；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-size/nm/objdump` 做关键路径反汇编；OpenOCD/ST-Link 烧录；主机 `route/ping/curl/arp`；OpenOCD `mdw` 读取 W5500/TF/CAN2 诊断变量。
+
+### 实际操作
+
+1. 读取并确认 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md` 和 `CONVERSATION_SUMMARY.md`。
+2. 确认当前路径 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`；当前分支 `codex/W5500`，HEAD 为 `338d67e Record latest CAN analyzer validation`。
+3. 在 `include/platform/stm32h750_bringup.h` 和 `src/platform/stm32h750/tf_card_fatfs_stm32.c` 新增：
+   - `stm32h750_tf_file_size_locked()`：在 FatFs mutex 下打开文件并读取 `f_size()`。
+   - `stm32h750_tf_read_file_chunk_locked()`：在 FatFs mutex 下 `f_lseek()` 到 offset 后 `f_read()` 指定长度。
+   - 新诊断变量 `g_tf_read_file_size`、`g_tf_read_offset`。
+4. 在 `firmware/bringup/w5500_bringup.c` 中拆分 HTTP 发送：
+   - 新增 `http_send_bytes()`，等待 TX 空间后写 W5500 TX buffer 并执行 `SEND`，支持多次发送。
+   - 新增 `http_send_header()`，单独发送 header。
+   - `/` 和 `/index.html` 分支改为先读 `/www/index.html` 文件大小，再按 512 字节循环调用 TF 分块读取和 `http_send_bytes()`。
+   - 新增 ST-Link 诊断变量 `g_w5500_http_static_file_size`、`g_w5500_http_static_bytes_sent`。
+5. 代码复查发现一个真实错误：如果静态页 header 已经发出后分块读取或发送失败，不能再回退发送 404 JSON，否则会在同一连接混入两个响应。已修正为：文件不存在或空文件在发送 header 前回退 404；header 已发出后的分块错误直接返回失败，由外层关闭 socket 并计入 HTTP 错误。
+6. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md` 和 `05_Lessons.md`：移除 384 字节静态读取限制的当前风险表述，保留单 socket、无目录映射、无上传等限制，并记录分块验证经验。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `56000 B / 128 KB = 42.72%`，RAM_D1 `102536 B / 512 KB = 19.56%`。
+- ELF 尺寸：`text=55804`、`data=184`、`bss=102352`、`dec=158340`。
+- ELF 符号确认存在：`stm32h750_tf_file_size_locked`、`stm32h750_tf_read_file_chunk_locked`、`http_send_bytes`、`http_send_header`、`http_handle_request`、`g_w5500_http_static_file_size`、`g_w5500_http_static_bytes_sent`、`g_tf_read_file_size`、`g_tf_read_offset`。
+- 反汇编结论：
+  - `stm32h750_tf_file_size_locked` 包含路径构建、`tf_fs_lock`、`f_open`、`f_size`、`f_close`、`tf_fs_unlock`。
+  - `stm32h750_tf_read_file_chunk_locked` 包含路径构建、`tf_fs_lock`、`f_open`、`f_lseek`、`f_read`、`f_close`、`tf_fs_unlock`。
+  - `http_send_bytes` 包含等待 `S0_TX_FSR`、写 TX buffer、更新 `S0_TX_WR`、执行 `SEND`、等待 `SENDOK/TIMEOUT`。
+  - `http_handle_request` 静态页分支调用 `stm32h750_tf_file_size_locked`，发送 200 header 后以 512 字节为上限循环调用 `stm32h750_tf_read_file_chunk_locked` 和 `http_send_bytes`；发送 header 之后的分块错误直接返回失败，不再尝试追加 404 响应。
+- OpenOCD/ST-Link 烧录最终 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.251976 V`。
+- 主机网络验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.524-0.754 ms`。
+  - `curl -i http://192.168.1.88/` 返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+  - `curl -i http://192.168.1.88/index.html` 返回同一 171 字节默认 HTML。
+  - `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - `curl -i http://192.168.1.88/api/can/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `status=0`、`tx=22`、`rx=21`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。
+  - ARP 显示 `192.168.1.88` MAC 为 `02:00:00:12:34:56`。
+- ST-Link/OpenOCD 当前读数：
+  - `g_tf_www_index_status=0`，`g_tf_www_index_len=0xAB`，`g_tf_fs_lock_result=0`，`g_tf_fs_mutex_ready=1`。
+  - `g_tf_read_file_size=0xAB`，`g_tf_read_offset=0`，`g_tf_read_len=0xAB`，`g_tf_read_result=0`，`g_tf_read_open_result=0`，`g_tf_read_close_result=0`。
+  - `g_w5500_http_static_bytes_sent=0xAB`，`g_w5500_http_static_file_size=0xAB`，`g_w5500_http_static_count=2`，`g_w5500_http_error_count=0`，`g_w5500_http_last_code=200`，`g_w5500_http_request_count=4`，`g_w5500_network_configured=1`，`g_w5500_link_up=1`，`g_w5500_version=4`，`g_w5500_phycfgr=0xBF`。
+  - CAN2 当前读数按符号解释为 `g_can2_send_result=0`、`g_can2_rec=0`、`g_can2_tec=0`、`g_can2_bus_off=0`、`g_can2_error_count=0`、`g_can2_rx_count=0x1D`、`g_can2_tx_count=0x1E`。
+
+### 当前结论
+
+- 阶段 9 静态文件服务已完成本轮小步：HTTP 静态页不再受 384 字节 body 缓冲限制，固件逻辑已改为按文件大小循环 512 字节分块读取并多次发送。
+- 当前板上 TF 卡仍是 171 字节默认页，因此运行时只触发单个 512 字节以内分块；大文件跨多个分块的路径已通过反汇编确认，尚未用实际大于 512 字节的 TF 文件做板上 curl 验证。
+- W5500/HTTP/API/TF/QSPI/CAN2 当前烧录后均保持正常。
+
+### 问题点
+
+- HTTP 仍是 socket0 单连接最小实现，不支持并发连接、目录映射、Content-Type 自动映射、HTTP Range、上传或 DBC 接口。
+- 下一步应实现 DBC 上传落盘到 `/dbc/*.tmp` 和解析报告，不要一次性扩大到完整 Web UI。
+- 若要证明跨多个静态分块的实际板上路径，需要在 TF 卡放入大于 512 字节的 `/www/index.html` 或新增可控测试文件后再用 curl 与 ST-Link 复核。
+
+## 2026-07-08 22:59:51 +08:00
+
+### 用户请求
+
+- 用户询问当前功能是否符合目标；如果符合当前进度目标就提交推送，然后新开一个对话继续按计划开发。
+
+### 判断依据
+
+- 当前阶段目标是阶段 9 的静态文件服务小步：解除 `/` 和 `/index.html` 读取受 384 字节 body 缓冲限制的问题，并保持 W5500 HTTP/API、TF、CAN2、W25Q128、FreeRTOS 基线不回归。
+- DBC 上传落盘、解析报告、目录映射、并发 HTTP、Content-Type 自动映射和上传接口均不属于本轮小步验收范围，仍是下一步计划。
+
+### 当前结论
+
+- 当前功能符合本阶段进度目标，可以提交推送。
+- 本轮提交范围应包含阶段 9 静态文件分块读取源码和同步更新的项目状态文档。
+
+### 提交前验证沿用说明
+
+- 本轮判断基于刚完成的实际验证：`git diff --check`、`./scripts/verify.sh`、ELF 符号与反汇编检查、OpenOCD/ST-Link 烧录、`ping/curl/arp`、ST-Link `mdw` 变量读取均已通过。
+- 提交前将再执行一次 `git diff --check` 和 `./scripts/verify.sh`，确保当前暂存前工作树仍可通过验证。

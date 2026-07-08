@@ -25,6 +25,8 @@ volatile uint32_t g_tf_read_open_result;
 volatile uint32_t g_tf_read_result;
 volatile uint32_t g_tf_read_close_result;
 volatile uint32_t g_tf_read_len;
+volatile uint32_t g_tf_read_offset;
+volatile uint32_t g_tf_read_file_size;
 volatile uint32_t g_tf_sd_init_count;
 volatile uint32_t g_tf_sd_last_hal_status;
 volatile uint32_t g_tf_sd_last_error;
@@ -259,6 +261,66 @@ int stm32h750_tf_read_file_locked(const char *path, uint8_t *data, size_t len, s
     .logical_drive = SDPath,
   };
   return fatfs_read(&ctx, path, data, len, read_len) == TF_CARD_OK ? 0 : 1;
+}
+
+int stm32h750_tf_file_size_locked(const char *path, size_t *file_size) {
+  FIL file;
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (file_size == NULL ||
+      build_fatfs_path(&ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+  g_tf_read_open_result = f_open(&file, full_path, FA_READ);
+  if (g_tf_read_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  *file_size = (size_t)f_size(&file);
+  g_tf_read_file_size = (uint32_t)*file_size;
+  g_tf_read_close_result = f_close(&file);
+  tf_fs_unlock();
+  return g_tf_read_close_result == FR_OK ? 0 : 1;
+}
+
+int stm32h750_tf_read_file_chunk_locked(const char *path,
+                                        size_t offset,
+                                        uint8_t *data,
+                                        size_t len,
+                                        size_t *read_len) {
+  FIL file;
+  UINT read = 0u;
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (data == NULL || read_len == NULL ||
+      build_fatfs_path(&ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+  g_tf_read_offset = (uint32_t)offset;
+  g_tf_read_open_result = f_open(&file, full_path, FA_READ);
+  if (g_tf_read_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_read_result = f_lseek(&file, (FSIZE_t)offset);
+  if (g_tf_read_result == FR_OK) {
+    g_tf_read_result = f_read(&file, data, (UINT)len, &read);
+  }
+  g_tf_read_close_result = f_close(&file);
+  tf_fs_unlock();
+  g_tf_read_len = read;
+  *read_len = read;
+  return g_tf_read_result == FR_OK && g_tf_read_close_result == FR_OK ? 0 : 1;
 }
 
 int stm32h750_tf_ensure_default_www(void) {

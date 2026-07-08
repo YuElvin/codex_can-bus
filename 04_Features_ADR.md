@@ -6,11 +6,11 @@
 | --- | --- | --- | --- |
 | F-001 | W5500 SPI 网络 bring-up | [客观已验证] | 作为当前网络主路径，替代 LAN8720/RMII |
 | F-002 | FDCAN2 外部 CAN 收发 | [客观已验证] | `PB5/PB6` + MCP2562FD + USBCAN-2E-U 是当前外部 CAN 主通道 |
-| F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取 |
+| F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 当前验证通过；正式使用前处理测试扇区擦写问题 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务和状态打印任务已上板复核；完整队列/mutex 架构待实现 |
-| F-007 | W5500 HTTP/API | [部分客观已验证] | 最小状态接口 `/api/status` 和 `/api/can/status` 已烧录验证；静态文件和上传接口待实现 |
+| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/`、`/index.html` 已烧录验证；静态页已改为按文件大小循环发送；上传接口待实现 |
 | F-008 | DBC 解析和信号缓存 | [待实现] | portable core 已有测试基础，后续接入固件任务 |
 | F-009 | 日志和规则引擎 | [待实现] | 依赖 TF 稳定写入、信号缓存和任务拆分 |
 

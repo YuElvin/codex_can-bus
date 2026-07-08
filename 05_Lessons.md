@@ -11,3 +11,4 @@
 - L-009：`env.sh` 被脚本 source 时可能因 `$0` 指向外层脚本而算错项目根，还会覆盖同名 `ROOT_DIR`；自动验证脚本应使用独立变量保存项目根并重新设置本地 xPack PATH。
 - L-010：W5500 HTTP 功能验证要同时看 `ping`、`curl -i` 响应、ARP MAC 和 ST-Link `g_w5500_http_*` 变量；如果暂停瞬间读数异常，应复位运行后用 HTTP 响应和再次 mdw 交叉确认。
 - L-011：阶段 9 的静态文件服务先用 FatFs mutex 和小文件闭环验证；当前 socket0 HTTP 是单连接最小实现，并行 curl 可能失败，不能把它当作并发 HTTP 服务。
+- L-012：静态文件从 TF 分块读取时，验证不要只看 `curl` 返回 200；还要用反汇编确认 `http_handle_request` 走文件大小读取、循环 `f_lseek/f_read` 和多次 `SEND` 路径，并用 ST-Link 读取 `g_w5500_http_static_file_size/g_w5500_http_static_bytes_sent`。

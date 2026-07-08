@@ -32,6 +32,12 @@ void stm32h750_fdcan_bind(CanPort *port, Stm32FdcanContext *ctx, FDCAN_HandleTyp
 void stm32h750_tf_card_bind(TfCardPort *port, Stm32TfCardContext *ctx, FATFS *fs, const char *logical_drive);
 int stm32h750_fs_mutex_init(void);
 int stm32h750_tf_read_file_locked(const char *path, uint8_t *data, size_t len, size_t *read_len);
+int stm32h750_tf_file_size_locked(const char *path, size_t *file_size);
+int stm32h750_tf_read_file_chunk_locked(const char *path,
+                                        size_t offset,
+                                        uint8_t *data,
+                                        size_t len,
+                                        size_t *read_len);
 int stm32h750_tf_ensure_default_www(void);
 void stm32h750_w5500_bind(W5500Port *port,
                           Stm32W5500Context *ctx,

@@ -23,6 +23,8 @@ volatile uint32_t g_w5500_http_last_tx_size = 0u;
 volatile uint32_t g_w5500_http_error_count = 0u;
 volatile uint32_t g_w5500_http_static_count = 0u;
 volatile uint32_t g_w5500_http_static_read_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_static_file_size = 0u;
+volatile uint32_t g_w5500_http_static_bytes_sent = 0u;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -76,6 +78,10 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_STATUS 1u
 #define W5500_HTTP_PATH_CAN_STATUS 2u
 #define W5500_HTTP_PATH_INDEX 3u
+#define W5500_HTTP_STATIC_CHUNK_SIZE 512u
+#define W5500_HTTP_STATIC_OK 0
+#define W5500_HTTP_STATIC_SEND_ERROR 1
+#define W5500_HTTP_STATIC_NOT_FOUND 2
 
 static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
@@ -228,32 +234,28 @@ static size_t build_not_found_body(char *body, size_t len) {
   return (size_t)snprintf(body, len, "{\"ok\":false,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}");
 }
 
-static int http_send_response(uint16_t code, const char *content_type, const char *body, size_t body_len) {
-  char response[768];
-  const char *status_text = code == 200u ? "OK" : "Not Found";
-  const int header_len = snprintf(response,
-                                  sizeof(response),
-                                  "HTTP/1.1 %u %s\r\n"
-                                  "Content-Type: %s\r\n"
-                                  "Content-Length: %lu\r\n"
-                                  "Connection: close\r\n"
-                                  "\r\n",
-                                  (unsigned int)code,
-                                  status_text,
-                                  content_type,
-                                  (unsigned long)body_len);
-  if (header_len <= 0 || (size_t)header_len + body_len > sizeof(response)) {
-    return 1;
-  }
-  memcpy(&response[header_len], body, body_len);
-  const size_t response_len = (size_t)header_len + body_len;
-
+static int http_send_bytes(const uint8_t *data, size_t len) {
   uint16_t tx_free = 0u;
   uint16_t tx_wr = 0u;
-  if (s0_read_u16(W5500_S0_TX_FSR, &tx_free) != W5500_OK || tx_free < response_len ||
+  if (data == NULL || len == 0u || len > W5500_SOCKET_BUFFER_SIZE) {
+    return 1;
+  }
+
+  for (uint32_t i = 0u; i < 1000u; ++i) {
+    if (s0_read_u16(W5500_S0_TX_FSR, &tx_free) != W5500_OK) {
+      return 1;
+    }
+    if (tx_free >= len) {
+      break;
+    }
+    if ((i % 100u) == 0u) {
+      g_w5500_port.ops->delay_ms(g_w5500_port.ctx, 1u);
+    }
+  }
+  if (tx_free < len ||
       s0_read_u16(W5500_S0_TX_WR, &tx_wr) != W5500_OK ||
-      socket_buffer_write(W5500_S0_TX_BLOCK, tx_wr, (const uint8_t *)response, response_len) != W5500_OK ||
-      s0_write_u16(W5500_S0_TX_WR, (uint16_t)(tx_wr + response_len)) != W5500_OK ||
+      socket_buffer_write(W5500_S0_TX_BLOCK, tx_wr, data, len) != W5500_OK ||
+      s0_write_u16(W5500_S0_TX_WR, (uint16_t)(tx_wr + len)) != W5500_OK ||
       s0_command(W5500_S0_CR_SEND) != W5500_OK) {
     return 1;
   }
@@ -265,7 +267,7 @@ static int http_send_response(uint16_t code, const char *content_type, const cha
     }
     if ((ir & W5500_S0_IR_SENDOK) != 0u) {
       (void)s0_write_u8(W5500_S0_IR, W5500_S0_IR_SENDOK);
-      g_w5500_http_last_tx_size = (uint32_t)response_len;
+      g_w5500_http_last_tx_size += (uint32_t)len;
       return 0;
     }
     if ((ir & W5500_S0_IR_TIMEOUT) != 0u) {
@@ -277,6 +279,75 @@ static int http_send_response(uint16_t code, const char *content_type, const cha
     }
   }
   return 1;
+}
+
+static int http_send_header(uint16_t code, const char *content_type, size_t body_len) {
+  char header[192];
+  const char *status_text = code == 200u ? "OK" : "Not Found";
+  const int header_len = snprintf(header,
+                                  sizeof(header),
+                                  "HTTP/1.1 %u %s\r\n"
+                                  "Content-Type: %s\r\n"
+                                  "Content-Length: %lu\r\n"
+                                  "Connection: close\r\n"
+                                  "\r\n",
+                                  (unsigned int)code,
+                                  status_text,
+                                  content_type,
+                                  (unsigned long)body_len);
+  if (header_len <= 0 || (size_t)header_len >= sizeof(header)) {
+    return 1;
+  }
+  return http_send_bytes((const uint8_t *)header, (size_t)header_len);
+}
+
+static int http_send_response(uint16_t code, const char *content_type, const char *body, size_t body_len) {
+  g_w5500_http_last_tx_size = 0u;
+  if (http_send_header(code, content_type, body_len) != 0) {
+    return 1;
+  }
+  if (body_len == 0u) {
+    return 0;
+  }
+  return http_send_bytes((const uint8_t *)body, body_len);
+}
+
+static int http_send_static_index(void) {
+  uint8_t chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
+  size_t file_size = 0u;
+  size_t offset = 0u;
+
+  g_w5500_http_static_bytes_sent = 0u;
+  g_w5500_http_static_read_result =
+    (uint32_t)stm32h750_tf_file_size_locked("/www/index.html", &file_size);
+  if (g_w5500_http_static_read_result != 0u || file_size == 0u) {
+    return W5500_HTTP_STATIC_NOT_FOUND;
+  }
+  g_w5500_http_static_file_size = (uint32_t)file_size;
+  g_w5500_http_last_tx_size = 0u;
+  if (http_send_header(200u, "text/html; charset=utf-8", file_size) != 0) {
+    return W5500_HTTP_STATIC_SEND_ERROR;
+  }
+
+  while (offset < file_size) {
+    size_t chunk_len = file_size - offset;
+    size_t read_len = 0u;
+    if (chunk_len > sizeof(chunk)) {
+      chunk_len = sizeof(chunk);
+    }
+    g_w5500_http_static_read_result =
+      (uint32_t)stm32h750_tf_read_file_chunk_locked("/www/index.html", offset, chunk, chunk_len, &read_len);
+    if (g_w5500_http_static_read_result != 0u || read_len == 0u || read_len > chunk_len) {
+      return W5500_HTTP_STATIC_SEND_ERROR;
+    }
+    if (http_send_bytes(chunk, read_len) != 0) {
+      return W5500_HTTP_STATIC_SEND_ERROR;
+    }
+    offset += read_len;
+    g_w5500_http_static_bytes_sent = (uint32_t)offset;
+  }
+  g_w5500_http_static_count++;
+  return W5500_HTTP_STATIC_OK;
 }
 
 static int http_handle_request(uint16_t rx_size) {
@@ -309,18 +380,18 @@ static int http_handle_request(uint16_t rx_size) {
     path_code = W5500_HTTP_PATH_CAN_STATUS;
     body_len = build_can_status_body(body, sizeof(body));
   } else if (request_path_is(request, "/") || request_path_is(request, "/index.html")) {
-    size_t file_len = 0u;
-    g_w5500_http_static_read_result =
-      (uint32_t)stm32h750_tf_read_file_locked("/www/index.html", (uint8_t *)body, sizeof(body), &file_len);
-    if (g_w5500_http_static_read_result == 0u && file_len > 0u && file_len < sizeof(body)) {
-      code = 200u;
-      path_code = W5500_HTTP_PATH_INDEX;
-      content_type = "text/html; charset=utf-8";
-      body_len = file_len;
-      g_w5500_http_static_count++;
-    } else {
-      body_len = build_not_found_body(body, sizeof(body));
+    const int static_result = http_send_static_index();
+    if (static_result == W5500_HTTP_STATIC_OK) {
+      g_w5500_http_request_count++;
+      g_w5500_http_last_path = W5500_HTTP_PATH_INDEX;
+      g_w5500_http_last_code = 200u;
+      return 0;
     }
+    if (static_result == W5500_HTTP_STATIC_SEND_ERROR) {
+      return 1;
+    }
+    code = 404u;
+    body_len = build_not_found_body(body, sizeof(body));
   } else {
     body_len = build_not_found_body(body, sizeof(body));
   }
