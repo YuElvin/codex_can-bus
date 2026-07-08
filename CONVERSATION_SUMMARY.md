@@ -804,3 +804,9 @@
 
 - `git diff --check` 通过。
 - `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 固件构建为 `ninja: no work to do`，沿用本轮已完成的编译、反汇编、烧录和 HTTP/ST-Link 验证结果。
+
+### 提交推送结果
+
+- 已提交 `eeb7029 Add minimal DBC upload API`，提交范围包含 DBC 上传最小接口源码、FatFs tmp+rename 保存函数、治理/架构文档和对话记录。
+- 已推送到 `origin/codex/W5500`，远端从 `f23a985` 更新到 `eeb7029`。
+- 提交后为记录本提交/推送结果，本文件将追加一次记录型文档更新；该记录不修改固件源码，因此不需要重新编译和反汇编。
