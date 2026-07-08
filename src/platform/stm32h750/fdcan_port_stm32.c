@@ -1,4 +1,4 @@
-#if defined(CAN_BUS_USE_STM32_HAL)
+#if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "platform/stm32h750_bringup.h"
 

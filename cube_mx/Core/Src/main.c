@@ -28,6 +28,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+
+#include "ethernetif.h"
+#include "platform/stm32h750_bringup.h"
 
 /* USER CODE END Includes */
 
@@ -49,17 +54,108 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+volatile int g_tf_card_bringup_status = -1;
+volatile int g_lan8720_bringup_status = -1;
+static uint32_t g_status_print_tick;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static void bringup_print_status(const char *phase);
+static void bringup_uart_write(const char *text);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+extern struct netif gnetif;
+extern volatile uint32_t g_eth_rx_packets;
+extern volatile uint32_t g_eth_rx_bytes;
+extern volatile uint32_t g_eth_rx_alloc_errors;
+extern volatile uint32_t g_eth_tx_packets;
+extern volatile uint32_t g_eth_tx_errors;
+extern volatile uint32_t g_eth_link_starts;
+extern volatile uint32_t g_eth_dmadsr;
+extern volatile uint32_t g_eth_dmacsr;
+extern volatile uint32_t g_eth_phy_bsr;
+extern volatile uint32_t g_eth_phy_physts;
+extern volatile uint32_t g_eth_phy_addr;
+extern volatile uint32_t g_eth_hal_init_status;
+extern volatile uint32_t g_eth_hal_error_code;
+extern volatile uint32_t g_eth_syscfg_pmcr;
+extern volatile uint32_t g_eth_macmdioar;
+extern volatile uint32_t g_eth_hal_phy_found_addr;
+extern volatile uint32_t g_eth_hal_addr0_id;
+extern volatile uint32_t g_eth_hal_addr1_id;
+extern volatile uint32_t g_eth_bb_phy_found_addr;
+extern volatile uint32_t g_eth_bb_addr0_id;
+extern volatile uint32_t g_eth_bb_addr1_id;
+extern volatile uint32_t g_eth_bb_addr0_ta;
+extern volatile uint32_t g_eth_bb_addr1_ta;
+extern volatile uint32_t g_tf_sd_last_hal_status;
+extern volatile uint32_t g_tf_sd_last_error;
+extern volatile uint32_t g_tf_sd_last_sta;
+extern volatile uint32_t g_tf_sd_last_dcount;
+
+static void bringup_uart_write(const char *text)
+{
+  if (text == NULL) {
+    return;
+  }
+
+  (void)HAL_UART_Transmit(&huart2, (uint8_t *)text, (uint16_t)strlen(text), 1000u);
+}
+
+static void bringup_print_status(const char *phase)
+{
+  char line[640];
+  const uint32_t ip = gnetif.ip_addr.addr;
+  const unsigned int ip0 = ip & 0xffu;
+  const unsigned int ip1 = (ip >> 8u) & 0xffu;
+  const unsigned int ip2 = (ip >> 16u) & 0xffu;
+  const unsigned int ip3 = (ip >> 24u) & 0xffu;
+
+  (void)snprintf(line,
+                 sizeof(line),
+                 "[bringup] %s tf=%d lan=%d link=%u ip=%u.%u.%u.%u phy=%lu rx=%lu tx=%lu txe=%lu rxa=%lu ls=%lu dsr=%08lx csr=%08lx bsr=%04lx sts=%04lx hst=%lu her=%08lx pm=%08lx ma=%08lx hpa=%lu h0=%08lx h1=%08lx bpa=%lu b0=%08lx b1=%08lx bt0=%lu bt1=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 phase,
+                 g_tf_card_bringup_status,
+                 g_lan8720_bringup_status,
+                 netif_is_link_up(&gnetif) ? 1u : 0u,
+                 ip0,
+                 ip1,
+                 ip2,
+                 ip3,
+                 (unsigned long)g_eth_phy_addr,
+                 (unsigned long)g_eth_rx_packets,
+                 (unsigned long)g_eth_tx_packets,
+                 (unsigned long)g_eth_tx_errors,
+                 (unsigned long)g_eth_rx_alloc_errors,
+                 (unsigned long)g_eth_link_starts,
+                 (unsigned long)g_eth_dmadsr,
+                 (unsigned long)g_eth_dmacsr,
+                 (unsigned long)g_eth_phy_bsr,
+                 (unsigned long)g_eth_phy_physts,
+                 (unsigned long)g_eth_hal_init_status,
+                 (unsigned long)g_eth_hal_error_code,
+                 (unsigned long)g_eth_syscfg_pmcr,
+                 (unsigned long)g_eth_macmdioar,
+                 (unsigned long)g_eth_hal_phy_found_addr,
+                 (unsigned long)g_eth_hal_addr0_id,
+                 (unsigned long)g_eth_hal_addr1_id,
+                 (unsigned long)g_eth_bb_phy_found_addr,
+                 (unsigned long)g_eth_bb_addr0_id,
+                 (unsigned long)g_eth_bb_addr1_id,
+                 (unsigned long)g_eth_bb_addr0_ta,
+                 (unsigned long)g_eth_bb_addr1_ta,
+                 (unsigned long)g_tf_sd_last_hal_status,
+                 (unsigned long)g_tf_sd_last_error,
+                 (unsigned long)g_tf_sd_last_sta,
+                 (unsigned long)g_tf_sd_last_dcount);
+  bringup_uart_write(line);
+}
 
 /* USER CODE END 0 */
 
@@ -96,10 +192,15 @@ int main(void)
   MX_FDCAN2_Init();
   MX_QUADSPI_Init();
   MX_USART2_UART_Init();
-  MX_LWIP_Init();
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  bringup_uart_write("\r\n[bringup] boot stm32h750 usart2=115200 sd_detect=skip phy=scan\r\n");
+  g_tf_card_bringup_status = tf_card_bringup_run();
+  MX_LWIP_Init();
+  g_lan8720_bringup_status = lan8720_bringup_run();
+  ethernetif_update_bringup_diag();
+  bringup_print_status("init");
 
   /* USER CODE END 2 */
 
@@ -109,8 +210,13 @@ int main(void)
   {
     /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
+  /* USER CODE BEGIN 3 */
     MX_LWIP_Process();
+    if (HAL_GetTick() - g_status_print_tick >= 1000u) {
+      g_status_print_tick = HAL_GetTick();
+      ethernetif_update_bringup_diag();
+      bringup_print_status("run");
+    }
   }
   /* USER CODE END 3 */
 }

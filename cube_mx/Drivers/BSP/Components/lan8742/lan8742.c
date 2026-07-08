@@ -37,6 +37,7 @@
 /** @defgroup LAN8742_Private_Defines LAN8742 Private Defines
   * @{
   */
+#define LAN8742_FIRST_DEV_ADDR ((uint32_t)0U)
 #define LAN8742_MAX_DEV_ADDR   ((uint32_t)31U)
 /**
   * @}
@@ -49,6 +50,11 @@
 /** @defgroup LAN8742_Private_Functions LAN8742 Private Functions
   * @{
   */
+
+static int32_t LAN8742_IsValidPhyId(uint32_t id1, uint32_t id2)
+{
+  return id1 != 0U && id1 != 0xFFFFU && id2 != 0U && id2 != 0xFFFFU;
+}
 
 /**
   * @brief  Register IO functions to component object
@@ -82,7 +88,7 @@ int32_t  LAN8742_RegisterBusIO(lan8742_Object_t *pObj, lan8742_IOCtx_t *ioctx)
   */
  int32_t LAN8742_Init(lan8742_Object_t *pObj)
  {
-   uint32_t regvalue = 0, addr = 0;
+   uint32_t regvalue = 0, id1 = 0, id2 = 0, addr = LAN8742_FIRST_DEV_ADDR;
    int32_t status = LAN8742_STATUS_OK;
 
    if(pObj->Is_Initialized == 0)
@@ -96,9 +102,26 @@ int32_t  LAN8742_RegisterBusIO(lan8742_Object_t *pObj, lan8742_IOCtx_t *ioctx)
      /* for later check */
      pObj->DevAddr = LAN8742_MAX_DEV_ADDR + 1;
 
-     /* Get the device address from special mode register */
-     for(addr = 0; addr <= LAN8742_MAX_DEV_ADDR; addr ++)
+     /* Get the device address from PHY ID and special mode register */
+     for(addr = LAN8742_FIRST_DEV_ADDR; addr <= LAN8742_MAX_DEV_ADDR; addr ++)
      {
+       if(pObj->IO.ReadReg(addr, LAN8742_PHYI1R, &id1) < 0)
+       {
+         status = LAN8742_STATUS_READ_ERROR;
+         continue;
+       }
+
+       if(pObj->IO.ReadReg(addr, LAN8742_PHYI2R, &id2) < 0)
+       {
+         status = LAN8742_STATUS_READ_ERROR;
+         continue;
+       }
+
+       if(LAN8742_IsValidPhyId(id1, id2) == 0)
+       {
+         continue;
+       }
+
        if(pObj->IO.ReadReg(addr, LAN8742_SMR, &regvalue) < 0)
        {
          status = LAN8742_STATUS_READ_ERROR;
@@ -259,6 +282,11 @@ int32_t LAN8742_StartAutoNego(lan8742_Object_t *pObj)
 int32_t LAN8742_GetLinkState(lan8742_Object_t *pObj)
 {
   uint32_t readval = 0;
+
+  if(pObj->DevAddr > LAN8742_MAX_DEV_ADDR)
+  {
+    return LAN8742_STATUS_ADDRESS_ERROR;
+  }
 
   /* Read Status register  */
   if(pObj->IO.ReadReg(pObj->DevAddr, LAN8742_BSR, &readval) < 0)

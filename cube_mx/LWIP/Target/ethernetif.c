@@ -28,7 +28,7 @@
 #include "netif/etharp.h"
 #include "lwip/ethip6.h"
 #include "ethernetif.h"
-#include "lan8742.h"
+#include "dp83848.h"
 #include <string.h>
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
@@ -48,6 +48,8 @@
 /* ETH_RX_BUFFER_SIZE parameter is defined in lwipopts.h */
 
 /* USER CODE BEGIN 1 */
+#define ETH_PHY_SCAN_NONE_ADDR 32u
+#define ETH_MDIO_GPIO_DELAY_CYCLES 80u
 
 /* USER CODE END 1 */
 
@@ -124,6 +126,39 @@ __attribute__((section(".Rx_PoolSection"))) extern u8_t memp_memory_RX_POOL_base
 #endif
 
 /* USER CODE BEGIN 2 */
+volatile uint32_t g_eth_rx_packets;
+volatile uint32_t g_eth_rx_bytes;
+volatile uint32_t g_eth_rx_alloc_errors;
+volatile uint32_t g_eth_tx_packets;
+volatile uint32_t g_eth_tx_errors;
+volatile uint32_t g_eth_link_starts;
+volatile uint32_t g_eth_maccr;
+volatile uint32_t g_eth_macpfr;
+volatile uint32_t g_eth_dmadsr;
+volatile uint32_t g_eth_dmacsr;
+volatile uint32_t g_eth_mtlrqdr;
+volatile uint32_t g_eth_phy_bsr;
+volatile uint32_t g_eth_phy_physts;
+volatile uint32_t g_eth_phy_phycr;
+volatile uint32_t g_eth_phy_recr;
+volatile uint32_t g_eth_phy_addr;
+volatile uint32_t g_eth_hal_init_status;
+volatile uint32_t g_eth_hal_error_code;
+volatile uint32_t g_eth_syscfg_pmcr;
+volatile uint32_t g_eth_macmdioar;
+volatile uint32_t g_eth_macmdiodr;
+volatile uint32_t g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+volatile uint32_t g_eth_hal_addr0_id = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr1_id = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr0_phycr = 0xffffffffu;
+volatile uint32_t g_eth_hal_addr1_phycr = 0xffffffffu;
+volatile uint32_t g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+volatile uint32_t g_eth_bb_addr0_id = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_id = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr0_phycr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_phycr = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr0_ta = 0xffffffffu;
+volatile uint32_t g_eth_bb_addr1_ta = 0xffffffffu;
 
 /* USER CODE END 2 */
 
@@ -138,12 +173,12 @@ int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t *pRegVal
 int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr, uint32_t RegVal);
 int32_t ETH_PHY_IO_GetTick(void);
 
-lan8742_Object_t LAN8742;
-lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
-                                  ETH_PHY_IO_DeInit,
-                                  ETH_PHY_IO_WriteReg,
-                                  ETH_PHY_IO_ReadReg,
-                                  ETH_PHY_IO_GetTick};
+dp83848_Object_t DP83848;
+dp83848_IOCtx_t DP83848_IOCtx = {ETH_PHY_IO_Init,
+                                 ETH_PHY_IO_DeInit,
+                                 ETH_PHY_IO_WriteReg,
+                                 ETH_PHY_IO_ReadReg,
+                                 ETH_PHY_IO_GetTick};
 
 /* USER CODE BEGIN 3 */
 
@@ -153,6 +188,286 @@ lan8742_IOCtx_t  LAN8742_IOCtx = {ETH_PHY_IO_Init,
 void pbuf_free_custom(struct pbuf *p);
 
 /* USER CODE BEGIN 4 */
+static uint32_t ethernetif_pack_phy_id(uint32_t id1, uint32_t id2)
+{
+  return ((id1 & 0xffffu) << 16u) | (id2 & 0xffffu);
+}
+
+static int ethernetif_valid_phy_id(uint32_t id1, uint32_t id2)
+{
+  return id1 != 0u && id1 != 0xffffu && id2 != 0u && id2 != 0xffffu;
+}
+
+static void mdio_gpio_delay(void)
+{
+  for (volatile uint32_t i = 0; i < ETH_MDIO_GPIO_DELAY_CYCLES; ++i)
+  {
+    __NOP();
+  }
+}
+
+static void mdio_gpio_set_mdio_output(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_set_mdio_input(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_prepare(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+
+  mdio_gpio_set_mdio_output();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+}
+
+static void mdio_gpio_restore_eth_af(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+static void mdio_gpio_write_bit(uint32_t bit)
+{
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, bit ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+  mdio_gpio_delay();
+}
+
+static uint32_t mdio_gpio_read_bit(void)
+{
+  uint32_t bit;
+  mdio_gpio_delay();
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
+  mdio_gpio_delay();
+  bit = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET ? 1u : 0u;
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
+  mdio_gpio_delay();
+  return bit;
+}
+
+static void mdio_gpio_write_bits(uint32_t value, uint32_t bit_count)
+{
+  while (bit_count > 0u)
+  {
+    bit_count--;
+    mdio_gpio_write_bit((value >> bit_count) & 1u);
+  }
+}
+
+static uint32_t mdio_gpio_read_reg(uint32_t phy_addr, uint32_t reg_addr, uint32_t *turnaround)
+{
+  uint32_t value = 0u;
+  uint32_t ta;
+
+  mdio_gpio_set_mdio_output();
+  for (uint32_t i = 0u; i < 32u; ++i)
+  {
+    mdio_gpio_write_bit(1u);
+  }
+
+  mdio_gpio_write_bits(0x1u, 2u);
+  mdio_gpio_write_bits(0x2u, 2u);
+  mdio_gpio_write_bits(phy_addr, 5u);
+  mdio_gpio_write_bits(reg_addr, 5u);
+
+  mdio_gpio_set_mdio_input();
+  ta = mdio_gpio_read_bit() << 1u;
+  ta |= mdio_gpio_read_bit();
+  if (turnaround != NULL)
+  {
+    *turnaround = ta;
+  }
+
+  for (uint32_t i = 0u; i < 16u; ++i)
+  {
+    value = (value << 1u) | mdio_gpio_read_bit();
+  }
+
+  mdio_gpio_set_mdio_output();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+  return value;
+}
+
+static void ethernetif_reset_phy_diag_values(void)
+{
+  g_eth_hal_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+  g_eth_hal_addr0_id = 0xffffffffu;
+  g_eth_hal_addr1_id = 0xffffffffu;
+  g_eth_hal_addr0_phycr = 0xffffffffu;
+  g_eth_hal_addr1_phycr = 0xffffffffu;
+  g_eth_bb_phy_found_addr = ETH_PHY_SCAN_NONE_ADDR;
+  g_eth_bb_addr0_id = 0xffffffffu;
+  g_eth_bb_addr1_id = 0xffffffffu;
+  g_eth_bb_addr0_phycr = 0xffffffffu;
+  g_eth_bb_addr1_phycr = 0xffffffffu;
+  g_eth_bb_addr0_ta = 0xffffffffu;
+  g_eth_bb_addr1_ta = 0xffffffffu;
+}
+
+static void ethernetif_scan_phy_with_hal(void)
+{
+  for (uint32_t addr = 0u; addr <= 31u; ++addr)
+  {
+    uint32_t id1 = 0xffffffffu;
+    uint32_t id2 = 0xffffffffu;
+    uint32_t phycr = 0xffffffffu;
+
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYIDR1, &id1);
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYIDR2, &id2);
+    (void)ETH_PHY_IO_ReadReg(addr, DP83848_PHYCR, &phycr);
+
+    if (addr == 0u)
+    {
+      g_eth_hal_addr0_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_hal_addr0_phycr = phycr;
+    }
+    else if (addr == 1u)
+    {
+      g_eth_hal_addr1_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_hal_addr1_phycr = phycr;
+    }
+
+    if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+        ethernetif_valid_phy_id(id1, id2) &&
+        (phycr & DP83848_PHYCR_PHY_ADDR) == addr)
+    {
+      g_eth_hal_phy_found_addr = addr;
+    }
+  }
+}
+
+static void ethernetif_scan_phy_with_gpio_mdio(void)
+{
+  mdio_gpio_prepare();
+
+  for (uint32_t addr = 0u; addr <= 31u; ++addr)
+  {
+    uint32_t ta = 0xffffffffu;
+    const uint32_t id1 = mdio_gpio_read_reg(addr, DP83848_PHYIDR1, &ta);
+    const uint32_t id2 = mdio_gpio_read_reg(addr, DP83848_PHYIDR2, NULL);
+    const uint32_t phycr = mdio_gpio_read_reg(addr, DP83848_PHYCR, NULL);
+
+    if (addr == 0u)
+    {
+      g_eth_bb_addr0_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_bb_addr0_phycr = phycr;
+      g_eth_bb_addr0_ta = ta;
+    }
+    else if (addr == 1u)
+    {
+      g_eth_bb_addr1_id = ethernetif_pack_phy_id(id1, id2);
+      g_eth_bb_addr1_phycr = phycr;
+      g_eth_bb_addr1_ta = ta;
+    }
+
+    if (g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+        ethernetif_valid_phy_id(id1, id2) &&
+        (phycr & DP83848_PHYCR_PHY_ADDR) == addr)
+    {
+      g_eth_bb_phy_found_addr = addr;
+    }
+  }
+
+  mdio_gpio_restore_eth_af();
+  HAL_ETH_SetMDIOClockRange(&heth);
+}
+
+void ethernetif_run_phy_diagnostics(void)
+{
+  ethernetif_reset_phy_diag_values();
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
+
+  (void)ETH_PHY_IO_Init();
+  ethernetif_scan_phy_with_hal();
+  ethernetif_scan_phy_with_gpio_mdio();
+
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
+}
+
+void ethernetif_update_bringup_diag(void)
+{
+  uint32_t phy_reg = 0u;
+  const uint32_t phy_addr = DP83848.DevAddr;
+
+  g_eth_maccr = ETH->MACCR;
+  g_eth_macpfr = ETH->MACPFR;
+  g_eth_dmadsr = ETH->DMADSR;
+  g_eth_dmacsr = ETH->DMACSR;
+  g_eth_mtlrqdr = ETH->MTLRQDR;
+  g_eth_syscfg_pmcr = SYSCFG->PMCR;
+  g_eth_macmdioar = ETH->MACMDIOAR;
+  g_eth_macmdiodr = ETH->MACMDIODR;
+  g_eth_phy_addr = phy_addr;
+
+  if (phy_addr > 31u)
+  {
+    g_eth_phy_bsr = 0xffffffffu;
+    g_eth_phy_physts = 0xffffffffu;
+    g_eth_phy_phycr = 0xffffffffu;
+    g_eth_phy_recr = 0xffffffffu;
+    return;
+  }
+
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_BMSR, &phy_reg) == 0)
+  {
+    g_eth_phy_bsr = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_PHYSTS, &phy_reg) == 0)
+  {
+    g_eth_phy_physts = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_PHYCR, &phy_reg) == 0)
+  {
+    g_eth_phy_phycr = phy_reg;
+  }
+  if (ETH_PHY_IO_ReadReg(phy_addr, DP83848_RECR, &phy_reg) == 0)
+  {
+    g_eth_phy_recr = phy_reg;
+  }
+}
 
 /* USER CODE END 4 */
 
@@ -190,10 +505,22 @@ static void low_level_init(struct netif *netif)
   /* USER CODE END MACADDRESS */
 
   hal_eth_init_status = HAL_ETH_Init(&heth);
+  g_eth_hal_init_status = (uint32_t)hal_eth_init_status;
+  g_eth_hal_error_code = heth.ErrorCode;
+  if (hal_eth_init_status == HAL_OK)
+  {
+    ETH_MACFilterConfigTypeDef filter_config = {0};
+    filter_config.PromiscuousMode = ENABLE;
+    filter_config.ReceiveAllMode = ENABLE;
+    filter_config.PassAllMulticast = ENABLE;
+    filter_config.BroadcastFilter = DISABLE;
+    filter_config.ControlPacketsFilter = ETH_CTRLPACKETS_FORWARD_ALL;
+    (void)HAL_ETH_SetMACFilterConfig(&heth, &filter_config);
+  }
 
   memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
-  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
-  TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
+  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CRCPAD;
+  TxConfig.ChecksumCtrl = ETH_CHECKSUM_DISABLE;
   TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
 
   /* End ETH HAL Init */
@@ -225,13 +552,23 @@ static void low_level_init(struct netif *netif)
   #endif /* LWIP_ARP */
 
 /* USER CODE BEGIN PHY_PRE_CONFIG */
+  DP83848_RegisterBusIO(&DP83848, &DP83848_IOCtx);
+  HAL_Delay(100u);
+  ethernetif_run_phy_diagnostics();
+  if (g_eth_hal_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR &&
+      g_eth_bb_phy_found_addr == ETH_PHY_SCAN_NONE_ADDR)
+  {
+    DP83848.DevAddr = ETH_PHY_SCAN_NONE_ADDR;
+    netif_set_link_down(netif);
+    netif_set_down(netif);
+    return;
+  }
 
 /* USER CODE END PHY_PRE_CONFIG */
   /* Set PHY IO functions */
-  LAN8742_RegisterBusIO(&LAN8742, &LAN8742_IOCtx);
 
-  /* Initialize the LAN8742 ETH PHY */
-  if(LAN8742_Init(&LAN8742) != LAN8742_STATUS_OK)
+  /* Initialize the DP83848 ETH PHY */
+  if(DP83848_Init(&DP83848) != DP83848_STATUS_OK)
   {
     netif_set_link_down(netif);
     netif_set_down(netif);
@@ -304,7 +641,16 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
 
-  HAL_ETH_Transmit(&heth, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT);
+  if (HAL_ETH_Transmit(&heth, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT) == HAL_OK)
+  {
+    g_eth_tx_packets++;
+    (void)HAL_ETH_ReleaseTxPacket(&heth);
+  }
+  else
+  {
+    g_eth_tx_errors++;
+    errval = ERR_IF;
+  }
 
   return errval;
 }
@@ -347,6 +693,8 @@ void ethernetif_input(struct netif *netif)
     p = low_level_input( netif );
     if (p != NULL)
     {
+      g_eth_rx_packets++;
+      g_eth_rx_bytes += p->tot_len;
       if (netif->input( p, netif) != ERR_OK )
       {
         pbuf_free(p);
@@ -646,34 +994,34 @@ void ethernet_link_check_state(struct netif *netif)
   int32_t PHYLinkState = 0;
   uint32_t linkchanged = 0U, speed = 0U, duplex = 0U;
 
-  PHYLinkState = LAN8742_GetLinkState(&LAN8742);
+  PHYLinkState = DP83848_GetLinkState(&DP83848);
 
-  if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
+  if(netif_is_link_up(netif) && (PHYLinkState <= DP83848_STATUS_LINK_DOWN))
   {
     HAL_ETH_Stop(&heth);
     netif_set_down(netif);
     netif_set_link_down(netif);
   }
-  else if(!netif_is_link_up(netif) && (PHYLinkState > LAN8742_STATUS_LINK_DOWN))
+  else if(!netif_is_link_up(netif) && (PHYLinkState > DP83848_STATUS_LINK_DOWN))
   {
     switch (PHYLinkState)
     {
-    case LAN8742_STATUS_100MBITS_FULLDUPLEX:
+    case DP83848_STATUS_100MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_100MBITS_HALFDUPLEX:
+    case DP83848_STATUS_100MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_100M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_10MBITS_FULLDUPLEX:
+    case DP83848_STATUS_10MBITS_FULLDUPLEX:
       duplex = ETH_FULLDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;
       break;
-    case LAN8742_STATUS_10MBITS_HALFDUPLEX:
+    case DP83848_STATUS_10MBITS_HALFDUPLEX:
       duplex = ETH_HALFDUPLEX_MODE;
       speed = ETH_SPEED_10M;
       linkchanged = 1;
@@ -690,6 +1038,7 @@ void ethernet_link_check_state(struct netif *netif)
       MACConf.Speed = speed;
       HAL_ETH_SetMACConfig(&heth, &MACConf);
       HAL_ETH_Start(&heth);
+      g_eth_link_starts++;
       netif_set_up(netif);
       netif_set_link_up(netif);
     }
@@ -714,6 +1063,7 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   else
   {
     RxAllocStatus = RX_ALLOC_ERROR;
+    g_eth_rx_alloc_errors++;
     *buff = NULL;
   }
 /* USER CODE END HAL ETH RxAllocateCallback */

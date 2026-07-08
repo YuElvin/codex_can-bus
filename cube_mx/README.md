@@ -31,7 +31,7 @@ Then in STM32CubeMX:
 
 ## Configured Peripherals
 
-- ETH RMII for LAN8720, using PA1 as external 50 MHz `ETH_REF_CLK`.
+- ETH RMII for DP83848, using PA1 as external 50 MHz `ETH_REF_CLK`.
 - QuadSPI single-bank pinout for W25Q128.
 - SDMMC1 4-bit pins plus PA8 `SD_DETECT`.
 - FDCAN1 on PD0/PD1; FDCAN2 pins PB5/PB6 reserved.
@@ -51,7 +51,7 @@ Then in STM32CubeMX:
 - FDCAN2 is reserved with a separate message RAM offset and classic 8-byte elements.
 - SDMMC kernel clock: PLL1Q 100 MHz, `ClockDiv=2` for about 25 MHz card clock.
 - QUADSPI clock: D1HCLK 200 MHz, prescaler 3 for 50 MHz serial clock.
-- ETH RMII reference clock comes from the LAN8720 module on PA1, not from MCU MCO.
+- ETH RMII reference clock comes from the DP83848 module on PA1, not from MCU MCO.
 
 ## Notes
 
