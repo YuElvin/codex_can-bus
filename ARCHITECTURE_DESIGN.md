@@ -13,7 +13,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | W5500 网络 | SPI2: PB13/PB14/PB15，PB12 CS，PB11 RST，PA7 INT | 已验证 | W5500 `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
 | CAN 收发器 | FDCAN2: PB5 RX，PB6 TX，经 MCP2562FD 到 USBCAN-2E-U | 已验证 | Windows CANtest 可接收开发板周期帧，也可发送帧被开发板收到 |
 | FDCAN1 | PD0 RX，PD1 TX | 诊断/保留 | 当前用于 internal/external loopback 诊断，不作为已验证外部主通道 |
-| TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过 |
+| TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过；默认 `/www/index.html` 可通过 HTTP 读取 |
 | W25Q128 | QUADSPI | 已验证 | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
 | USART2 | PD5/PD6，115200 8N1 | 可用 | Windows 侧读取正常；macOS 侧曾出现乱码，必要时以 ST-Link 变量为准 |
 | FreeRTOS | SysTick/SVC/PendSV | 基础多任务已上板验证 | 单 `bringup` 任务已验证通过；CAN2 周期任务、W5500 轮询任务和状态打印任务已拆出 |
@@ -111,7 +111,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 1. 已引入 W5500 socket0 TCP 80 最小轮询服务。
 2. 已实现并烧录验证 `GET /api/status` 和 `GET /api/can/status`。
-3. 下一步实现 TF 静态文件服务 `/www/` 和 DBC/日志文件接口。
+3. 已实现 `/www/index.html` 默认页的最小静态读取；下一步扩展分块静态文件服务和 DBC/日志文件接口。
 4. 最后增加配置保存、周期发送、规则接口。
 
 不再使用 lwIP `netif`、`ethernetif_input()` 或 ETH DMA 描述符路径。
@@ -233,7 +233,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
-| 9 | TF 静态文件和 DBC 上传 | 待做 | `/www` 静态页、DBC 上传解析报告 |
+| 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；DBC 上传解析报告待做 |
 | 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |

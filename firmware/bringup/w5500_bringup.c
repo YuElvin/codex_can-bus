@@ -21,6 +21,8 @@ volatile uint32_t g_w5500_http_last_code = 0u;
 volatile uint32_t g_w5500_http_last_rx_size = 0u;
 volatile uint32_t g_w5500_http_last_tx_size = 0u;
 volatile uint32_t g_w5500_http_error_count = 0u;
+volatile uint32_t g_w5500_http_static_count = 0u;
+volatile uint32_t g_w5500_http_static_read_result = 0xffffffffu;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -73,6 +75,7 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PORT 80u
 #define W5500_HTTP_PATH_STATUS 1u
 #define W5500_HTTP_PATH_CAN_STATUS 2u
+#define W5500_HTTP_PATH_INDEX 3u
 
 static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
@@ -225,18 +228,19 @@ static size_t build_not_found_body(char *body, size_t len) {
   return (size_t)snprintf(body, len, "{\"ok\":false,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}");
 }
 
-static int http_send_response(uint16_t code, const char *body, size_t body_len) {
+static int http_send_response(uint16_t code, const char *content_type, const char *body, size_t body_len) {
   char response[768];
   const char *status_text = code == 200u ? "OK" : "Not Found";
   const int header_len = snprintf(response,
                                   sizeof(response),
                                   "HTTP/1.1 %u %s\r\n"
-                                  "Content-Type: application/json\r\n"
+                                  "Content-Type: %s\r\n"
                                   "Content-Length: %lu\r\n"
                                   "Connection: close\r\n"
                                   "\r\n",
                                   (unsigned int)code,
                                   status_text,
+                                  content_type,
                                   (unsigned long)body_len);
   if (header_len <= 0 || (size_t)header_len + body_len > sizeof(response)) {
     return 1;
@@ -295,6 +299,7 @@ static int http_handle_request(uint16_t rx_size) {
   uint16_t code = 404u;
   uint32_t path_code = 0u;
   size_t body_len = 0u;
+  const char *content_type = "application/json";
   if (request_path_is(request, "/api/status")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_STATUS;
@@ -303,6 +308,19 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_STATUS;
     body_len = build_can_status_body(body, sizeof(body));
+  } else if (request_path_is(request, "/") || request_path_is(request, "/index.html")) {
+    size_t file_len = 0u;
+    g_w5500_http_static_read_result =
+      (uint32_t)stm32h750_tf_read_file_locked("/www/index.html", (uint8_t *)body, sizeof(body), &file_len);
+    if (g_w5500_http_static_read_result == 0u && file_len > 0u && file_len < sizeof(body)) {
+      code = 200u;
+      path_code = W5500_HTTP_PATH_INDEX;
+      content_type = "text/html; charset=utf-8";
+      body_len = file_len;
+      g_w5500_http_static_count++;
+    } else {
+      body_len = build_not_found_body(body, sizeof(body));
+    }
   } else {
     body_len = build_not_found_body(body, sizeof(body));
   }
@@ -313,7 +331,7 @@ static int http_handle_request(uint16_t rx_size) {
   g_w5500_http_request_count++;
   g_w5500_http_last_path = path_code;
   g_w5500_http_last_code = code;
-  return http_send_response(code, body, body_len);
+  return http_send_response(code, content_type, body, body_len);
 }
 
 static void w5500_capture_status(W5500Port *port) {

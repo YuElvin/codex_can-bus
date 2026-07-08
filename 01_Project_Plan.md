@@ -26,7 +26,7 @@
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
-| 9 | TF 静态文件和 DBC 上传 | [待实现] | `/www` 静态页可访问，DBC 上传有解析报告 |
+| 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问；DBC 上传待实现 |
 | 10 | 实时解码、日志、规则 | [待实现] | Web 显示信号，CSV 稳定写入，继电器规则可验证 |
 
 ## 非目标

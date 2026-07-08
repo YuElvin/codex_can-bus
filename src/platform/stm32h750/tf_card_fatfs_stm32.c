@@ -3,10 +3,13 @@
 #include "platform/stm32h750_bringup.h"
 
 #include "bsp_driver_sd.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
 
 #include <string.h>
 
 extern SD_HandleTypeDef hsd1;
+extern char SDPath[4];
 
 #define TF_CARD_SD_CLOCK_DIV 16u
 #define TF_CARD_SD_OP_TIMEOUT_MS 1000u
@@ -28,6 +31,39 @@ volatile uint32_t g_tf_sd_last_error;
 volatile uint32_t g_tf_sd_last_sta;
 volatile uint32_t g_tf_sd_last_dcount;
 volatile uint32_t g_tf_sd_last_clkcr;
+volatile uint32_t g_tf_fs_mutex_ready;
+volatile uint32_t g_tf_fs_lock_result;
+volatile uint32_t g_tf_www_index_status = 0xffffffffu;
+volatile uint32_t g_tf_www_index_len;
+
+static SemaphoreHandle_t g_tf_fs_mutex;
+
+static int tf_fs_lock(void) {
+  if (g_tf_fs_mutex == NULL) {
+    g_tf_fs_lock_result = 1u;
+    return 1;
+  }
+  if (xSemaphoreTake(g_tf_fs_mutex, pdMS_TO_TICKS(1000u)) != pdTRUE) {
+    g_tf_fs_lock_result = 2u;
+    return 1;
+  }
+  g_tf_fs_lock_result = 0u;
+  return 0;
+}
+
+static void tf_fs_unlock(void) {
+  if (g_tf_fs_mutex != NULL) {
+    (void)xSemaphoreGive(g_tf_fs_mutex);
+  }
+}
+
+int stm32h750_fs_mutex_init(void) {
+  if (g_tf_fs_mutex == NULL) {
+    g_tf_fs_mutex = xSemaphoreCreateMutex();
+  }
+  g_tf_fs_mutex_ready = g_tf_fs_mutex != NULL ? 1u : 0u;
+  return g_tf_fs_mutex != NULL ? 0 : 1;
+}
 
 static void tf_sd_record_diag(HAL_StatusTypeDef status) {
   g_tf_sd_last_hal_status = (uint32_t)status;
@@ -136,7 +172,11 @@ static TfCardResult fatfs_mount(void *ctx) {
   if (tf == NULL || tf->fs == NULL || tf->logical_drive == NULL) {
     return TF_CARD_ERROR;
   }
+  if (tf_fs_lock() != 0) {
+    return TF_CARD_ERROR;
+  }
   const FRESULT result = f_mount(tf->fs, tf->logical_drive, 1u);
+  tf_fs_unlock();
   g_tf_mount_result = result;
   return result == FR_OK ? TF_CARD_OK : TF_CARD_ERROR;
 }
@@ -146,7 +186,11 @@ static TfCardResult fatfs_mkdir(void *ctx, const char *path) {
   if (build_fatfs_path((const Stm32TfCardContext *)ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK) {
     return TF_CARD_ERROR;
   }
+  if (tf_fs_lock() != 0) {
+    return TF_CARD_ERROR;
+  }
   const FRESULT result = f_mkdir(full_path);
+  tf_fs_unlock();
   g_tf_mkdir_result = result;
   return result == FR_OK || result == FR_EXIST ? TF_CARD_OK : TF_CARD_ERROR;
 }
@@ -161,13 +205,18 @@ static TfCardResult fatfs_write(void *ctx, const char *path, const uint8_t *data
     FIL file;
     UINT written = 0u;
     g_tf_write_attempts = attempt + 1u;
+    if (tf_fs_lock() != 0) {
+      return TF_CARD_ERROR;
+    }
     g_tf_write_open_result = f_open(&file, full_path, FA_CREATE_ALWAYS | FA_WRITE);
     if (g_tf_write_open_result != FR_OK) {
+      tf_fs_unlock();
       HAL_Delay(20u);
       continue;
     }
     g_tf_write_result = f_write(&file, data, (UINT)len, &written);
     g_tf_write_close_result = f_close(&file);
+    tf_fs_unlock();
     g_tf_write_len = written;
     if (g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK && written == len) {
       return TF_CARD_OK;
@@ -184,12 +233,17 @@ static TfCardResult fatfs_read(void *ctx, const char *path, uint8_t *data, size_
   if (build_fatfs_path((const Stm32TfCardContext *)ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK) {
     return TF_CARD_ERROR;
   }
+  if (tf_fs_lock() != 0) {
+    return TF_CARD_ERROR;
+  }
   g_tf_read_open_result = f_open(&file, full_path, FA_READ);
   if (g_tf_read_open_result != FR_OK) {
+    tf_fs_unlock();
     return TF_CARD_ERROR;
   }
   const FRESULT result = f_read(&file, data, (UINT)len, &read);
   const FRESULT close_result = f_close(&file);
+  tf_fs_unlock();
   g_tf_read_result = result;
   g_tf_read_close_result = close_result;
   g_tf_read_len = read;
@@ -197,6 +251,65 @@ static TfCardResult fatfs_read(void *ctx, const char *path, uint8_t *data, size_
     *read_len = read;
   }
   return result == FR_OK && close_result == FR_OK ? TF_CARD_OK : TF_CARD_ERROR;
+}
+
+int stm32h750_tf_read_file_locked(const char *path, uint8_t *data, size_t len, size_t *read_len) {
+  Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+  return fatfs_read(&ctx, path, data, len, read_len) == TF_CARD_OK ? 0 : 1;
+}
+
+int stm32h750_tf_ensure_default_www(void) {
+  static const uint8_t index_html[] =
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>CAN Bus Gateway</title></head>"
+    "<body><h1>CAN Bus Gateway</h1><p>W5500 HTTP status API is running.</p></body></html>\n";
+  FIL file;
+  UINT written = 0u;
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (build_fatfs_path(&ctx, "/www/index.html", full_path, sizeof(full_path)) != TF_CARD_OK) {
+    g_tf_www_index_status = 1u;
+    return 1;
+  }
+  if (tf_fs_lock() != 0) {
+    g_tf_www_index_status = 2u;
+    return 1;
+  }
+  FRESULT result = f_open(&file, full_path, FA_READ);
+  if (result == FR_OK) {
+    g_tf_www_index_len = f_size(&file);
+    (void)f_close(&file);
+    tf_fs_unlock();
+    g_tf_www_index_status = 0u;
+    return 0;
+  }
+  result = f_open(&file, full_path, FA_CREATE_NEW | FA_WRITE);
+  if (result == FR_EXIST) {
+    tf_fs_unlock();
+    g_tf_www_index_status = 0u;
+    return 0;
+  }
+  if (result != FR_OK) {
+    tf_fs_unlock();
+    g_tf_www_index_status = 3u;
+    return 1;
+  }
+  result = f_write(&file, index_html, (UINT)(sizeof(index_html) - 1u), &written);
+  const FRESULT close_result = f_close(&file);
+  tf_fs_unlock();
+  g_tf_www_index_len = written;
+  if (result != FR_OK || close_result != FR_OK || written != sizeof(index_html) - 1u) {
+    g_tf_www_index_status = 4u;
+    return 1;
+  }
+  g_tf_www_index_status = 0u;
+  return 0;
 }
 
 void stm32h750_tf_card_bind(TfCardPort *port, Stm32TfCardContext *ctx, FATFS *fs, const char *logical_drive) {

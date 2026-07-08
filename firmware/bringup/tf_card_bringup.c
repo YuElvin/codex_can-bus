@@ -26,6 +26,9 @@ int tf_card_bringup_run(void) {
     }
     return 5;
   }
+  if (stm32h750_tf_ensure_default_www() != 0) {
+    return 6;
+  }
   return 0;
 }
 

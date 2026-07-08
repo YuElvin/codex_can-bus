@@ -401,3 +401,69 @@
 
 - 当前待提交固件改动沿用上一轮已完成的 `./scripts/verify.sh`、反汇编、烧录、`curl` 和 ST-Link 读数验证。
 - 本条只追加提交重试记录，没有再次修改固件逻辑。
+
+### 提交结果
+
+- 重新执行 `git add`、`git commit -m "Add W5500 HTTP status API"` 和 `git push origin codex/W5500` 成功。
+- 阶段 8 提交为 `d952580 Add W5500 HTTP status API`，已推送到 `origin/codex/W5500`。
+
+## 2026-07-08 22:27:25 +08:00
+
+### 用户请求
+
+- 用户确认 CAN 数据接收正常并要求提交后继续下一步；阶段 8 已提交推送后，本轮继续推进阶段 9 的 TF 静态文件服务最小闭环。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：阶段 9 先做最小可验证静态页服务，不一次性加入 DBC 上传或完整 Web UI。
+- 成功标准：FatFs 操作有 mutex 保护；TF 卡存在或自动创建 `/www/index.html`；W5500 HTTP 的 `GET /` 和 `GET /index.html` 能返回 `text/html`；原 `/api/status` 仍能访问；提交前完成编译、反汇编、烧录和客观读数记录。
+- 验证方式：`./scripts/verify.sh`、`git diff --check`、`arm-none-eabi-nm/objdump/strings` 定向检查、OpenOCD 烧录、主机 `ping/curl/arp`、ST-Link `mdw` 读取全局变量。
+
+### 实际操作
+
+1. 将 `cube_mx/Core/Inc/FreeRTOSConfig.h` 的 `configUSE_MUTEXES` 改为 `1`，启用 FreeRTOS mutex。
+2. 在 `src/platform/stm32h750/tf_card_fatfs_stm32.c` 中加入全局 FatFs mutex，挂载、建目录、写文件、读文件均通过 `tf_fs_lock/tf_fs_unlock` 串行化；新增诊断变量 `g_tf_fs_mutex_ready/g_tf_fs_lock_result/g_tf_www_index_status/g_tf_www_index_len`。
+3. 新增 `stm32h750_fs_mutex_init()`、`stm32h750_tf_read_file_locked()`、`stm32h750_tf_ensure_default_www()`；缺省页内容为 171 字节 HTML，文件已存在时不覆盖。
+4. 在 `cube_mx/Core/Src/main.c` 初始化 SPI2 后、创建 FreeRTOS 任务前调用 `stm32h750_fs_mutex_init()`；状态行增加 `fsm/fsl/www/wwwl/hstatic/hsrd` 字段。
+5. 在 `firmware/bringup/tf_card_bringup.c` 的 TF smoke test 后调用 `stm32h750_tf_ensure_default_www()`，默认页创建失败时返回状态 `6`。
+6. 在 `firmware/bringup/w5500_bringup.c` 中扩展 socket0 HTTP：`GET /` 和 `GET /index.html` 从 TF 读取 `/www/index.html` 并返回 `text/html; charset=utf-8`；保留 `/api/status`、`/api/can/status` 和 404 JSON。
+7. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和 `05_Lessons.md`，标记阶段 9 静态文件服务为部分客观已验证，并记录当前单 socket、非并发、384 字节读取上限。
+
+### 验证结果
+
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 通过；STM32 固件编译通过。FLASH `54760 B / 128 KB = 41.78%`，RAM_D1 `102520 B / 512 KB = 19.55%`。
+- `git diff --check` 通过。
+- 反汇编/符号核查：
+  - ELF 符号存在 `stm32h750_fs_mutex_init`、`stm32h750_tf_ensure_default_www`、`stm32h750_tf_read_file_locked`、`xQueueCreateMutex`、`xQueueSemaphoreTake`、`xQueueGenericSend`、`w5500_http_status_poll`、`http_handle_request`。
+  - `main` 反汇编确认 `stm32h750_fs_mutex_init()` 在 `xTaskCreate()` 前调用。
+  - `stm32h750_fs_mutex_init` 反汇编确认调用 `xQueueCreateMutex`。
+  - `stm32h750_tf_ensure_default_www` 反汇编确认执行路径构建、`tf_fs_lock`、`f_open`、`f_write`、`f_close` 和 unlock。
+  - `stm32h750_tf_read_file_locked` 反汇编确认通过 `fatfs_read` 进入加锁读路径。
+  - `http_handle_request` 反汇编确认 `/`、`/index.html` 分支会调用 `stm32h750_tf_read_file_locked` 并走 `text/html` 响应。
+- OpenOCD 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.269658 V`。
+- 主机网络验证：`ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.353-1.207 ms`；`arp -n 192.168.1.88` 显示 MAC `02:00:00:12:34:56`。
+- HTTP 验证：
+  - `curl -i http://192.168.1.88/` 返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+  - `curl -i http://192.168.1.88/index.html` 返回同一默认 HTML 页。
+  - 并行 curl 批处理中 `/api/status` 曾出现一次 curl exit 7；按当前单 socket 最小实现判断为并发连接限制。随后顺序重试 `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 包含 `rtos.started=1`、`ready=1`、`w5500.version=4`、`tf.status=0`、`qspi.status=0`。
+- ST-Link 读数：
+  - `g_tf_www_index_status=0`。
+  - `g_w5500_http_static_read_result=0`，`g_w5500_http_socket_sr=0x14`。
+  - `g_tf_www_index_len=0x000000ab`，即 171 字节；`g_tf_fs_lock_result=0`，`g_tf_fs_mutex_ready=1`。
+  - `g_w5500_http_static_count=2`，`g_w5500_http_error_count=0`，`g_w5500_http_last_code=200`，`g_w5500_http_request_count=3`，`g_w5500_network_configured=1`，`g_w5500_link_up=1`。
+- 提交前当前轮复核：
+  - 重新执行 `./scripts/verify.sh` 通过；主机 CTest 8/8 通过，STM32 固件目标无新增编译动作但当前 ELF 可用。
+  - `arm-none-eabi-size build/stm32h750/can_bus_gateway_stm32h750.elf` 输出 text `54568`、data `184`、bss `102336`、dec `157088`。
+  - `arm-none-eabi-nm` 确认存在 `stm32h750_fs_mutex_init`、`stm32h750_tf_ensure_default_www`、`stm32h750_tf_read_file_locked`、`http_handle_request`、`w5500_http_status_poll`、`xQueueCreateMutex`、`xQueueSemaphoreTake`、`xQueueGenericSend` 以及本轮新增 ST-Link 诊断变量。
+  - `arm-none-eabi-objdump` 当前复核确认：`main` 在 `xTaskCreate` 前调用 `stm32h750_fs_mutex_init`；`stm32h750_fs_mutex_init` 调用 `xQueueCreateMutex`；`stm32h750_tf_ensure_default_www` 包含 `tf_fs_lock`、`f_open`、`f_write`、`f_close` 和 unlock；`stm32h750_tf_read_file_locked` 进入 `fatfs_read`；`http_handle_request` 包含 `/`、`/index.html` 分支并调用 `stm32h750_tf_read_file_locked`。
+
+### 当前结论
+
+- 阶段 9 的第一步已经形成上板验证闭环：TF/FatFs mutex 已启用，默认 `/www/index.html` 能创建并通过 W5500 HTTP 读取。
+- 当前仍不是完整静态文件服务：只支持 `/` 和 `/index.html`，读取上限为当前 384 字节 body 缓冲，socket0 HTTP 为单连接最小实现，不支持并发、目录映射、分块传输或上传。
+
+### 问题点
+
+- 并行 HTTP 请求可能因为单 socket 最小实现失败；后续不能把当前实现当作并发 Web 服务。
+- DBC 上传尚未实现；下一步应先实现 `/dbc/*.tmp` 落盘和解析报告，再考虑 Web UI。
+- QSPI 配置保存或日志任务前仍需补齐共享资源 mutex/队列边界。
