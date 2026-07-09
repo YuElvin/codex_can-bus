@@ -17,3 +17,4 @@
 - L-015：DBC 上传进入可复用配置流程前，先把文件策略写进源码常量和接口响应；当前候选文件为 `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc`，活动文件预留为 `/dbc/active.dbc`。
 - L-016：候选 DBC 读回解析要复用 portable `dbc_parse_text()`，不要在 HTTP 上传路径继续扩展手写 `BO_`/`SG_` 扫描；同时静态 `DbcDatabase` 会显著增加 RAM_D1，占用变化必须随构建记录。
 - L-017：STM32 固件使用 `nano.specs` 时不要依赖 `sscanf("%lf")` 解析 DBC 浮点字段；板端实测会导致 signal 行解析失败，改用手写轻量十进制解析可保持功能正确并避免 Flash 暴涨。
+- L-018：DBC 活动文件切换前必须重新从 TF 读回候选并复用 portable parser 校验；无效候选只返回错误，不触发 `/dbc/active.dbc` 替换。最小阶段先保留候选文件，使用 `/dbc/active.write.tmp` + `/dbc/active.prev.dbc` 保护旧活动文件。

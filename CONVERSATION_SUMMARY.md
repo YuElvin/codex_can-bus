@@ -1052,3 +1052,94 @@
 
 - STM32 `nano.specs` 环境下 `sscanf("%lf")` 不能作为 DBC signal 浮点字段解析依据；已改为手写轻量十进制解析，并记录到 `05_Lessons.md`。
 - 当前上传仍是 socket0 单连接、1024 字节以内 text body，真实 DBC 文件仍需要后续分片、multipart 或 TF 流式写入策略。
+
+## 2026-07-09 23:40:30 +08:00
+
+### 用户请求
+
+- 委托继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 要求按 `AGENTS.md` 先读取治理文档和当前记录，再继续设计并实现 `/dbc/active.dbc` 激活与失败回滚最小流程；候选解析有效后才切换 active，失败必须保持当前 active 不变，并用 HTTP/ST-Link 诊断验证。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮只做无请求体 `POST /api/dbc/active` 最小命令；不做完整 Web UI、分片上传、目录管理、信号缓存运行态切换或 ConfigTask。
+- 成功标准：有效 `/dbc/candidate.dbc` 经 TF 读回和 portable `dbc_parse_text()` 确认 `errors=0` 后，写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；无效候选不触发 active 替换。
+- 验证方式：读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-nm/strings/objdump/size` 检查关键路径；OpenOCD 烧录；主机 `route/ping/curl/arp`；OpenOCD `mdw` 读取诊断变量。
+
+### 实际操作
+
+1. 确认 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，当前分支 `codex/W5500...origin/codex/W5500`，起始工作区干净。
+2. 在 `firmware/bringup/w5500_bringup.c` 新增：
+   - 路由 `POST /api/dbc/active`，仅支持无请求体最小命令；带非零 body 返回 `unsupported_body`。
+   - 活动写入临时文件 `/dbc/active.write.tmp`。
+   - 激活前调用现有 `dbc_load_candidate_report()`，从 `/dbc/candidate.dbc` 读回 1025 字节缓冲并用 portable parser 校验。
+   - 只有 `report.errors == 0` 时才调用 `stm32h750_tf_replace_file_with_backup_locked()` 写 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`。
+   - 新增 ST-Link 诊断变量 `g_w5500_http_dbc_active_count/result/bytes/lines/messages/signals/skipped/errors/valid`。
+3. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录 active 最小激活已经烧录验证，信号缓存接入仍未实现。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `63656 B / 128 KB = 48.57%`，RAM_D1 `131720 B / 512 KB = 25.12%`。
+  - ELF 尺寸：`text=63448`、`data=196`、`bss=131520`、`dec=195164`。
+- ELF 符号和字符串检查：
+  - 新增 `g_w5500_http_dbc_active_*` 诊断变量存在。
+  - `stm32h750_tf_replace_file_with_backup_locked`、`dbc_parse_text`、`w5500_http_status_poll` 存在。
+  - ELF 字符串包含 `/api/dbc/active`、`/dbc/active.write.tmp`、`/dbc/active.dbc`、`/dbc/active.prev.dbc`、`candidate_invalid`、`active_save_failed` 和 `activated` 响应字段。
+- 反汇编结论：
+  - `dbc_load_candidate_report` 仍以 `1025` 读取候选，并在 `read_len > 1024` 时走错误分支。
+  - 上传路径仍先调用 `stm32h750_tf_replace_file_with_backup_locked` 保存候选，再调用 `dbc_load_candidate_report`。
+  - active 路径先调用 `dbc_load_candidate_report`；当 report errors 非 0 时记录 `candidate_invalid`，不调用 active 替换；只有 errors 为 0 才调用 `stm32h750_tf_replace_file_with_backup_locked` 写 `/dbc/active.dbc`。
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.249799 V`。
+- 主机网络验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.765-0.908 ms`。
+  - `GET /api/status` 返回 HTTP 200，`rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - 上传有效小 DBC 返回 HTTP 200，`bytes=165`、`lines=4`、`messages=1`、`signals=2`、`skipped=1`、`errors=0`、`valid=true`。
+  - `POST /api/dbc/active` 返回 HTTP 200，JSON 显示 `active=/dbc/active.dbc`、`activeBackup=/dbc/active.prev.dbc`、`bytes=165`、`lines=4`、`messages=1`、`signals=2`、`errors=0`、`valid=true`、`activated=true`。
+  - 上传无效候选返回 HTTP 200 但 `errors=1/valid=false`；随后 `POST /api/dbc/active` 返回 HTTP 400，错误码 `candidate_invalid`，用于验证无效候选不会激活。
+  - 最后重新上传有效候选并再次激活成功，恢复板端最终有效状态。
+  - `GET /api/can/status` 返回 HTTP 200，`status=0`、`tx=64`、`rx=0`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。
+  - `GET /` 返回 HTTP 200，`Content-Type: text/html; charset=utf-8`，`Content-Length: 171`。
+  - ARP 显示 `192.168.1.88` MAC 为 `02:00:00:12:34:56`。
+- ST-Link/OpenOCD 当前读数：
+  - `g_w5500_http_dbc_active_result=0`、`g_w5500_http_dbc_candidate_load_result=0`、`g_w5500_http_dbc_upload_result=0`。
+  - active 诊断：`valid=1`、`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA5`、`active_count=2`。
+  - candidate/upload 诊断：`candidate_valid=1`、`candidate_read_len=0xA5`、`upload errors=0/skipped=1/signals=2/messages=1/lines=4/bytes=0xA5/upload_count=3`。
+  - TF 替换/写入变量：`g_tf_replace_restore_result=0xffffffff`、`g_tf_replace_backup_rename_result=0`、`g_tf_replace_rename_result=0`、`g_tf_replace_unlink_result=4`；其中 `unlink=4` 为 FatFs `FR_NO_FILE`，表示本次没有旧 active backup 需要删除，属允许状态；`g_tf_write_len=0xA5`、`open/write/close=0`。
+  - W5500 变量：`g_w5500_phycfgr=0xBF`、`g_w5500_version=4`、`g_w5500_network_configured=1`、`g_w5500_link_up=1`。
+  - CAN2 变量：`g_can2_send_result=0`、`g_can2_rec=0`、`g_can2_tec=0`、`g_can2_bus_off=0`、`g_can2_error_count=0`、`g_can2_rx_count=0`、`g_can2_tx_count=0x58`。
+
+### 当前结论
+
+- 本轮最小 `/dbc/active.dbc` 激活流程符合阶段 9 当前目标：只有候选 DBC 从 TF 读回并由 portable parser 判定 `errors=0` 后才写入 active；无效候选激活返回 `candidate_invalid`，不会主动替换 active。
+- 当前仍不是完整运行态 DBC 系统：尚未实现 `active_dbc` 指针切换、信号缓存解码接入、配置任务、分片上传、完整 Web UI 或并发 HTTP。
+
+### 问题点
+
+- 当前 active API 是无请求体最小命令，只能激活固定 `/dbc/candidate.dbc`；后续若支持指定文件，需要先定义文件列表、路径白名单和更完整的错误返回。
+- 本轮 CAN2 仍未用 Windows CANtest 外部工具复核；当前 CAN 回归依据为 `/api/can/status` 和 ST-Link 变量。
+
+## 2026-07-09 23:46:46 +08:00
+
+### 用户请求
+
+- 用户要求再次检查当前功能是否符合进度目标；如果符合当前进度目标就提交推送，然后新开一个对话继续按计划进行下一步开发。
+
+### 符合性判断
+
+- 当前功能符合阶段 9 的当前小步目标：`POST /api/dbc/active` 已实现并烧录验证，只有候选 DBC 从 TF 读回并由 portable parser 判定 `errors=0` 后才写入 `/dbc/active.dbc`；无效候选激活返回 `HTTP 400 candidate_invalid`，不会主动替换 active。
+- 当前目标不包含完整 Web UI、分片上传、指定文件激活、运行态 `active_dbc` 指针切换、信号缓存解码接入或 ConfigTask；这些仍是下一步计划。
+
+### 提交前复核
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 构建为 `ninja: no work to do`，沿用已完成反汇编和上板验证的 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex`。
+- 本次复核未重新烧录；硬件结论沿用 2026-07-09 23:40 记录中的 OpenOCD 烧录、HTTP、ping、ARP 和 ST-Link 读数。
+
+### 提交准备
+
+- 准备提交范围为 `/api/dbc/active` 最小激活源码、项目治理/架构文档、经验记录和本对话记录。

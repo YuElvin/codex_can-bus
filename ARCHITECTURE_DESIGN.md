@@ -57,7 +57,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | TF 卡 | `/www/`、`/dbc/`、`/log/`、`/config/` | 一期主要资源存储介质 |
 | QSPI W25Q128 | 配置备份、最小 Web/恢复信息、版本信息 | 当前只做读写验证；正式使用前移除上电擦写测试扇区 |
 
-当前 DBC 候选读回 + portable parser 编译基线：FLASH 约 47.89%，RAM_D1 约 25.12%。后续每次引入网络服务、HTTP、DBC 或日志，都要复查 Flash/RAM 水位。
+当前 DBC 候选读回 + 最小 active 激活源码编译基线：FLASH 约 48.57%，RAM_D1 约 25.12%。后续每次引入网络服务、HTTP、DBC 或日志，都要复查 Flash/RAM 水位。
 
 ## 4. FreeRTOS 任务设计
 
@@ -111,14 +111,14 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 1. 已引入 W5500 socket0 TCP 80 最小轮询服务。
 2. 已实现并烧录验证 `GET /api/status`、`GET /api/can/status` 和 `POST /api/dbc/upload`。
-3. 已实现 `/www/index.html` 默认页的分块静态读取；DBC 上传当前保存 `/dbc/candidate.dbc`，再从 TF 读回候选文件并用 portable `dbc_parse_text()` 返回解析报告，下一步再扩展完整 DBC 配置生效和日志文件接口。
+3. 已实现 `/www/index.html` 默认页的分块静态读取；DBC 上传当前保存 `/dbc/candidate.dbc`，再从 TF 读回候选文件并用 portable `dbc_parse_text()` 返回解析报告；无请求体 `POST /api/dbc/active` 已烧录验证，可把有效候选写入 `/dbc/active.dbc`，下一步再扩展运行态 DBC 配置生效和日志文件接口。
 4. 最后增加配置保存、周期发送、规则接口。
 
 不再使用 lwIP `netif`、`ethernetif_input()` 或 ETH DMA 描述符路径。
 
 ### 5.4 DBC 切换
 
-当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。正式激活预留 `/dbc/active.dbc` 和 `/dbc/active.prev.dbc`：后续 `ConfigTask` 应在候选解析有效后再按同样备份/rename 策略切换活动 DBC，并用指针原子切换 `active_dbc`；失败不影响当前活动 DBC。
+当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。该最小激活仍未接入运行态 `active_dbc` 指针、信号缓存或配置任务。
 
 ### 5.5 日志
 
@@ -163,7 +163,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 | GET | `/api/signals?filter=&page=1` | 实时信号 | `{items:[{name,value,unit,ts,timeout}]}` |
 | POST | `/api/dbc/upload` | 上传 DBC | 当前最小实现为 1024 字节以内 text body，保存 `/dbc/candidate.dbc`，旧候选备份 `/dbc/candidate.prev.dbc`，随后读回候选并用 portable parser 返回 `{ok,data:{candidate,candidateBackup,active,activeBackup,maxBytes,bytes,lines,messages,signals,skipped,errors,valid}}`；后续再扩展 multipart 或分片 |
 | GET | `/api/dbc` | DBC 列表 | `{files:[...]}` |
-| POST | `/api/dbc/active` | 激活 DBC | `{"file":"x.dbc"}` |
+| POST | `/api/dbc/active` | 激活 DBC | 当前最小实现为无请求体命令，激活 `/dbc/candidate.dbc` 到 `/dbc/active.dbc`，返回 `{ok,data:{candidate,active,activeBackup,bytes,lines,messages,signals,skipped,errors,valid,activated}}`；后续再扩展指定文件和运行态信号缓存切换 |
 | DELETE | `/api/dbc/{name}` | 删除 DBC | `{ok}` |
 | POST | `/api/can/send_raw` | 原始发送 | `{id,ide,fd,brs,data}` |
 | POST | `/api/can/send_signal` | 按 DBC 发送 | `{message,signals:{rpm:1200}}` |
@@ -233,7 +233,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
-| 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告 |
+| 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证 |
 | 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |

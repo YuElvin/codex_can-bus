@@ -37,6 +37,15 @@ volatile uint32_t g_w5500_http_dbc_upload_errors = 0u;
 volatile uint32_t g_w5500_http_dbc_candidate_load_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_dbc_candidate_read_len = 0u;
 volatile uint32_t g_w5500_http_dbc_candidate_valid = 0u;
+volatile uint32_t g_w5500_http_dbc_active_count = 0u;
+volatile uint32_t g_w5500_http_dbc_active_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_dbc_active_bytes = 0u;
+volatile uint32_t g_w5500_http_dbc_active_lines = 0u;
+volatile uint32_t g_w5500_http_dbc_active_messages = 0u;
+volatile uint32_t g_w5500_http_dbc_active_signals = 0u;
+volatile uint32_t g_w5500_http_dbc_active_skipped = 0u;
+volatile uint32_t g_w5500_http_dbc_active_errors = 0u;
+volatile uint32_t g_w5500_http_dbc_active_valid = 0u;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -91,10 +100,12 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_CAN_STATUS 2u
 #define W5500_HTTP_PATH_INDEX 3u
 #define W5500_HTTP_PATH_DBC_UPLOAD 4u
+#define W5500_HTTP_PATH_DBC_ACTIVE 5u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
+#define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
 #define W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH "/dbc/candidate.prev.dbc"
 #define W5500_HTTP_DBC_ACTIVE_PATH "/dbc/active.dbc"
@@ -311,6 +322,25 @@ static size_t build_dbc_upload_body(char *body, size_t len, const DbcUploadRepor
                           W5500_HTTP_DBC_ACTIVE_PATH,
                           W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
                           (unsigned long)W5500_HTTP_UPLOAD_BODY_MAX,
+                          (unsigned long)report->bytes,
+                          (unsigned long)report->lines,
+                          (unsigned long)report->messages,
+                          (unsigned long)report->signals,
+                          (unsigned long)report->skipped,
+                          (unsigned long)report->errors,
+                          report->errors == 0u ? "true" : "false");
+}
+
+static size_t build_dbc_active_body(char *body, size_t len, const DbcUploadReport *report) {
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"candidate\":\"%s\",\"active\":\"%s\","
+                          "\"activeBackup\":\"%s\",\"bytes\":%lu,\"lines\":%lu,"
+                          "\"messages\":%lu,\"signals\":%lu,\"skipped\":%lu,"
+                          "\"errors\":%lu,\"valid\":%s,\"activated\":true}}",
+                          W5500_HTTP_DBC_CANDIDATE_PATH,
+                          W5500_HTTP_DBC_ACTIVE_PATH,
+                          W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
                           (unsigned long)report->bytes,
                           (unsigned long)report->lines,
                           (unsigned long)report->messages,
@@ -572,6 +602,53 @@ static int http_handle_dbc_upload(const uint8_t *body_start, size_t content_leng
   return http_send_response(200u, "application/json", g_http_response_body, response_len);
 }
 
+static void dbc_record_active_report(const DbcUploadReport *report, uint32_t valid) {
+  g_w5500_http_dbc_active_bytes = (uint32_t)report->bytes;
+  g_w5500_http_dbc_active_lines = (uint32_t)report->lines;
+  g_w5500_http_dbc_active_messages = (uint32_t)report->messages;
+  g_w5500_http_dbc_active_signals = (uint32_t)report->signals;
+  g_w5500_http_dbc_active_skipped = (uint32_t)report->skipped;
+  g_w5500_http_dbc_active_errors = (uint32_t)report->errors;
+  g_w5500_http_dbc_active_valid = valid;
+}
+
+static int http_handle_dbc_active(void) {
+  DbcUploadReport report;
+  if (dbc_load_candidate_report(&report) != 0) {
+    g_w5500_http_dbc_active_result = 1u;
+    http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
+    return http_send_json_error(500u, "candidate_load_failed", "dbc candidate load failed");
+  }
+
+  if (report.errors != 0u) {
+    g_w5500_http_dbc_active_result = 2u;
+    dbc_record_active_report(&report, 0u);
+    http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 400u);
+    return http_send_json_error(400u, "candidate_invalid", "dbc candidate invalid");
+  }
+
+  g_w5500_http_dbc_active_result =
+    (uint32_t)stm32h750_tf_replace_file_with_backup_locked(W5500_HTTP_DBC_ACTIVE_TMP_PATH,
+                                                           W5500_HTTP_DBC_ACTIVE_PATH,
+                                                           W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
+                                                           (const uint8_t *)g_http_dbc_candidate_buffer,
+                                                           report.bytes);
+  if (g_w5500_http_dbc_active_result != 0u) {
+    dbc_record_active_report(&report, 0u);
+    http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
+    return http_send_json_error(500u, "active_save_failed", "dbc active save failed");
+  }
+
+  dbc_record_active_report(&report, 1u);
+  const size_t response_len = build_dbc_active_body(g_http_response_body, sizeof(g_http_response_body), &report);
+  if (response_len >= sizeof(g_http_response_body)) {
+    return 1;
+  }
+  g_w5500_http_dbc_active_count++;
+  http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+}
+
 static int http_handle_request(uint16_t rx_size) {
   char *request = g_http_request_buffer;
   char *body = g_http_response_body;
@@ -633,6 +710,42 @@ static int http_handle_request(uint16_t rx_size) {
     }
     const int upload_result = http_handle_dbc_upload((const uint8_t *)&request[body_offset], content_length);
     return upload_result == 0 ? W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+  }
+
+  if (request_path_is(request, "POST", "/api/dbc/active")) {
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 400u);
+      return http_send_json_error(400u, "bad_request", "header too large");
+    }
+    const size_t body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) {
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    size_t content_length = 0u;
+    if (http_parse_content_length(request, header_end, &content_length) && content_length > 0u) {
+      if ((size_t)rx_size < body_offset + content_length) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 400u);
+      return http_send_json_error(400u, "unsupported_body", "dbc active body unsupported");
+    }
+    if (body_offset > (size_t)rx_size) {
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    const int active_result = http_handle_dbc_active();
+    return active_result == 0 ? W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
   }
 
   if (rx_size > read_len || http_consume_rx(rx_rd, rx_size) != 0) {
