@@ -39,6 +39,7 @@ typedef struct {
 
 void dbc_init(DbcDatabase *db);
 bool dbc_parse_line(DbcDatabase *db, const char *line);
+bool dbc_parse_text(DbcDatabase *db, const char *text, size_t len, size_t *line_count);
 const DbcMessage *dbc_find_message(const DbcDatabase *db, uint32_t id);
 const DbcSignal *dbc_find_signal(const DbcDatabase *db, const DbcMessage *message, const char *name);
 bool dbc_decode_signal_value(const DbcSignal *signal, const CanFrame *frame, double *phys_value);

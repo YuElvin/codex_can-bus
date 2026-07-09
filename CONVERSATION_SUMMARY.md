@@ -920,3 +920,135 @@
 - 已提交 `7dba747 Define DBC candidate upload policy`。
 - 已推送到 `origin/codex/W5500`，远端从 `7c37a2c` 更新到 `7dba747`。
 - 提交后为记录本提交/推送结果，本文件追加本段记录；该记录不修改固件源码，因此不需要重新编译和反汇编。
+
+## 2026-07-09 23:22:16 +08:00
+
+### 用户请求
+
+- 委托继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 当前远端已有功能提交 `7dba747 Define DBC candidate upload policy` 和记录提交 `4532d3b Record DBC candidate policy push`。
+- 要求按 `AGENTS.md` 先读取治理文档，再继续：基于 `/dbc/candidate.dbc` 引入可复用 DBC 解析/配置流程，先读取候选文件并用 portable `dbc_parser` 解析，再设计 `/dbc/active.dbc` 激活与失败回滚；不要一次性加入完整 Web UI。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮只做候选 DBC 文件读回和 portable parser 接入，不实现 `/api/dbc/active`、活动文件切换、信号缓存接入、完整 Web UI 或分片上传。
+- 成功标准：`POST /api/dbc/upload` 保存 `/dbc/candidate.dbc` 后，固件从 TF 读回候选文件，用 portable `dbc_parse_text()` 生成 `bytes/lines/messages/signals/skipped/errors/valid` 报告；host 测试覆盖新 parser 入口；STM32 固件编译通过并通过关键路径反汇编确认。
+- 验证方式：读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-nm/objdump/strings/size` 检查关键符号、调用路径、字符串和固件尺寸。
+
+### 实际操作
+
+1. 确认当前实际仓库为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500...origin/codex/W5500`，起始工作区干净。
+2. `include/dbc_parser.h` 和 `src/core/dbc_parser.c` 新增 `dbc_parse_text()`，按文本缓冲逐行调用现有 `dbc_parse_line()`，返回总行数并沿用 `DbcDatabase` 的 message/signal/skipped/error 统计。
+3. `tests/test_dbc_parser.c` 增加 `dbc_parse_text()` 覆盖，确认 3 行文本解析为 1 条 message、1 条 signal、1 条 skipped、0 errors。
+4. `firmware/bringup/w5500_bringup.c` 删除上传路径内手写 `BO_`/`SG_` 报告扫描；改为保存候选后调用 `stm32h750_tf_read_file_locked("/dbc/candidate.dbc", ...)` 读回最多 `1025` 字节，再调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase`。
+5. 新增 ST-Link 可读诊断变量：
+   - `g_w5500_http_dbc_candidate_load_result`
+   - `g_w5500_http_dbc_candidate_read_len`
+   - `g_w5500_http_dbc_candidate_valid`
+6. `CMakeLists.txt` 把 `src/core/dbc_parser.c` 和 `src/core/signal_codec.c` 编入 STM32 固件目标。
+7. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录候选读回 parser 接入、未烧录边界和 RAM_D1 水位变化。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `62276 B / 128 KB = 47.51%`，RAM_D1 `131680 B / 512 KB = 25.12%`。
+  - ELF 尺寸：`text=62072`、`data=192`、`bss=131488`、`dec=193752`。
+- ELF 符号确认：
+  - `dbc_parse_text`、`dbc_parse_line`、`stm32h750_tf_read_file_locked`、`stm32h750_tf_replace_file_with_backup_locked` 存在。
+  - `g_http_dbc_candidate_db` 位于 BSS，大小 `0x6418`；`g_http_dbc_candidate_buffer` 大小 `0x401`。
+  - 新诊断变量 `g_w5500_http_dbc_candidate_load_result/read_len/valid` 存在。
+- 反汇编结论：
+  - `w5500_http_status_poll` 上传路径仍保留 `Content-Length` 解析、`1024` 字节上限和半包等待逻辑。
+  - 上传 body 完整后先调用 `stm32h750_tf_replace_file_with_backup_locked` 保存候选。
+  - 保存成功后调用 `stm32h750_tf_read_file_locked`，读取长度参数为 `1025`，随后调用 `dbc_parse_text`。
+  - `dbc_parse_text` 会初始化 `DbcDatabase`，逐行复制最多 127 字节并调用 `dbc_parse_line`，超长行计入 error。
+  - 响应构造继续包含 `candidate/candidateBackup/active/activeBackup/maxBytes/bytes/lines/messages/signals/skipped/errors/valid`。
+- ELF 字符串确认包含 `/dbc/candidate.dbc`、`candidate_load_failed`、`dbc candidate load failed`、`BO_`、`SG_` 和 DBC parser 的 `sscanf` 模式。
+- 本轮未执行 OpenOCD 烧录、ping、curl、ST-Link 运行变量读取或 Windows CANtest，因此候选读回 parser 新固件尚未上板验证。
+
+### 当前结论
+
+- 本轮已完成“基于 `/dbc/candidate.dbc` 读回并复用 portable DBC parser 生成候选报告”的最小源码闭环。
+- 当前仍不是完整 DBC 激活系统：没有实现 `/dbc/active.dbc` 切换、活动备份恢复、信号缓存指针切换、配置任务或 Web UI。
+- RAM_D1 因静态候选 `DbcDatabase` 从约 20.03% 升至 25.12%，仍可接受，但后续引入活动/候选双库、扩大 DBC 上限或增加日志缓存前必须复查内存。
+
+### 问题点
+
+- 本轮未烧录复核，硬件 HTTP 响应和 ST-Link 新诊断变量仍待下次上板确认。
+- 当前上传仍限制为 1024 字节以内单请求体；真实 DBC 文件仍需要分片、multipart 或 TF 流式写入策略。
+- `DbcDatabase` 当前是静态候选库，后续活动 DBC 需要设计生命周期、失败回滚和信号缓存切换，不能直接把候选解析成功等同于运行态生效。
+
+## 2026-07-09 23:31:16 +08:00
+
+### 用户请求
+
+- 用户要求烧录验证本轮 DBC 候选读回 parser 功能是否符合目标；如果符合则提交推送，然后新开对话继续按计划进行下一步开发。
+
+### 烧录前状态
+
+- 当前分支为 `codex/W5500...origin/codex/W5500`。
+- 工作区包含本轮 DBC 候选读回 parser 源码、测试和文档变更。
+- `git diff --check` 通过。
+- 初始固件产物为 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex`。
+
+### 首次烧录验证和问题
+
+- 使用 OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.265863 V`。
+- 主机网络验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.607-1.167 ms`。
+  - ARP 显示 MAC `02:00:00:12:34:56`。
+- `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+- `curl -i --data-binary <小 DBC 文本> http://192.168.1.88/api/dbc/upload` 返回 HTTP 200，但 JSON 为 `bytes=164`、`lines=4`、`messages=1`、`signals=0`、`skipped=1`、`errors=2`、`valid=false`。
+- 该结果不符合目标；同样文本在 host 测试通过，判断问题来自 STM32 固件使用 `nano.specs` 时 `sscanf("%lf")` 对 DBC signal 的浮点字段解析不可靠。
+
+### 修复操作
+
+1. 修改 `src/core/dbc_parser.c`，把 `SG_` 行解析从 `sscanf("%lf")` 改为手写 token 解析。
+2. 初版改用 `strtod` 后 `./scripts/verify.sh` 通过，但 FLASH 从约 47.51% 增至 `74576 B / 128 KB = 56.90%`，不符合 128KB Flash 紧张项目的约束。
+3. 再次改为手写轻量十进制解析：支持可选正负号、整数部分和小数部分，避免 `strtod/strtoul` 依赖。
+4. 同步更新 `03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录板端 parser 问题、最终验证状态和资源水位。
+
+### 最终验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `62772 B / 128 KB = 47.89%`，RAM_D1 `131680 B / 512 KB = 25.12%`。
+  - ELF 尺寸：`text=62572`、`data=192`、`bss=131488`、`dec=194252`。
+- 反汇编和符号检查：
+  - `dbc_parse_text`、`dbc_parse_line`、`stm32h750_tf_read_file_locked`、`stm32h750_tf_replace_file_with_backup_locked` 存在。
+  - `w5500_http_status_poll` 上传路径保留 `1024` 字节上限，完整 body 后调用 `stm32h750_tf_replace_file_with_backup_locked`，保存成功后调用 `stm32h750_tf_read_file_locked`，读取长度为 `1025`，随后调用 `dbc_parse_text`。
+  - `g_http_dbc_candidate_db` 位于 BSS，大小 `0x6418`；`g_http_dbc_candidate_buffer` 大小 `0x401`。
+  - ELF 字符串包含 `/dbc/candidate.dbc`、`candidate_load_failed`、`dbc candidate load failed`、`BO_`、`SG_` 和上传响应字段。
+- 重新烧录最终固件成功，OpenOCD 输出 `Programming Finished`、`Verified OK`，目标电压约 `3.248193 V`。
+- 最终主机网络和 HTTP 验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.566-0.644 ms`。
+  - ARP 显示 MAC `02:00:00:12:34:56`。
+  - `GET /api/status` 返回 HTTP 200，`rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - `POST /api/dbc/upload` 返回 HTTP 200，JSON 显示 `candidate=/dbc/candidate.dbc`、`candidateBackup=/dbc/candidate.prev.dbc`、`active=/dbc/active.dbc`、`activeBackup=/dbc/active.prev.dbc`、`maxBytes=1024`、`bytes=164`、`lines=4`、`messages=1`、`signals=2`、`skipped=1`、`errors=0`、`valid=true`。
+  - `GET /` 返回 HTTP 200，`Content-Type: text/html; charset=utf-8`，`Content-Length: 171`。
+  - `GET /api/can/status` 返回 HTTP 200，`status=0`、`tx=23`、`rx=0`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`；本轮未用 Windows CANtest 复核外部 RX。
+- ST-Link/OpenOCD 当前读数：
+  - `g_w5500_http_dbc_candidate_load_result=0`。
+  - `g_w5500_http_dbc_upload_result=0`。
+  - `g_w5500_http_dbc_candidate_valid=1`、`candidate_read_len=0xA4`。
+  - 上传报告变量：`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA4`、`upload_count=1`。
+  - TF 替换/写入变量：`g_tf_replace_rename_result=0`、`g_tf_replace_backup_rename_result=0`、`g_tf_replace_unlink_result=0`、`g_tf_replace_restore_result=0xffffffff`、`g_tf_write_len=0xA4`、`g_tf_write_open_result=0`、`g_tf_write_result=0`、`g_tf_write_close_result=0`。
+  - W5500 变量：`g_w5500_phycfgr=0xBF`、`g_w5500_version=4`、`g_w5500_network_configured=1`、`g_w5500_link_up=1`。
+  - CAN2 变量：`g_can2_send_result=0`、`g_can2_error_count=0`、`g_can2_bus_off=0`、`g_can2_tec=0`、`g_can2_rec=0`、`g_can2_rx_count=0`、`g_can2_tx_count=0x2C`。
+
+### 当前结论
+
+- 本轮最终功能符合目标：`POST /api/dbc/upload` 能保存 `/dbc/candidate.dbc`，再从 TF 读回候选文件并复用 portable parser 解析，板端 HTTP 和 ST-Link 诊断均确认 `signals=2/errors=0/valid=true`。
+- 当前仍未实现 `/dbc/active.dbc` 激活、活动 DBC 失败回滚、信号缓存接入或完整 Web UI；下一步应按计划设计活动文件切换和失败保持当前活动 DBC 不变。
+
+### 问题点
+
+- STM32 `nano.specs` 环境下 `sscanf("%lf")` 不能作为 DBC signal 浮点字段解析依据；已改为手写轻量十进制解析，并记录到 `05_Lessons.md`。
+- 当前上传仍是 socket0 单连接、1024 字节以内 text body，真实 DBC 文件仍需要后续分片、multipart 或 TF 流式写入策略。

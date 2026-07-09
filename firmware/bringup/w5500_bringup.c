@@ -1,6 +1,7 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "main.h"
+#include "dbc_parser.h"
 #include "platform/stm32h750_bringup.h"
 
 #include <stdio.h>
@@ -33,6 +34,9 @@ volatile uint32_t g_w5500_http_dbc_upload_messages = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_signals = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_skipped = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_errors = 0u;
+volatile uint32_t g_w5500_http_dbc_candidate_load_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_dbc_candidate_read_len = 0u;
+volatile uint32_t g_w5500_http_dbc_candidate_valid = 0u;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -117,6 +121,8 @@ static uint8_t g_w5500_bound;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
 static char g_http_response_body[384];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
+static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
+static DbcDatabase g_http_dbc_candidate_db;
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
   return w5500_port_read_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, value, 1u);
@@ -357,72 +363,37 @@ static bool http_parse_content_length(const char *request, const char *header_en
   return false;
 }
 
-static void dbc_parse_report_line(DbcUploadReport *report, const char *line) {
-  const char *trimmed = skip_http_space(line);
-  if (*trimmed == '\0') {
-    report->skipped++;
-    return;
-  }
-  if (strncmp(trimmed, "BO_ ", 4u) == 0) {
-    unsigned long id = 0u;
-    unsigned int dlc = 0u;
-    char name[32] = {0};
-    if (sscanf(trimmed, "BO_ %lu %31[^:]: %u", &id, name, &dlc) == 3 && dlc <= 64u) {
-      report->messages++;
-    } else {
-      report->errors++;
-    }
-    return;
-  }
-  if (strncmp(trimmed, "SG_ ", 4u) == 0) {
-    char name[32] = {0};
-    char endian = '\0';
-    char sign = '\0';
-    unsigned int start_bit = 0u;
-    unsigned int bit_length = 0u;
-    if (report->messages > 0u &&
-        sscanf(trimmed, "SG_ %31s : %u|%u@%c%c", name, &start_bit, &bit_length, &endian, &sign) == 5 &&
-        start_bit <= 511u &&
-        bit_length > 0u &&
-        bit_length <= 64u &&
-        (endian == '0' || endian == '1') &&
-        (sign == '+' || sign == '-')) {
-      report->signals++;
-    } else {
-      report->errors++;
-    }
-    return;
-  }
-  report->skipped++;
-}
-
-static void dbc_parse_upload_report(const uint8_t *data, size_t len, DbcUploadReport *report) {
-  size_t offset = 0u;
-  char line[128];
+static int dbc_load_candidate_report(DbcUploadReport *report) {
+  size_t read_len = 0u;
+  size_t line_count = 0u;
   memset(report, 0, sizeof(*report));
-  report->bytes = len;
-  while (offset < len) {
-    size_t line_len = 0u;
-    while (offset + line_len < len && data[offset + line_len] != '\n') {
-      ++line_len;
-    }
-    size_t copy_len = line_len;
-    if (copy_len > 0u && data[offset + copy_len - 1u] == '\r') {
-      --copy_len;
-    }
-    report->lines++;
-    if (copy_len >= sizeof(line)) {
-      report->errors++;
-    } else {
-      memcpy(line, &data[offset], copy_len);
-      line[copy_len] = '\0';
-      dbc_parse_report_line(report, line);
-    }
-    offset += line_len;
-    if (offset < len && data[offset] == '\n') {
-      ++offset;
-    }
+
+  g_w5500_http_dbc_candidate_load_result =
+    (uint32_t)stm32h750_tf_read_file_locked(W5500_HTTP_DBC_CANDIDATE_PATH,
+                                            (uint8_t *)g_http_dbc_candidate_buffer,
+                                            sizeof(g_http_dbc_candidate_buffer),
+                                            &read_len);
+  g_w5500_http_dbc_candidate_read_len = (uint32_t)read_len;
+  if (g_w5500_http_dbc_candidate_load_result != 0u) {
+    return 1;
   }
+  if (read_len > W5500_HTTP_UPLOAD_BODY_MAX) {
+    report->bytes = read_len;
+    report->errors = 1u;
+    g_w5500_http_dbc_candidate_valid = 0u;
+    return 2;
+  }
+
+  g_http_dbc_candidate_buffer[read_len] = '\0';
+  g_w5500_http_dbc_candidate_valid =
+    dbc_parse_text(&g_http_dbc_candidate_db, g_http_dbc_candidate_buffer, read_len, &line_count) ? 1u : 0u;
+  report->bytes = read_len;
+  report->lines = line_count;
+  report->messages = g_http_dbc_candidate_db.message_count;
+  report->signals = g_http_dbc_candidate_db.signal_count;
+  report->skipped = g_http_dbc_candidate_db.skipped_lines;
+  report->errors = g_http_dbc_candidate_db.error_lines;
+  return 0;
 }
 
 static int http_send_bytes(const uint8_t *data, size_t len) {
@@ -569,24 +540,28 @@ static void http_record_request(uint32_t path_code, uint16_t code) {
 static int http_handle_dbc_upload(const uint8_t *body_start, size_t content_length) {
   DbcUploadReport report;
 
-  dbc_parse_upload_report(body_start, content_length, &report);
   g_w5500_http_dbc_upload_result =
     (uint32_t)stm32h750_tf_replace_file_with_backup_locked(W5500_HTTP_DBC_UPLOAD_TMP_PATH,
                                                            W5500_HTTP_DBC_CANDIDATE_PATH,
                                                            W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH,
                                                            body_start,
                                                            content_length);
+  if (g_w5500_http_dbc_upload_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
+    return http_send_json_error(500u, "save_failed", "dbc tmp save failed");
+  }
+
+  if (dbc_load_candidate_report(&report) != 0) {
+    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
+    return http_send_json_error(500u, "candidate_load_failed", "dbc candidate load failed");
+  }
+
   g_w5500_http_dbc_upload_bytes = (uint32_t)report.bytes;
   g_w5500_http_dbc_upload_lines = (uint32_t)report.lines;
   g_w5500_http_dbc_upload_messages = (uint32_t)report.messages;
   g_w5500_http_dbc_upload_signals = (uint32_t)report.signals;
   g_w5500_http_dbc_upload_skipped = (uint32_t)report.skipped;
   g_w5500_http_dbc_upload_errors = (uint32_t)report.errors;
-
-  if (g_w5500_http_dbc_upload_result != 0u) {
-    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
-    return http_send_json_error(500u, "save_failed", "dbc tmp save failed");
-  }
 
   const size_t response_len = build_dbc_upload_body(g_http_response_body, sizeof(g_http_response_body), &report);
   if (response_len >= sizeof(g_http_response_body)) {

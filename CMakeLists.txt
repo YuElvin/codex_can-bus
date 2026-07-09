@@ -82,6 +82,8 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
     ${STM32_HAL_SOURCES}
+    src/core/dbc_parser.c
+    src/core/signal_codec.c
     src/ports/can_port.c
     src/ports/tf_card_port.c
     src/ports/w5500_port.c

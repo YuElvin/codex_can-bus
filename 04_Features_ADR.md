@@ -10,8 +10,8 @@
 | F-004 | W25Q128 QSPI | [客观已验证] | 当前验证通过；正式使用前处理测试扇区擦写问题 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务和状态打印任务已上板复核；完整队列/mutex 架构待实现 |
-| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/`、`/index.html`、`POST /api/dbc/upload` 已烧录验证；上传接口当前保存 `/dbc/candidate.dbc` 并返回轻量解析报告 |
-| F-008 | DBC 解析和信号缓存 | [部分客观已验证] | HTTP 上传候选文件命名、1024 字节上限和候选替换回滚策略已明确；完整 DBC 数据库加载、`/dbc/active.dbc` 激活、信号缓存接入和配置生效仍待实现 |
+| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/`、`/index.html`、`POST /api/dbc/upload` 已烧录验证；上传接口已改为保存后读回 `/dbc/candidate.dbc` 并返回 parser 报告 |
+| F-008 | DBC 解析和信号缓存 | [部分客观已验证] | HTTP 上传候选文件命名、1024 字节上限和候选替换回滚策略已明确；已烧录验证 portable parser 候选读回解析；`/dbc/active.dbc` 激活、信号缓存接入和配置生效仍待实现 |
 | F-009 | 日志和规则引擎 | [待实现] | 依赖 TF 稳定写入、信号缓存和任务拆分 |
 
 ## ADR 索引

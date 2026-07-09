@@ -26,7 +26,7 @@
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
-| 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回轻量解析报告 |
+| 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc`，本轮已改为读回候选文件并用 portable parser 返回报告 |
 | 10 | 实时解码、日志、规则 | [待实现] | Web 显示信号，CSV 稳定写入，继电器规则可验证 |
 
 ## 非目标
@@ -44,4 +44,5 @@
 | W5500 网络服务阻塞 CAN | 当前 HTTP 仍是 socket0 单连接轮询；后续用单网络任务或 mutex 限制临界区 |
 | TF/FatFs 并发损坏 | 后续用全局 `fs_mutex` 和 tmp+rename 保存策略 |
 | DBC 上传过大或半包 | 当前仅支持 1024 字节以内、单连接完整请求体；body 未收全时等待下一轮轮询，不作为完整上传系统；候选文件替换采用 `/dbc/upload.write.tmp` -> `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc` |
+| DBC 数据库 RAM 占用 | 本轮候选解析静态保留 `DbcDatabase`，RAM_D1 已升至 25.12%；扩大 parser 上限或引入活动/候选双库前必须复查内存 |
 | QSPI 自检擦写正式数据 | 正式存储前移除或改成按需触发 |
