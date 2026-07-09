@@ -90,6 +90,11 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
+#define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
+#define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
+#define W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH "/dbc/candidate.prev.dbc"
+#define W5500_HTTP_DBC_ACTIVE_PATH "/dbc/active.dbc"
+#define W5500_HTTP_DBC_ACTIVE_BACKUP_PATH "/dbc/active.prev.dbc"
 #define W5500_HTTP_STATIC_OK 0
 #define W5500_HTTP_STATIC_SEND_ERROR 1
 #define W5500_HTTP_STATIC_NOT_FOUND 2
@@ -291,9 +296,15 @@ static size_t build_error_body(char *body, size_t len, const char *code, const c
 static size_t build_dbc_upload_body(char *body, size_t len, const DbcUploadReport *report) {
   return (size_t)snprintf(body,
                           len,
-                          "{\"ok\":true,\"data\":{\"path\":\"/dbc/upload.tmp\",\"bytes\":%lu,"
+                          "{\"ok\":true,\"data\":{\"candidate\":\"%s\",\"candidateBackup\":\"%s\","
+                          "\"active\":\"%s\",\"activeBackup\":\"%s\",\"maxBytes\":%lu,\"bytes\":%lu,"
                           "\"lines\":%lu,\"messages\":%lu,\"signals\":%lu,"
                           "\"skipped\":%lu,\"errors\":%lu,\"valid\":%s}}",
+                          W5500_HTTP_DBC_CANDIDATE_PATH,
+                          W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH,
+                          W5500_HTTP_DBC_ACTIVE_PATH,
+                          W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
+                          (unsigned long)W5500_HTTP_UPLOAD_BODY_MAX,
                           (unsigned long)report->bytes,
                           (unsigned long)report->lines,
                           (unsigned long)report->messages,
@@ -560,10 +571,11 @@ static int http_handle_dbc_upload(const uint8_t *body_start, size_t content_leng
 
   dbc_parse_upload_report(body_start, content_length, &report);
   g_w5500_http_dbc_upload_result =
-    (uint32_t)stm32h750_tf_replace_file_locked("/dbc/upload.write.tmp",
-                                               "/dbc/upload.tmp",
-                                               body_start,
-                                               content_length);
+    (uint32_t)stm32h750_tf_replace_file_with_backup_locked(W5500_HTTP_DBC_UPLOAD_TMP_PATH,
+                                                           W5500_HTTP_DBC_CANDIDATE_PATH,
+                                                           W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH,
+                                                           body_start,
+                                                           content_length);
   g_w5500_http_dbc_upload_bytes = (uint32_t)report.bytes;
   g_w5500_http_dbc_upload_lines = (uint32_t)report.lines;
   g_w5500_http_dbc_upload_messages = (uint32_t)report.messages;

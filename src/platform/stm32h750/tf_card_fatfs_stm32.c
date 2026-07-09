@@ -23,6 +23,8 @@ volatile uint32_t g_tf_write_close_result;
 volatile uint32_t g_tf_write_len;
 volatile uint32_t g_tf_replace_unlink_result;
 volatile uint32_t g_tf_replace_rename_result;
+volatile uint32_t g_tf_replace_backup_rename_result;
+volatile uint32_t g_tf_replace_restore_result;
 volatile uint32_t g_tf_read_open_result;
 volatile uint32_t g_tf_read_result;
 volatile uint32_t g_tf_read_close_result;
@@ -325,14 +327,18 @@ int stm32h750_tf_read_file_chunk_locked(const char *path,
   return g_tf_read_result == FR_OK && g_tf_read_close_result == FR_OK ? 0 : 1;
 }
 
-int stm32h750_tf_replace_file_locked(const char *tmp_path,
-                                     const char *final_path,
-                                     const uint8_t *data,
-                                     size_t len) {
+static int tf_replace_file_locked(const char *tmp_path,
+                                  const char *final_path,
+                                  const char *backup_path,
+                                  const uint8_t *data,
+                                  size_t len) {
   FIL file;
   UINT written = 0u;
   char tmp_full_path[64];
   char final_full_path[64];
+  char backup_full_path[64];
+  uint8_t backup_available = 0u;
+  uint8_t final_was_backed_up = 0u;
   const Stm32TfCardContext ctx = {
     .fs = NULL,
     .logical_drive = SDPath,
@@ -341,9 +347,17 @@ int stm32h750_tf_replace_file_locked(const char *tmp_path,
   if (tmp_path == NULL || final_path == NULL || data == NULL || len == 0u ||
       build_fatfs_path(&ctx, tmp_path, tmp_full_path, sizeof(tmp_full_path)) != TF_CARD_OK ||
       build_fatfs_path(&ctx, final_path, final_full_path, sizeof(final_full_path)) != TF_CARD_OK ||
+      (backup_path != NULL &&
+       build_fatfs_path(&ctx, backup_path, backup_full_path, sizeof(backup_full_path)) != TF_CARD_OK) ||
       tf_fs_lock() != 0) {
     return 1;
   }
+
+  g_tf_replace_unlink_result = 0xffffffffu;
+  g_tf_replace_rename_result = 0xffffffffu;
+  g_tf_replace_backup_rename_result = 0xffffffffu;
+  g_tf_replace_restore_result = 0xffffffffu;
+  backup_available = backup_path != NULL ? 1u : 0u;
 
   g_tf_write_open_result = f_open(&file, tmp_full_path, FA_CREATE_ALWAYS | FA_WRITE);
   if (g_tf_write_open_result != FR_OK) {
@@ -359,15 +373,57 @@ int stm32h750_tf_replace_file_locked(const char *tmp_path,
     return 1;
   }
 
-  g_tf_replace_unlink_result = f_unlink(final_full_path);
-  if (g_tf_replace_unlink_result != FR_OK && g_tf_replace_unlink_result != FR_NO_FILE) {
-    (void)f_unlink(tmp_full_path);
-    tf_fs_unlock();
-    return 1;
+  if (backup_available != 0u) {
+    g_tf_replace_unlink_result = f_unlink(backup_full_path);
+    if (g_tf_replace_unlink_result != FR_OK && g_tf_replace_unlink_result != FR_NO_FILE) {
+      (void)f_unlink(tmp_full_path);
+      tf_fs_unlock();
+      return 1;
+    }
+
+    g_tf_replace_backup_rename_result = f_rename(final_full_path, backup_full_path);
+    if (g_tf_replace_backup_rename_result == FR_OK) {
+      final_was_backed_up = 1u;
+    } else if (g_tf_replace_backup_rename_result != FR_NO_FILE) {
+      (void)f_unlink(tmp_full_path);
+      tf_fs_unlock();
+      return 1;
+    }
+  } else {
+    g_tf_replace_unlink_result = f_unlink(final_full_path);
+    if (g_tf_replace_unlink_result != FR_OK && g_tf_replace_unlink_result != FR_NO_FILE) {
+      (void)f_unlink(tmp_full_path);
+      tf_fs_unlock();
+      return 1;
+    }
   }
+
   g_tf_replace_rename_result = f_rename(tmp_full_path, final_full_path);
+  if (g_tf_replace_rename_result == FR_OK) {
+    tf_fs_unlock();
+    return 0;
+  }
+
+  if (final_was_backed_up != 0u) {
+    g_tf_replace_restore_result = f_rename(backup_full_path, final_full_path);
+  }
   tf_fs_unlock();
-  return g_tf_replace_rename_result == FR_OK ? 0 : 1;
+  return 1;
+}
+
+int stm32h750_tf_replace_file_locked(const char *tmp_path,
+                                     const char *final_path,
+                                     const uint8_t *data,
+                                     size_t len) {
+  return tf_replace_file_locked(tmp_path, final_path, NULL, data, len);
+}
+
+int stm32h750_tf_replace_file_with_backup_locked(const char *tmp_path,
+                                                 const char *final_path,
+                                                 const char *backup_path,
+                                                 const uint8_t *data,
+                                                 size_t len) {
+  return tf_replace_file_locked(tmp_path, final_path, backup_path, data, len);
 }
 
 int stm32h750_tf_ensure_default_www(void) {

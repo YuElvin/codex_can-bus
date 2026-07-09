@@ -14,3 +14,4 @@
 - L-012：静态文件从 TF 分块读取时，验证不要只看 `curl` 返回 200；还要用反汇编确认 `http_handle_request` 走文件大小读取、循环 `f_lseek/f_read` 和多次 `SEND` 路径，并用 ST-Link 读取 `g_w5500_http_static_file_size/g_w5500_http_static_bytes_sent`。
 - L-013：HTTP 上传接口要先处理 RX 半包边界；`Content-Length` 对应 body 未完整到达时不能推进 `S0_RX_RD`，否则会消费掉未完成请求并关闭连接。
 - L-014：把大 HTTP 请求/响应缓冲放入静态 BSS，避免 W5500 任务在上传路径叠加 FatFs `FIL` 栈帧后逼近 4KB 任务栈。
+- L-015：DBC 上传进入可复用配置流程前，先把文件策略写进源码常量和接口响应；当前候选文件为 `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc`，活动文件预留为 `/dbc/active.dbc`。

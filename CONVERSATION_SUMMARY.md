@@ -810,3 +810,107 @@
 - 已提交 `eeb7029 Add minimal DBC upload API`，提交范围包含 DBC 上传最小接口源码、FatFs tmp+rename 保存函数、治理/架构文档和对话记录。
 - 已推送到 `origin/codex/W5500`，远端从 `f23a985` 更新到 `eeb7029`。
 - 提交后为记录本提交/推送结果，本文件将追加一次记录型文档更新；该记录不修改固件源码，因此不需要重新编译和反汇编。
+
+## 2026-07-08 23:24:00 +08:00
+
+### 用户请求
+
+- 委托继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 当前已提交推送到 `origin/codex/W5500`，最新提交 `7c37a2c Record DBC upload push`，功能提交 `eeb7029 Add minimal DBC upload API`。
+- 要求先按 `AGENTS.md` 读取治理文档和当前记录，再继续：把 DBC 上传从轻量报告推进到可复用解析/配置流程前，先明确文件大小上限、最终文件命名和失败回滚策略；不要一次性加入完整 Web UI。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮不做完整 DBC parser 加载、信号缓存接入、Web UI、分片上传或并发 HTTP；仍沿用当前单请求上传能力，明确当前上限和文件策略。
+- 成功标准：源码常量、HTTP 响应、TF 文件替换逻辑和文档一致；上传候选文件从模糊 `/dbc/upload.tmp` 改为 `/dbc/candidate.dbc`；旧候选可备份到 `/dbc/candidate.prev.dbc`，新候选 rename 失败时尝试恢复；预留 `/dbc/active.dbc` 和 `/dbc/active.prev.dbc` 给后续激活流程。
+- 验证方式：读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-size/nm/objdump/strings` 做关键路径反汇编和常量检查；OpenOCD 烧录；主机 `route/ping/curl/arp`；OpenOCD `mdw` 读取上传、FatFs 替换、W5500 和 CAN2 诊断变量。
+
+### 实际操作
+
+1. 确认 `/Users/elvin/Desktop/project/can_bus` 实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，当前分支 `codex/W5500...origin/codex/W5500`，起始工作区干净，HEAD 为 `7c37a2c Record DBC upload push`。
+2. 读取治理文档、当前上下文、经验记录、工程规则、项目计划、ADR、架构文档和对话摘要；确认阶段 9 当前下一步是先明确 DBC 上传文件策略。
+3. 在 `firmware/bringup/w5500_bringup.c` 中新增 DBC 上传策略常量：
+   - 当前单请求 body 上限保持 `1024` 字节。
+   - 写入临时文件为 `/dbc/upload.write.tmp`。
+   - 当前可复用候选文件为 `/dbc/candidate.dbc`。
+   - 当前候选备份为 `/dbc/candidate.prev.dbc`。
+   - 后续活动 DBC 预留 `/dbc/active.dbc`，活动备份预留 `/dbc/active.prev.dbc`。
+4. `POST /api/dbc/upload` 保存目标改为带备份替换 `/dbc/candidate.dbc`，响应改为返回 `candidate/candidateBackup/active/activeBackup/maxBytes/bytes/lines/messages/signals/skipped/errors/valid`。
+5. 在 `src/platform/stm32h750/tf_card_fatfs_stm32.c` 新增 `stm32h750_tf_replace_file_with_backup_locked()`：
+   - 写入 tmp 后先删除旧备份，允许 `FR_NO_FILE`。
+   - 若旧候选存在，先 rename 到备份。
+   - 再 rename 新 tmp 到候选。
+   - 新候选 rename 失败时，在同一个 FatFs mutex 锁内尝试把备份恢复回候选。
+   - 新增诊断变量 `g_tf_replace_backup_rename_result`、`g_tf_replace_restore_result`。
+6. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录当前 1024 字节上限、候选/活动命名和失败回滚边界。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `61560 B / 128 KB = 46.97%`，RAM_D1 `105016 B / 512 KB = 20.03%`。
+  - ELF 尺寸：`text=61364`、`data=188`、`bss=104828`、`dec=166380`。
+- ELF 符号确认存在：`tf_replace_file_locked`、`stm32h750_tf_replace_file_with_backup_locked`、`g_tf_replace_restore_result`、`g_tf_replace_backup_rename_result`、`g_w5500_http_dbc_upload_*`。
+- 反汇编和字符串检查结论：
+  - `tf_replace_file_locked` 包含 `tf_fs_lock`、`f_open`、`f_write`、`f_close`、备份 `f_unlink/f_rename`、新候选 `f_rename`、失败回滚 `f_rename`、`tf_fs_unlock`。
+  - `w5500_http_status_poll` 上传路径调用 `stm32h750_tf_replace_file_with_backup_locked`。
+  - 上传响应路径中可见 `candidateBackup`、`activeBackup` 和 `maxBytes`，并确认常量 `1024` 进入响应构造。
+  - ELF 字符串包含 `/dbc/upload.write.tmp`、`/dbc/candidate.dbc`、`/dbc/candidate.prev.dbc`、`/dbc/active.dbc`、`/dbc/active.prev.dbc`。
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，最终目标电压约 `3.250368 V`。
+- 主机网络验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，最终延迟约 `0.635-1.151 ms`。
+  - `curl -i http://192.168.1.88/api/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - `curl -i -H 'Content-Type: text/plain' --data-binary <小 DBC 文本> http://192.168.1.88/api/dbc/upload` 返回 `HTTP/1.1 200 OK`，JSON 显示 `candidate=/dbc/candidate.dbc`、`candidateBackup=/dbc/candidate.prev.dbc`、`active=/dbc/active.dbc`、`activeBackup=/dbc/active.prev.dbc`、`maxBytes=1024`、`bytes=164`、`lines=4`、`messages=1`、`signals=2`、`skipped=1`、`errors=0`、`valid=true`。
+  - 修正响应字段前的中间固件曾在上传后紧接一次 `GET /` 出现 `curl: (56) Recv failure: Connection reset by peer`；最终固件重烧后复查 `/` 直接返回 `HTTP/1.1 200 OK`、`Content-Type: text/html; charset=utf-8`、`Content-Length: 171`。
+  - `curl -i http://192.168.1.88/api/can/status` 返回 `HTTP/1.1 200 OK`，JSON 显示 `status=0`、`tx=17`、`rx=16`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。
+  - ARP 显示 `192.168.1.88` MAC 为 `02:00:00:12:34:56`。
+- ST-Link/OpenOCD 当前读数：
+  - `g_w5500_http_dbc_upload_result=0`。
+  - `g_tf_replace_rename_result=0`、`g_tf_replace_backup_rename_result=0`、`g_tf_replace_unlink_result=0`、`g_tf_replace_restore_result=0xffffffff`；其中 `restore=0xffffffff` 表示本次未触发回滚。
+  - `g_tf_write_len=0xA4`、`g_tf_write_open_result=0`、`g_tf_write_result=0`、`g_tf_write_close_result=0`。
+  - 上传报告变量：`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA4`、`upload_count=1`。
+  - HTTP 最近请求变量在最后一次 `/api/can/status` 后为 `last_code=200`、`last_path=2`、`request_count=4`、`network_configured=1`、`link_up=1`。
+  - W5500 变量复查：`g_w5500_phycfgr=0xBF`、`g_w5500_version=4`。
+  - CAN2 变量复查：`g_can2_send_result=0`、`g_can2_rec=0`、`g_can2_tec=0`、`g_can2_bus_off=0`、`g_can2_error_count=0`、`g_can2_rx_count=0x0F`、`g_can2_tx_count=0x10`；后续 `/api/can/status` 复查增长到 `tx=29/rx=28`。
+
+### 当前结论
+
+- 本轮已把 DBC 上传从“轻量报告 + 模糊 upload.tmp”推进到明确的候选配置文件策略：当前最大单请求 body 为 1024 字节，候选文件为 `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc`，活动文件预留为 `/dbc/active.dbc`。
+- 当前上传、候选替换、HTTP 状态、静态页、CAN2 状态、W5500 链路和 TF 写入诊断均通过烧录后验证。
+- 本轮未执行 Windows CANtest 外部工具复核；当前 CAN2 回归依据为 `/api/can/status` 与 ST-Link 变量。若后续修改 CAN 收发或任务调度，仍需用户侧 CANtest 再确认。
+
+### 问题点
+
+- HTTP 仍是 socket0 单连接最小实现；虽然最终顺序 curl 已通过，后续做更复杂 Web/API 前仍需要继续处理 socket 状态恢复、请求节流和更完整的错误路径。
+- 1024 字节上限只适合最小 DBC 验证，不适合真实 DBC 文件；后续需要 multipart、分片或 TF 流式写入策略。
+- 当前仍未实现 `/dbc/active.dbc` 激活、完整 DBC parser 文件加载、信号缓存接入和配置任务切换。
+
+## 2026-07-09 23:16:07 +08:00
+
+### 用户请求
+
+- 用户询问当前功能是否符合当前进度目标；如果符合，则提交推送，并新开一个对话继续按计划开发。
+
+### 符合性判断
+
+- 当前功能符合本阶段小步目标：DBC 上传已经从轻量报告推进到明确的候选配置文件策略，当前单请求 body 上限为 1024 字节，候选文件为 `/dbc/candidate.dbc`，候选备份为 `/dbc/candidate.prev.dbc`，活动文件预留为 `/dbc/active.dbc`，活动备份预留为 `/dbc/active.prev.dbc`。
+- 当前目标不包含完整 DBC 激活、分片上传、完整 Web UI、完整 parser 文件加载或信号缓存接入；这些仍是下一步计划。
+
+### 提交前验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过；STM32 固件构建为 `ninja: no work to do`，沿用已验证的 `build/stm32h750/can_bus_gateway_stm32h750.elf`。
+- ELF 尺寸复查：`text=61364`、`data=188`、`bss=104828`、`dec=166380`。
+- 符号和反汇编复查：
+  - 存在 `tf_replace_file_locked`、`stm32h750_tf_replace_file_with_backup_locked`、`g_tf_replace_restore_result`、`g_tf_replace_backup_rename_result`、`g_w5500_http_dbc_upload_*`。
+  - ELF 字符串包含 `/dbc/upload.write.tmp`、`/dbc/candidate.dbc`、`/dbc/candidate.prev.dbc`、`/dbc/active.dbc`、`/dbc/active.prev.dbc`、`candidateBackup`、`activeBackup`、`maxBytes`。
+  - `w5500_http_status_poll` 上传路径调用 `stm32h750_tf_replace_file_with_backup_locked`，并保留 `1024` 字节上限进入响应构造。
+- 本次提交前未重新烧录；硬件结果沿用本轮已完成的 OpenOCD 烧录、HTTP curl、ping、ARP 和 ST-Link 读数，记录见上一节。
+
+### 提交准备
+
+- 准备提交范围为 DBC 候选文件策略源码、FatFs 带备份替换函数、治理/架构文档和本对话记录。
+- 计划提交到当前分支 `codex/W5500` 并推送到 `origin/codex/W5500`。
