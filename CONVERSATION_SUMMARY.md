@@ -1385,3 +1385,8 @@
 ### 当前结论
 
 - 最小只读实时信号 API 符合当前阶段目标，证明持续外部 CAN 帧可经 DBC 解码后从 HTTP 获取；未实现 filter/page、日志、规则、下载或配置写入。
+
+### 提交推送结果
+
+- 已提交 `de581dc Expose decoded signals through HTTP`，并推送到 `origin/codex/W5500`。
+- 本段只记录提交推送结果，不修改固件源码；无需重新编译或反汇编。
