@@ -1328,3 +1328,11 @@
 - 外部 RX 证据未出现：`g_can2_rx_count=0`、`g_can2_rx_id=0`、`g_can2_rx_dlc=0`、`g_can2_rx_first_byte=0`、`g_can2_dbc_rx_frame_count=0`。因此本轮不能确认 CANtest 已发帧，也不能把外部 RX 解码写为通过。
 - 同期仅有 TX self-test：`attempts=8`、`tx_self_test=8`、`matched=8`、`signal_updates=16`、`cache=2`、`decode_errors=0`、`last_message_id=0x321`。这些值证明板端发送帧的自测解码，不是外部 RX 证据。
 - 本轮未修改固件源码；未扩展功能、未等待 CANtest 发送。后续若需完成该现场验收，应在 CANtest 保持 500 kbit/s classic CAN 并发送上述标准帧期间重新读取，且必须看到 `g_can2_dbc_rx_frame_count` 及相关外部 RX 计数增长。
+
+## 2026-07-10 18:44 +08:00
+
+### 外部 RX 复查
+
+- 未重新烧录或修改固件，只通过 OpenOCD 暂停读取现有运行态诊断。
+- `g_can2_dbc_rx_frame_count=0`、CAN2 RX 计数仍为 0；TX self-test=8、matched=8、signal_updates=16、cache=2、decode_errors=0，与上一轮一致。
+- 外部 CANtest 尚未向板端输入可见帧，外部 RX→DBC→SignalCache 验收继续未验证，不能推进到下一功能阶段。
