@@ -1336,3 +1336,11 @@
 - 未重新烧录或修改固件，只通过 OpenOCD 暂停读取现有运行态诊断。
 - `g_can2_dbc_rx_frame_count=0`、CAN2 RX 计数仍为 0；TX self-test=8、matched=8、signal_updates=16、cache=2、decode_errors=0，与上一轮一致。
 - 外部 CANtest 尚未向板端输入可见帧，外部 RX→DBC→SignalCache 验收继续未验证，不能推进到下一功能阶段。
+
+## 2026-07-10 18:45 +08:00
+
+### 外部条件阻断确认
+
+- 第三次连续只读 OpenOCD 诊断仍显示 `g_can2_dbc_rx_frame_count=0`、CAN2 RX=0；同时 TX self-test=57、matched=57、signal_updates=114、cache=2、decode_errors=0。
+- 固件、DBC runtime 和自检解码均在运行，但没有来自 Windows CANtest 的外部输入，因而无法客观完成外部 RX→DBC→SignalCache 验收。
+- 后续恢复条件：Windows CANtest 以 500 kbit/s classic CAN 向 `PB5/FDCAN2_RX` 持续发送标准帧 `0x321`、数据 `C2 A5 34 12 02 03 04 05`；恢复后先读取 RX 来源、匹配、更新和缓存诊断，再推进下一阶段。
