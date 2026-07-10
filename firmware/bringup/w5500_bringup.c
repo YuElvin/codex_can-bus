@@ -3,6 +3,7 @@
 #include "main.h"
 #include "dbc_parser.h"
 #include "platform/stm32h750_bringup.h"
+#include "signal_api.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -57,6 +58,7 @@ volatile uint32_t g_w5500_http_dbc_runtime_errors = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_valid = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_generation = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_active_slot = 0xffffffffu;
+volatile uint32_t g_w5500_http_signals_count = 0u;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -113,6 +115,7 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_DBC_UPLOAD 4u
 #define W5500_HTTP_PATH_DBC_ACTIVE 5u
 #define W5500_HTTP_PATH_DBC_RUNTIME 6u
+#define W5500_HTTP_PATH_SIGNALS 7u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
@@ -142,7 +145,7 @@ static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
 static uint8_t g_w5500_bound;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
-static char g_http_response_body[384];
+static char g_http_response_body[640];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
 static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
@@ -384,6 +387,13 @@ static size_t build_dbc_runtime_body(char *body, size_t len) {
                           (unsigned long)g_w5500_http_dbc_runtime_signals,
                           (unsigned long)g_w5500_http_dbc_runtime_skipped,
                           (unsigned long)g_w5500_http_dbc_runtime_errors);
+}
+
+static size_t build_signals_body(char *body, size_t len) {
+  SignalCacheEntry entries[SIGNAL_API_MAX_ITEMS];
+  const size_t count = can2_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
+  g_w5500_http_signals_count = (uint32_t)count;
+  return signal_api_build_json(entries, count, body, len);
 }
 
 static const char *skip_http_space(const char *text) {
@@ -880,6 +890,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_DBC_RUNTIME;
     body_len = build_dbc_runtime_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/signals")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_SIGNALS;
+    body_len = build_signals_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {

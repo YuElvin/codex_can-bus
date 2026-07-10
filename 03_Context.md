@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-10 20:57 +08:00
+更新时间：2026-07-10 21:05 +08:00
 
 ## 当前仓库
 
@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
 | W5500 HTTP/API | [客观已验证] | 已烧录验证 `GET /api/status`、`GET /api/can/status`、`POST /api/dbc/upload` 返回 `HTTP/1.1 200 OK` JSON；未知路径返回 404 JSON |
+| 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
 | TF 静态文件服务 | [部分客观已验证] | 已启用 FatFs mutex，缺省创建 `/www/index.html`；`GET /` 和 `GET /index.html` 返回 `text/html` 默认页；固件已改为按文件大小循环 512 字节分块读取并多次 socket 发送 |
@@ -34,7 +35,7 @@
 
 - 后续继续拆分 TF/FatFs、QSPI、HTTP 和配置任务时，共享资源必须加串行化或 mutex。
 - 当前 HTTP 服务仍是 socket0 单连接最小实现，不支持并发连接、目录映射、HTTP Range、分块传输编码或通用上传；当前只把 `/` 和 `/index.html` 映射到 `/www/index.html`，只支持 `POST /api/dbc/upload` 的 1024 字节以内单请求体 DBC 上传。
-- DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 轮询的最小解码和 `SignalCache`，但没有实时信号 API、日志、规则或 ConfigTask。
+- DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 轮询、`SignalCache` 和最多两项的只读实时信号 API，但没有日志、规则或 ConfigTask。
 - 当前最小解码器在成功发送的 `0x321` 周期诊断帧上执行 TX self-test，也在外部 RX while-loop 上执行同一函数；两条路径均已验证且仍必须用独立来源计数区分。
 - 当前固件保留候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase` 和单个 `SignalCache`，最新固件 RAM_D1 占用为 `202512 B / 512 KB = 38.63%`；后续引入日志缓存、并发读者或扩大 parser 上限前必须继续复查内存并补齐同步边界。
 - 2026-07-08 22:34 当前复查中 `/api/can/status` 可访问，但现场读数为 `rx=0/errors=487/tec=128/sendResult=1`；2026-07-08 22:46 用户打开 CAN 分析仪收发后复查恢复为 `sendResult=0`、`rx_count=508`、`tx_count=728`、`tec=0`、`bus_off=0`。
@@ -43,6 +44,6 @@
 
 ## 下一步建议
 
-1. 下一步提供最小只读 `/api/signals`，从当前 `SignalCache` 返回实时物理值；保持单 socket、只读、无日志/规则/配置写入范围。
+1. 下一步实现最小 TF CSV 日志闭环：从 SignalCache 采样固定两项信号并在 FatFs mutex 下追加写入；先做小文件/短周期验证，不引入日志队列、下载接口或规则。
 2. 引入 QSPI 配置保存或日志任务前，继续补齐 mutex/队列边界。
 3. 后续扩展静态文件服务时再处理目录映射、Content-Type 映射和并发连接，不要把当前 socket0 实现当作完整 Web 服务。

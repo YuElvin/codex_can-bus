@@ -1359,3 +1359,29 @@
 
 - 外部 CANtest→FDCAN2_RX→active DBC→SignalCache 已客观验证完成；TX self-test 与外部 RX 仍保留独立计数，不混写证据。
 - 本轮未改固件源码，因此未重新编译、反汇编或烧录；验证对象是之前已烧录且持续运行的当前固件。下一步按计划实现最小只读实时信号 API。
+
+## 2026-07-10 20:59:50 +08:00
+
+### 用户请求与本轮边界
+
+- 基于已推送 `077589b` 继续开发最小只读 `GET /api/signals`：从现有 `SignalCache` 返回最多 2 个已解码信号的 `key`、物理值、`raw`、`unit`、`updated_ms` 和 `quality`；保持 W5500 socket0 单连接和固定小响应。
+- 明确不实现分页、filter、日志、规则、配置、完整 Web UI 或新的并发任务；外部 CANtest → FDCAN2_RX → active DBC → `SignalCache` 已是上一里程碑的客观前提，不重写为 TX self-test 结论。
+
+### 本轮假设、成功标准与验证方式
+
+- 假设：CAN2 周期任务是当前 `SignalCache` 的唯一写者，W5500 任务只复制前两个条目并序列化；复制时使用短临界区避免读到 CAN2 任务写入过程中的半更新数据。
+- 成功标准：主机单测覆盖空缓存、两个条目、字段和值以及固定 2 项上限；固件响应 `GET /api/signals` 为 HTTP 200 JSON，包含所需字段；编译、关键路径反汇编、烧录、持续 CANtest 外部帧、curl 和 ST-Link 读数均形成闭环。
+- 验证方式：先完成 `git diff --check` 和 `./scripts/verify.sh`，再检查 ELF 符号/反汇编、通过 OpenOCD 烧录并读取 HTTP、CAN2、DBC/缓存诊断变量；主机按单连接顺序执行 ping、curl 和 ARP 检查。
+
+### 实现与验证结果
+
+- 新增 portable `signal_api_build_json()` 和 `test_signal_api`：空缓存、两个字段完整的条目以及固定 2 项上限均由主机测试覆盖。
+- CAN2 侧新增 `can2_signal_cache_copy()`，在 FreeRTOS 短临界区内复制两个缓存项；`GET /api/signals` 路由复制后生成固定 640 B 以内 JSON，并记录 `g_w5500_http_signals_count`。
+- `./scripts/verify.sh` 通过，主机 CTest 10/10 通过；ELF `text=67812/data=204/bss=202568`，构建报告 FLASH `51.90%`、RAM_D1 `38.68%`。
+- 反汇编确认 `can2_signal_cache_copy()` 调用 `vPortEnterCritical()`、`signal_cache_copy()`、`vPortExitCritical()`；序列化函数限制最大项数为 2。
+- 当前固件已烧录并由 HTTP 实测：`GET /api/signals` 返回 HTTP 200、两个项目、字段 `key/value/raw/unit/updated_ms/quality` 与 `count=2`；本轮实际返回两项 `raw=65535/value=65535.000000/quality=ok`。`GET /api/can/status` 返回 HTTP 200，`rx=243/errors=0/busOff=0/tec=0/rec=0`。
+- 调试器会话曾遗留 OpenOCD/GDB 进程并占用 ST-Link，已终止遗留进程并执行 reset-run 恢复板端；此问题未影响 HTTP 或 CAN 运行结论。
+
+### 当前结论
+
+- 最小只读实时信号 API 符合当前阶段目标，证明持续外部 CAN 帧可经 DBC 解码后从 HTTP 获取；未实现 filter/page、日志、规则、下载或配置写入。

@@ -27,7 +27,7 @@
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
-| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC 已在 CAN2 轮询内解码到 `SignalCache`，TX self-test 和外部 CANtest RX 均已上板验证；Web 显示、CSV 与规则仍待实现 |
+| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC 已在 CAN2 轮询内解码到 `SignalCache`，TX self-test、外部 CANtest RX 和只读 `/api/signals` 均已上板验证；CSV 与规则仍待实现 |
 
 ## 非目标
 

@@ -7,6 +7,7 @@
 #include "dbc_parser.h"
 #include "ports/tf_card_port.h"
 #include "ports/w5500_port.h"
+#include "signal_cache.h"
 
 #include "ff.h"
 #include "stm32h7xx_hal.h"
@@ -61,6 +62,7 @@ int can_bringup_run(void);
 int can_external_bringup_run(void);
 int can2_analyzer_bringup_run(void);
 int can2_analyzer_poll(void);
+size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
 int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w5500_bringup_run(void);

@@ -119,7 +119,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.4 DBC 切换
 
-当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。激活成功后固件再次从 `/dbc/active.dbc` 读回，解析到非活动运行态槽，只有 `errors=0` 才切换 active DBC 指针、active slot 和 generation；加载失败或无效文件不替换既有运行态快照。该快照现已接入 CAN2 的最小解码和 `SignalCache`，但仍没有实时信号 API、日志、规则或配置任务。
+当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。激活成功后固件再次从 `/dbc/active.dbc` 读回，解析到非活动运行态槽，只有 `errors=0` 才切换 active DBC 指针、active slot 和 generation；加载失败或无效文件不替换既有运行态快照。该快照现已接入 CAN2 的最小解码、SignalCache 和只读 `GET /api/signals`，但仍没有日志、规则或配置任务。
 
 ### 5.5 日志
 
@@ -161,7 +161,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 | --- | --- | --- | --- |
 | GET | `/api/status` | 系统状态 | `{uptime,rtos,w5500,tf,qspi,heap}` |
 | GET | `/api/can/status` | CAN 状态 | `{bitrate,busOff,tec,rec,rx,tx}` |
-| GET | `/api/signals?filter=&page=1` | 实时信号 | `{items:[{name,value,unit,ts,timeout}]}` |
+| GET | `/api/signals` | 实时信号 | 当前最小实现：短临界区复制最多 2 个缓存项，返回 `{items:[{key,value,raw,unit,updated_ms,quality}],count}`；尚无 filter/page |
 | POST | `/api/dbc/upload` | 上传 DBC | 当前最小实现为 1024 字节以内 text body，保存 `/dbc/candidate.dbc`，旧候选备份 `/dbc/candidate.prev.dbc`，随后读回候选并用 portable parser 返回 `{ok,data:{candidate,candidateBackup,active,activeBackup,maxBytes,bytes,lines,messages,signals,skipped,errors,valid}}`；后续再扩展 multipart 或分片 |
 | GET | `/api/dbc` | DBC 列表 | `{files:[...]}` |
 | POST | `/api/dbc/active` | 激活 DBC | 当前最小实现为无请求体命令，激活 `/dbc/candidate.dbc` 到 `/dbc/active.dbc`，随后读回 active 文件并切换运行态 DBC 快照，返回 `{ok,data:{candidate,active,activeBackup,bytes,lines,messages,signals,skipped,errors,valid,activated,runtimeGeneration}}`；后续再扩展指定文件和运行态信号缓存切换 |
@@ -236,7 +236,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test 与外部 RX 解码已验证；Web 物理值和 CSV 待做 |
+| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test、外部 RX 解码和 `/api/signals` 已验证；CSV 待做 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 

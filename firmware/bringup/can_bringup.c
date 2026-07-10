@@ -3,6 +3,9 @@
 #include "platform/stm32h750_bringup.h"
 #include "dbc_decoder.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan2;
 
@@ -288,6 +291,14 @@ int can2_analyzer_poll(void) {
   }
   capture_can2_status();
   return g_can2_send_result == CAN_PORT_OK ? 0 : 1;
+}
+
+size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity) {
+  size_t count;
+  taskENTER_CRITICAL();
+  count = signal_cache_copy(&g_can2_signal_cache, out_entries, out_capacity);
+  taskEXIT_CRITICAL();
+  return count;
 }
 
 #endif
