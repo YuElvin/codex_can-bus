@@ -15,6 +15,7 @@ add_library(can_bus_core
   src/core/rule_engine.c
   src/core/signal_api.c
   src/core/signal_cache.c
+  src/core/signal_csv.c
   src/core/signal_codec.c
 )
 
@@ -88,6 +89,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/core/dbc_parser.c
     src/core/signal_api.c
     src/core/signal_cache.c
+    src/core/signal_csv.c
     src/core/signal_codec.c
     src/ports/can_port.c
     src/ports/tf_card_port.c
@@ -189,6 +191,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_signal_api tests/test_signal_api.c)
   target_link_libraries(test_signal_api PRIVATE can_bus_core)
   add_test(NAME signal_api COMMAND test_signal_api)
+
+  add_executable(test_signal_csv tests/test_signal_csv.c)
+  target_link_libraries(test_signal_csv PRIVATE can_bus_core)
+  add_test(NAME signal_csv COMMAND test_signal_csv)
 
   add_executable(test_can_port tests/test_can_port.c)
   target_link_libraries(test_can_port PRIVATE can_bus_ports)

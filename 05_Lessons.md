@@ -22,3 +22,4 @@
 - L-020：CAN 解码验证必须区分来源：成功发送的周期诊断帧可作为 TX self-test 验证 active DBC→decoder→`SignalCache`，不能替代外部 CANtest→FDCAN2_RX 验证；分别读取 `g_can2_dbc_tx_self_test_frame_count` 和 `g_can2_dbc_rx_frame_count`。
 - L-021：外部 CAN 解码验收至少要连续两次读取并确认 `g_can2_dbc_rx_frame_count`、matched 与 signal_updates 同步增长，同时核对 last RX ID/DLC；单次静态计数不能证明持续外部输入。
 - L-022：在当前 CAN2 单写者、W5500 单读者阶段，HTTP 读取 SignalCache 时用短 FreeRTOS 临界区复制固定小快照；不要直接序列化正在被 CAN2 任务更新的缓存结构。
+- L-023：最小 CSV 可复用同一 `can2_signal_cache_copy()` 快照和 FatFs mutex；空文件只写一次表头，后续在 `f_lseek(f_size())` 后追加。验收必须连续读取 `g_tf_csv_write_count/g_tf_csv_write_result/g_tf_csv_write_len/g_tf_csv_file_size`，同时确认 CAN RX、匹配和信号更新继续增长。

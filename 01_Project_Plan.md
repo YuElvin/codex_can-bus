@@ -27,7 +27,7 @@
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
-| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC 已在 CAN2 轮询内解码到 `SignalCache`，TX self-test、外部 CANtest RX 和只读 `/api/signals` 均已上板验证；CSV 与规则仍待实现 |
+| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC 已在 CAN2 轮询内解码到 `SignalCache`，TX self-test、外部 CANtest RX 和只读 `/api/signals` 均已上板验证；最小 CSV 已每约 1 秒追加最多两项快照到 `/log/signal.csv`，规则仍待实现 |
 
 ## 非目标
 
@@ -45,5 +45,5 @@
 | TF/FatFs 并发损坏 | 后续用全局 `fs_mutex` 和 tmp+rename 保存策略 |
 | DBC 上传过大或半包 | 当前仅支持 1024 字节以内、单连接完整请求体；body 未收全时等待下一轮轮询，不作为完整上传系统；候选文件替换采用 `/dbc/upload.write.tmp` -> `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc` |
 | DBC 解码验证边界 | 当前 active DBC 已接入 CAN2 解码和 `SignalCache`；TX self-test 与外部 CANtest `0x321` RX 均已验证，诊断继续保留来源计数，不能混写两类证据 |
-| DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase` 和单个 128 项 `SignalCache`，RAM_D1 为 38.63%；扩大 parser 上限、缓存或日志前必须复查内存 |
+| DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、单个 128 项 `SignalCache` 和最小 CSV 序列化，RAM_D1 为 38.78%；扩大 parser 上限、缓存或日志前必须复查内存 |
 | QSPI 自检擦写正式数据 | 正式存储前移除或改成按需触发 |

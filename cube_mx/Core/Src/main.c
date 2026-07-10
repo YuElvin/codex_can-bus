@@ -33,6 +33,7 @@
 
 #include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
+#include "signal_csv.h"
 #include "task.h"
 
 /* USER CODE END Includes */
@@ -68,6 +69,10 @@ volatile uint32_t g_can_task_started;
 volatile uint32_t g_can_task_loop_count;
 volatile uint32_t g_w5500_task_started;
 volatile uint32_t g_w5500_task_loop_count;
+volatile uint32_t g_tf_csv_write_count;
+volatile uint32_t g_tf_csv_write_result = 0xffffffffu;
+volatile uint32_t g_tf_csv_write_len;
+volatile uint32_t g_tf_csv_file_size;
 
 /* USER CODE END PV */
 
@@ -79,6 +84,7 @@ static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
+static void signal_csv_log_snapshot(void);
 
 /* USER CODE END PFP */
 
@@ -231,6 +237,41 @@ static void bringup_print_status(const char *phase)
   bringup_uart_write(line);
 }
 
+static void signal_csv_log_snapshot(void)
+{
+  static char csv_buffer[512];
+  SignalCacheEntry entries[SIGNAL_CSV_MAX_ITEMS];
+  size_t file_size = 0u;
+  const size_t count = can2_signal_cache_copy(entries, SIGNAL_CSV_MAX_ITEMS);
+  if (count == 0u) {
+    g_tf_csv_write_result = 2u;
+    g_tf_csv_write_len = 0u;
+    return;
+  }
+  if (stm32h750_tf_file_size_locked("/log/signal.csv", &file_size) != 0) {
+    file_size = 0u;
+  }
+  const size_t length = signal_csv_build_rows(entries,
+                                               count,
+                                               file_size == 0u,
+                                               csv_buffer,
+                                               sizeof(csv_buffer));
+  if (length == 0u) {
+    g_tf_csv_write_result = 3u;
+    g_tf_csv_write_len = 0u;
+    return;
+  }
+  g_tf_csv_write_len = (uint32_t)length;
+  g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked("/log/signal.csv",
+                                                                       (const uint8_t *)csv_buffer,
+                                                                       length,
+                                                                       &file_size);
+  g_tf_csv_file_size = (uint32_t)file_size;
+  if (g_tf_csv_write_result == 0u) {
+    ++g_tf_csv_write_count;
+  }
+}
+
 static void can2_periodic_task(void *argument)
 {
   (void)argument;
@@ -299,6 +340,7 @@ static void bringup_default_task(void *argument)
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000u));
     g_freertos_loop_count++;
+    signal_csv_log_snapshot();
     bringup_print_status("run");
   }
 }

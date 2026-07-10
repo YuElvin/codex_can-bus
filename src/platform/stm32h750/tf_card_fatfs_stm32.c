@@ -327,6 +327,39 @@ int stm32h750_tf_read_file_chunk_locked(const char *path,
   return g_tf_read_result == FR_OK && g_tf_read_close_result == FR_OK ? 0 : 1;
 }
 
+int stm32h750_tf_append_file_locked(const char *path,
+                                    const uint8_t *data,
+                                    size_t len,
+                                    size_t *file_size) {
+  FIL file;
+  UINT written = 0u;
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (path == NULL || data == NULL || len == 0u || file_size == NULL ||
+      build_fatfs_path(&ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+  g_tf_write_open_result = f_open(&file, full_path, FA_OPEN_ALWAYS | FA_WRITE);
+  if (g_tf_write_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_result = f_lseek(&file, f_size(&file));
+  if (g_tf_write_result == FR_OK) {
+    g_tf_write_result = f_write(&file, data, (UINT)len, &written);
+  }
+  *file_size = (size_t)f_size(&file);
+  g_tf_write_len = written;
+  g_tf_write_close_result = f_close(&file);
+  tf_fs_unlock();
+  return g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK && written == len ? 0 : 1;
+}
+
 static int tf_replace_file_locked(const char *tmp_path,
                                   const char *final_path,
                                   const char *backup_path,

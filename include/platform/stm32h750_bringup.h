@@ -40,6 +40,10 @@ int stm32h750_tf_read_file_chunk_locked(const char *path,
                                         uint8_t *data,
                                         size_t len,
                                         size_t *read_len);
+int stm32h750_tf_append_file_locked(const char *path,
+                                    const uint8_t *data,
+                                    size_t len,
+                                    size_t *file_size);
 int stm32h750_tf_replace_file_locked(const char *tmp_path,
                                      const char *final_path,
                                      const uint8_t *data,

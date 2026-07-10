@@ -1390,3 +1390,36 @@
 
 - 已提交 `de581dc Expose decoded signals through HTTP`，并推送到 `origin/codex/W5500`。
 - 本段只记录提交推送结果，不修改固件源码；无需重新编译或反汇编。
+
+## 2026-07-10 CSV 最小落盘
+
+### 用户请求与边界
+
+- 基于已推送 `231bbc3` 实现最小可验证 TF CSV 落盘：复用 `SignalCache` 快照和现有 FatFs mutex，在 bring-up 既有监控循环中约 1 秒一次追加当前最多两个已解码信号到 `/log/signal.csv`。
+- 不添加队列、配置、下载 API、规则引擎、新任务或对 `/api/signals` 的改动；必须完成 host test、STM32 构建、反汇编、烧录、连续 CANtest 和 ST-Link/HTTP 验证后提交推送。
+
+### 实际实现
+
+1. 新增 portable `signal_csv_build_rows()` 与 `test_signal_csv`：最多序列化两项，首写生成 `updated_ms,key,value,raw,unit,quality` 表头，字段使用 CSV 双引号转义，主机测试覆盖表头、两项上限、浮点/负值和引号字段。
+2. 新增 `stm32h750_tf_append_file_locked()`：在已有 `fs_mutex` 下执行 `f_open(FA_OPEN_ALWAYS|FA_WRITE)`、`f_lseek(f_size())`、`f_write`、`f_close`，用于追加而不覆盖 `/log/signal.csv`。
+3. `bringup_default_task` 的原 1 秒监控循环调用 `signal_csv_log_snapshot()`：以 `can2_signal_cache_copy()` 取得最多两项稳定快照，空文件附加一次表头，其余周期只追加数据行。
+4. 新增 ST-Link 全局变量：`g_tf_csv_write_count`、`g_tf_csv_write_result`、`g_tf_csv_write_len`、`g_tf_csv_file_size`；没有修改 `/api/signals`。
+
+### 构建与反汇编
+
+- `git diff --check` 通过；`./scripts/verify.sh` 通过，主机 CTest 11/11 通过（新增 `signal_csv`）。STM32 ELF 重新链接成功：FLASH `69348 B / 128 KB = 52.91%`，RAM_D1 `203296 B / 512 KB = 38.78%`，ELF `text=69132/data=208/bss=203088`。
+- `arm-none-eabi-nm` 确认 `signal_csv_build_rows`、`signal_csv_log_snapshot`、`stm32h750_tf_append_file_locked` 和四个 CSV 诊断变量存在。
+- `signal_csv_log_snapshot` 反汇编确认调用 `can2_signal_cache_copy()`、`stm32h750_tf_file_size_locked()`、`signal_csv_build_rows()` 和 `stm32h750_tf_append_file_locked()`，成功路径才递增写入次数；`bringup_default_task` 反汇编确认其位于 `vTaskDelay(1000)` 后、状态打印前。追加函数反汇编确认 `f_open`、`f_lseek`、`f_write`、`f_close` 与 unlock 路径。
+
+### 烧录和现场验证
+
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.250368 V`。
+- 首次尝试把 `reset run` 与读取命令写入同一个 OpenOCD `-c` 字符串，实际返回 `invalid command name "reset"`，没有取得变量读数；改为显式 `init` 和分离的 `-c halt/mdw/resume` 后读取正常。后两次 halt 仍提示既有 `target was in unknown state when halt was requested`，但 `mdw` 成功返回变量，且随后已 resume。
+- 首次有效 ST-Link 读取：`result=0`、`write_count=18`、`write_len=114`、`file_size=4334`；CAN2 `rx=20/tx=21`、缓存=2、匹配=40、信号更新=80、错误=0。
+- 间隔后第二次读取：`result=0`、`write_count=42`、`write_len=114`、`file_size=7070`；CAN2 `rx=46/tx=47`、缓存=2、匹配=92、信号更新=184、`sendResult=0/tec=0/rec=0/busOff=0`。CSV、外部 RX 解码和缓存更新均持续增长。
+- 主机路由到 `192.168.1.88` 走 `en2`；`ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，ARP 为 `02:00:00:12:34:56`。顺序 `GET /api/signals` 返回 HTTP 200 和两项数据；`GET /api/can/status` 返回 HTTP 200，`tx=34/rx=33/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+
+### 结论与后续
+
+- 最小 CSV 落盘符合本阶段目标：最多两项 `SignalCache` 快照以约 1 秒节奏在 FatFs mutex 下追加到 `/log/signal.csv`，现有实时信号 API 和外部 CAN 同时保持正常。
+- 当前实现仍是刻意最小的同步监控循环写入；没有专用 LogTask、队列、行缓冲、文件轮换、下载、配置、失败重试或规则。后续若扩展这些能力，先定义任务与共享资源边界。

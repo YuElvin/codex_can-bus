@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；TX self-test 与外部 CANtest RX FIFO 均已通过同一解码函数完成现场验证。本轮不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；TX self-test 与外部 CANtest RX FIFO 均已通过同一解码函数完成现场验证。既有 `bringup` 监控循环还会每约 1 秒复制最多两项快照，使用 FatFs mutex 追加 `/log/signal.csv`；本步不创建 LogTask、队列或日志缓冲。
 
 ### 4.2 目标任务拆分
 
@@ -123,7 +123,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.5 日志
 
-`LogTask` 按配置周期从信号缓存取快照，写入 RAM 行缓冲；达到 4-16KB 或 1s flush；文件按启动时间命名。TF 不可用时进入 `log_degraded` 状态并丢弃或环形缓存最近 N 行，同时统计丢弃次数。
+当前最小实现由 `bringup` 监控循环每约 1 秒从 `SignalCache` 复制最多两项，CSV 列为 `updated_ms,key,value,raw,unit,quality`，并在 FatFs mutex 下追加 `/log/signal.csv`。后续 `LogTask` 再按配置周期取快照、使用 RAM 行缓冲、批量 flush 与文件轮换；TF 不可用时再定义 `log_degraded`、丢弃/环形缓存和统计策略。
 
 ## 6. 共享资源与同步
 
@@ -236,7 +236,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test、外部 RX 解码和 `/api/signals` 已验证；CSV 待做 |
+| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test、外部 RX 解码、`/api/signals` 和最小 `/log/signal.csv` 追加均已验证；专用日志任务和规则待做 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
@@ -247,7 +247,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
-| TF/FatFs 并发损坏 | 全局 `fs_mutex`，写配置 tmp+rename，日志批量 flush |
+| TF/FatFs 并发损坏 | 全局 `fs_mutex`，当前 CSV 追加与 HTTP/DBC 文件操作共用该锁；后续 LogTask 再加入批量 flush |
 | W25Q128 上电自检擦写正式数据 | 正式配置备份前移除或改成按需触发最后扇区测试 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |
