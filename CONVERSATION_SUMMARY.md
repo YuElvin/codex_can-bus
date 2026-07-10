@@ -1297,3 +1297,12 @@
 - 已提交 `2f0b767 Decode active DBC frames into SignalCache`，包含 portable 解码器、主机单测、CAN2 TX self-test/RX 来源区分和全部同步文档。
 - 已推送到 `origin/codex/W5500`，远端从 `60c3734` 更新到 `2f0b767`。
 - 本段只补充提交推送事实，不改固件源码；不需要重新编译或反汇编。
+
+## 2026-07-10 18:35:52 +08:00
+
+### 最终复核
+
+- 在 `2f0b767` 后再次执行 `./scripts/verify.sh`：主机 CTest 9/9 通过，STM32 构建目录无待重建目标；对现有 ELF 的反汇编再次确认 TX self-test 与 RX FIFO 两条路径分别进入同一 `decode_can2_frame()`，核心解码器调用 `signal_cache_upsert()`。
+- 再次 OpenOCD 烧录当前 HEX 成功，输出 `Programming Finished`、`Verified OK`，目标电压 `3.251976 V`。
+- 重烧录后 ping 2/2 通过，`/api/status`、`/api/dbc/runtime`、`/api/can/status` 顺序访问均返回 HTTP 200；runtime 为 `bytes=151/messages=1/signals=2/errors=0`，CAN2 为 `tx=31/rx=0/errors=0/busOff=0`。
+- 最终 OpenOCD 读数：`rx_source=0`、`tx_self_test=41`、`last_message=0x321`、`cache=2`、`decode_errors=0`、`signal_updates=82`、`matched=41`、`attempts=41`；runtime `generation=1/valid=1/signals=2/messages=1`。该读数再次证明 TX self-test，不构成外部 RX 验证。

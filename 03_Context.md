@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-10 18:34 +08:00
+更新时间：2026-07-10 18:35 +08:00
 
 ## 当前仓库
 
@@ -20,7 +20,7 @@
 | DBC 上传最小接口 | [客观已验证] | `POST /api/dbc/upload` 保存 `/dbc/candidate.dbc` 后从 TF 读回候选并调用 portable `dbc_parse_text()` 生成报告；已烧录验证返回 `bytes=164/lines=4/messages=1/signals=2/errors=0/valid=true`，ST-Link 读数 `candidate_load_result=0/candidate_valid=1` |
 | DBC 活动文件激活 | [客观已验证] | `POST /api/dbc/active` 无请求体最小命令已烧录验证：读回候选、portable parser 确认为 `errors=0` 后写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；有效候选返回 `activated=true`，无效候选返回 `HTTP 400 candidate_invalid` |
 | DBC 运行态快照 | [客观已验证] | 固件启动后从 `/dbc/active.dbc` 读回并解析到运行态 `DbcDatabase` 双槽快照；2026-07-10 重烧录后 `GET /api/dbc/runtime` 返回 `loaded=true/generation=1/bytes=165/messages=1/signals=2/errors=0`，有效激活后 generation 递增，无效候选激活不替换 runtime |
-| 最小 DBC 解码到 SignalCache | [部分客观已验证] | 已将运行态 active DBC 接入 CAN2 周期轮询的 TX self-test 和外部 RX 共用解码路径；2026-07-10 烧录后以 active `0x321`/2 信号 DBC 验证 `tx_self_test=5`、`SignalCache=2`、`signal_updates=10`、`decode_errors=0`。外部 CANtest → FDCAN2_RX 的解码计数本轮为 0，尚未完成现场 RX 解码验证 |
+| 最小 DBC 解码到 SignalCache | [部分客观已验证] | 已将运行态 active DBC 接入 CAN2 周期轮询的 TX self-test 和外部 RX 共用解码路径；2026-07-10 最终重烧录后以 active `0x321`/2 信号 DBC 读取到 `tx_self_test=41`、`SignalCache=2`、`signal_updates=82`、`decode_errors=0`。外部 CANtest → FDCAN2_RX 的解码计数本轮为 0，尚未完成现场 RX 解码验证 |
 | W25Q128 | [客观已验证] | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
 | FreeRTOS 基础多任务拆分 | [客观已验证] | CAN2 周期任务、W5500 轮询任务和状态打印任务已编译/反汇编/烧录复核；任务启动标志为 1，loop 均递增 |
