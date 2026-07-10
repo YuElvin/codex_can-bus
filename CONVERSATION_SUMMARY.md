@@ -1306,3 +1306,25 @@
 - 再次 OpenOCD 烧录当前 HEX 成功，输出 `Programming Finished`、`Verified OK`，目标电压 `3.251976 V`。
 - 重烧录后 ping 2/2 通过，`/api/status`、`/api/dbc/runtime`、`/api/can/status` 顺序访问均返回 HTTP 200；runtime 为 `bytes=151/messages=1/signals=2/errors=0`，CAN2 为 `tx=31/rx=0/errors=0/busOff=0`。
 - 最终 OpenOCD 读数：`rx_source=0`、`tx_self_test=41`、`last_message=0x321`、`cache=2`、`decode_errors=0`、`signal_updates=82`、`matched=41`、`attempts=41`；runtime `generation=1/valid=1/signals=2/messages=1`。该读数再次证明 TX self-test，不构成外部 RX 验证。
+
+## 2026-07-10 18:41:39 +08:00
+
+### 用户请求
+
+- 按 `a73d132` 当前基线只执行烧录和 ST-Link 外部 CANtest → FDCAN2_RX → active DBC → `SignalCache` 现场读取；若 CANtest 未发送匹配帧，只记录未验证事实，不等待、不改代码。
+
+### 本轮假设、验证边界与实际操作
+
+- 假设外部 CANtest 可能正在或尚未向 `PB5/FDCAN2_RX` 发送 classic CAN `0x321`、8 字节 `C2 A5 34 12 02 03 04 05`；成功标准是 RX 来源的 `g_can2_dbc_rx_frame_count`、匹配计数、信号更新计数和缓存计数能以外部接收为来源增长。TX self-test 不作为 RX 证据。
+- 已确认真实工程根为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`、基线提交 `a73d13261132d7fa9f28e090576903becb12b290`，起始工作区干净。
+- 已执行 `./scripts/verify.sh`：主机 CTest 9/9 通过，STM32 构建为 `ninja: no work to do`；ELF 为 `text=66428/data=204/bss=202304`。
+- 已定向反汇编 `can2_analyzer_poll`、`decode_can2_frame` 和 `dbc_decode_frame_to_signal_cache`：发送成功时传入 `tx_self_test=true`；RX FIFO 循环传入 `false`；后者会更新 RX 来源计数并调用 portable decoder 与 `signal_cache_upsert()`。
+- 已通过 `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/stm32h750/can_bus_gateway_stm32h750.hex verify reset exit"` 烧录，输出 `Programming Finished`、`Verified OK`，目标电压 `3.250368 V`。之后执行 `reset run` 运行约 8 秒后 halt，并读取诊断全局变量。
+
+### ST-Link 读取结果与结论
+
+- FreeRTOS 与 CAN2 周期任务均已运行：`g_freertos_task_started=1`、`g_freertos_bringup_complete=1`、`g_can_task_started=1`、`g_can_task_loop_count=8`。
+- active DBC runtime 有效：`valid=1/generation=1/errors=0/messages=1/signals=2`。
+- 外部 RX 证据未出现：`g_can2_rx_count=0`、`g_can2_rx_id=0`、`g_can2_rx_dlc=0`、`g_can2_rx_first_byte=0`、`g_can2_dbc_rx_frame_count=0`。因此本轮不能确认 CANtest 已发帧，也不能把外部 RX 解码写为通过。
+- 同期仅有 TX self-test：`attempts=8`、`tx_self_test=8`、`matched=8`、`signal_updates=16`、`cache=2`、`decode_errors=0`、`last_message_id=0x321`。这些值证明板端发送帧的自测解码，不是外部 RX 证据。
+- 本轮未修改固件源码；未扩展功能、未等待 CANtest 发送。后续若需完成该现场验收，应在 CANtest 保持 500 kbit/s classic CAN 并发送上述标准帧期间重新读取，且必须看到 `g_can2_dbc_rx_frame_count` 及相关外部 RX 计数增长。
