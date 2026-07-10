@@ -10,6 +10,7 @@ option(CAN_BUS_BUILD_TESTS "Build host-side unit tests" ON)
 option(CAN_BUS_BUILD_STM32H750_FIRMWARE "Build STM32H750 firmware image" OFF)
 
 add_library(can_bus_core
+  src/core/dbc_decoder.c
   src/core/dbc_parser.c
   src/core/rule_engine.c
   src/core/signal_cache.c
@@ -82,7 +83,9 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
     ${STM32_HAL_SOURCES}
+    src/core/dbc_decoder.c
     src/core/dbc_parser.c
+    src/core/signal_cache.c
     src/core/signal_codec.c
     src/ports/can_port.c
     src/ports/tf_card_port.c
@@ -168,6 +171,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_dbc_parser tests/test_dbc_parser.c)
   target_link_libraries(test_dbc_parser PRIVATE can_bus_core)
   add_test(NAME dbc_parser COMMAND test_dbc_parser)
+
+  add_executable(test_dbc_decoder tests/test_dbc_decoder.c)
+  target_link_libraries(test_dbc_decoder PRIVATE can_bus_core)
+  add_test(NAME dbc_decoder COMMAND test_dbc_decoder)
 
   add_executable(test_rule_engine tests/test_rule_engine.c)
   target_link_libraries(test_rule_engine PRIVATE can_bus_core)

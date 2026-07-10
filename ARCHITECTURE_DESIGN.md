@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。本轮只移动运行态周期逻辑，不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；成功发送的 `0x321` 只作 TX self-test，外部 RX FIFO 也调用同一解码函数但尚未完成现场解码验证。本轮不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
 
 ### 4.2 目标任务拆分
 
@@ -100,7 +100,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 
 ### 5.1 CAN 接收
 
-FDCAN2 中断只释放 semaphore 或设置通知；`CanRxTask` 从硬件 FIFO 取帧，转换为统一 `CanFrame`，写入 `can_rx_q`；`DbcDecodeTask` 按 `(ide,id)` 查当前 DBC，生成 `SignalValue`，用双缓冲更新 `SignalCache`；规则、日志、Web 读取缓存快照。
+目标架构中，FDCAN2 中断只释放 semaphore 或设置通知；`CanRxTask` 从硬件 FIFO 取帧，转换为统一 `CanFrame`，写入 `can_rx_q`；`DbcDecodeTask` 按 `(ide,id)` 查当前 DBC，生成 `SignalValue`，用双缓冲更新 `SignalCache`；规则、日志、Web 读取缓存快照。当前最小实现尚未建队列：`can2_analyzer_poll()` 从 RX FIFO 得到帧后直接解码，成功发送的 `0x321` 也进入同一函数作 TX self-test；两者由独立来源计数区分。
 
 ### 5.2 CAN 发送
 
@@ -119,7 +119,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.4 DBC 切换
 
-当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。激活成功后固件再次从 `/dbc/active.dbc` 读回，解析到非活动运行态槽，只有 `errors=0` 才切换 active DBC 指针、active slot 和 generation；加载失败或无效文件不替换既有运行态快照。该最小快照仍未接入 CAN 帧解码、`SignalCache` 更新或配置任务。
+当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。激活成功后固件再次从 `/dbc/active.dbc` 读回，解析到非活动运行态槽，只有 `errors=0` 才切换 active DBC 指针、active slot 和 generation；加载失败或无效文件不替换既有运行态快照。该快照现已接入 CAN2 的最小解码和 `SignalCache`，但仍没有实时信号 API、日志、规则或配置任务。
 
 ### 5.5 日志
 
@@ -131,7 +131,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 | --- | --- | --- |
 | CAN RX/TX | FreeRTOS Queue，固定深度，如 RX 128、TX 64 | 中断/任务解耦，背压可统计 |
 | W5500 SPI/socket | 单 W5500 任务或 mutex | 防止多个任务同时访问 SPI/socket 寄存器 |
-| 信号缓存 | 双缓冲 + 版本号 + 短临界区换指针 | Web/规则/日志读取一致快照 |
+| 信号缓存 | 当前为 CAN2 轮询独占的单个 `SignalCache`；后续改双缓冲 + 版本号 + 短临界区换指针 | 当前只验证写入；Web/规则/日志并发读者接入前保证一致快照 |
 | 当前 DBC | RCU 风格指针切换 + `dbc_mutex` 管理生命周期 | 切换时不中断解码 |
 | FatFs/TF | 全局 `fs_mutex` + 单次操作超时 | 避免并发损坏文件系统 |
 | W25Q128 | `qspi_mutex` + ConfigTask 串行写 | 防止配置备份与其他 QSPI 操作冲突 |
@@ -236,7 +236,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 待做 | Web 显示物理值，CSV 稳定写入 |
+| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test 已验证；外部 RX 解码、Web 物理值和 CSV 待做 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 

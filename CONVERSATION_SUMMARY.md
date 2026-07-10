@@ -1256,3 +1256,38 @@
 - 已提交 `bc5e837 Load active DBC into runtime snapshot`，包含运行态 DBC 双槽快照、启动/激活加载、`GET /api/dbc/runtime` 和同步治理记录。
 - 已推送到 `origin/codex/W5500`，远端从 `34fd792` 更新到 `bc5e837`。
 - 本段只补充提交推送事实，不改固件源码；本次无需重新编译或反汇编。
+
+## 2026-07-10 18:34:03 +08:00
+
+### 用户请求
+
+- 继续按治理文档和架构计划开发；当前最小里程碑是把运行态 active DBC 快照接入最小 CAN 帧解码到 `SignalCache` 的可验证闭环，不扩展 Web UI、并发 HTTP、日志或规则。
+- 用户随后明确：计划目标是 CAN RX 到 `SignalCache`；若把成功发送的 `0x321` 送入同一解码器，只能标注为 TX self-test，外部 RX 验证必须保留为未完成。
+
+### 本轮假设、成功标准和实现
+
+- 假设：复用现有 portable `dbc_parser`、`signal_codec` 和 `signal_cache`，先在 CAN2 周期轮询内同步调用，不创建 `CanRxTask`、队列、实时信号 HTTP 接口、日志或规则。
+- 成功标准：主机单测验证匹配帧的两个信号写入 `SignalCache`、未匹配 ID 不写入；固件反汇编确认 active DBC 快照、解码器和 CAN2 轮询调用关系；烧录后用 ST-Link 验证 active DBC、缓存项和来源计数。
+- 新增 `include/dbc_decoder.h`、`src/core/dbc_decoder.c`：按帧 ID 找 DBC message，逐个提取 raw/physical 值后调用 `signal_cache_upsert()`。
+- 新增 `tests/test_dbc_decoder.c`：`0x321` 的 `marker` 和 `sequence` 两个 Intel 信号分别得到 raw `0xA5C2`、`0x1234`；未匹配 `0x123` 不新增缓存项。
+- `can2_analyzer_poll()` 保留 RX FIFO 解码；当 `can_port_send()` 成功时，也把已有 `0x321` 诊断帧送入相同函数作 TX self-test。新增 `g_can2_dbc_tx_self_test_frame_count` 和 `g_can2_dbc_rx_frame_count`，明确区分来源。
+
+### 构建、反汇编和烧录验证
+
+- `git diff --check` 通过；`./scripts/verify.sh` 通过，主机 CTest 9/9 通过。
+- STM32 固件 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex/.bin` 编译通过：FLASH `66640 B / 128 KB = 50.84%`，RAM_D1 `202512 B / 512 KB = 38.63%`，ELF `text=66428/data=204/bss=202304`。本轮加入单个 128 项缓存后 RAM_D1 比上一基线增加，后续扩展缓存/日志前必须复查。
+- 定向反汇编确认：`can2_analyzer_poll()` 在 `can_port_send()` 返回成功后以 `tx_self_test=true` 调用 `decode_can2_frame()`，在 RX FIFO 循环中以 `false` 调用同一函数；`decode_can2_frame()` 读取 `w5500_http_active_dbc_snapshot()`，更新 TX/RX 来源计数，调用 `dbc_find_message()`、`HAL_GetTick()` 和 `dbc_decode_frame_to_signal_cache()`；核心解码器逐信号调用 `signal_extract_raw()`、`dbc_decode_signal_value()` 和 `signal_cache_upsert()`。
+- OpenOCD/ST-Link 烧录当前 HEX 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.251976 V`。
+
+### 主机、HTTP 和 ST-Link 结果
+
+- 主机路由到 `192.168.1.88` 走 `en2`；`ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，ARP MAC 为 `02:00:00:12:34:56`。
+- HTTP 顺序验证：`GET /api/status` 返回 HTTP 200，RTOS/W5500/TF/QSPI 状态正常；`GET /api/dbc/runtime` 返回 active DBC `loaded=true/generation=1/bytes=151/lines=3/messages=1/signals=2/errors=0`；`GET /api/can/status` 返回 `tx=28/rx=0/errors=0/busOff=0/sendResult=0`。连续请求曾因当前单 socket 限制出现两次 curl connect failure，间隔 1 秒顺序重试成功。
+- 为匹配周期诊断帧，已通过 HTTP 上传并激活 `BO_ 801 Can2Data`、`marker` 和 `sequence` 两信号的 151 字节 DBC；上传与激活均返回 HTTP 200，runtime generation 从 1 变为 2。最终重烧录后从 TF 自动加载该 active DBC，generation 为 1。
+- OpenOCD 先直接 halt 时再次出现 `target was in unknown state when halt was requested`；按既有处理执行 `reset run`、等待 5 秒后读取成功。读数：FreeRTOS `ready=1/loop=4/started=1`；runtime `generation=1/valid=1/errors=0/signals=2/messages=1`；CAN2 `rx=0/tx=6`；解码诊断 `rx_frame_count=0/tx_self_test_frame_count=5/last_message_id=0x321/cache_count=2/decode_errors=0/signal_updates=10/matched_frames=5/attempts=5`；W5500 `network_configured=1/link_up=1`。
+
+### 结论和未完成项
+
+- 本轮已客观验证 active DBC → portable decoder → `SignalCache` 的板端 TX self-test 闭环，外部 RX 分支已实现并通过反汇编确认。
+- 外部 CANtest → FDCAN2_RX 的解码尚未完成现场验证：本轮 `g_can2_rx_count=0` 与 `g_can2_dbc_rx_frame_count=0`，不能把 TX self-test 写成外部 RX 成功。下一步应由 CANtest 发送匹配 `0x321` 帧并确认 RX 来源计数、缓存更新计数递增。
+- 未实现实时信号 API、日志、规则、配置任务、队列或并发缓存保护；这些均不属于本轮范围。

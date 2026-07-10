@@ -1,6 +1,7 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "platform/stm32h750_bringup.h"
+#include "dbc_decoder.h"
 
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan2;
@@ -35,9 +36,18 @@ volatile uint32_t g_can2_rx_first_byte;
 volatile uint32_t g_can2_send_result;
 volatile uint32_t g_can2_poll_count;
 volatile uint32_t g_can2_tx_sequence;
+volatile uint32_t g_can2_dbc_decode_attempt_count;
+volatile uint32_t g_can2_dbc_matched_frame_count;
+volatile uint32_t g_can2_dbc_signal_update_count;
+volatile uint32_t g_can2_dbc_decode_error_count;
+volatile uint32_t g_can2_dbc_cache_count;
+volatile uint32_t g_can2_dbc_last_message_id;
+volatile uint32_t g_can2_dbc_tx_self_test_frame_count;
+volatile uint32_t g_can2_dbc_rx_frame_count;
 
 static Stm32FdcanContext g_can2_ctx;
 static CanPort g_can2_port;
+static SignalCache g_can2_signal_cache;
 
 static const CanFrame k_fd_probe_frame = {
   .id = 0x18ff50e5u,
@@ -102,6 +112,33 @@ static void capture_can2_status(void) {
     g_can2_bus_off = status.bus_off ? 1u : 0u;
     g_can2_tec = status.tec;
     g_can2_rec = status.rec;
+  }
+}
+
+static void decode_can2_frame(const CanFrame *rx, bool tx_self_test) {
+  const DbcDatabase *db = w5500_http_active_dbc_snapshot();
+  if (db == NULL) {
+    return;
+  }
+
+  ++g_can2_dbc_decode_attempt_count;
+  if (tx_self_test) {
+    ++g_can2_dbc_tx_self_test_frame_count;
+  } else {
+    ++g_can2_dbc_rx_frame_count;
+  }
+  const DbcMessage *message = dbc_find_message(db, rx->id);
+  if (message == NULL) {
+    return;
+  }
+
+  ++g_can2_dbc_matched_frame_count;
+  const size_t updated = dbc_decode_frame_to_signal_cache(db, rx, &g_can2_signal_cache, HAL_GetTick());
+  g_can2_dbc_signal_update_count += (uint32_t)updated;
+  g_can2_dbc_cache_count = (uint32_t)g_can2_signal_cache.count;
+  g_can2_dbc_last_message_id = rx->id;
+  if (updated != message->signal_count) {
+    ++g_can2_dbc_decode_error_count;
   }
 }
 
@@ -209,6 +246,7 @@ int can_external_bringup_run(void) {
 
 int can2_analyzer_bringup_run(void) {
   stm32h750_fdcan_bind(&g_can2_port, &g_can2_ctx, &hfdcan2);
+  signal_cache_init(&g_can2_signal_cache);
 
   const CanPortConfig config = {
     .nominal_bitrate = 500000u,
@@ -239,10 +277,14 @@ int can2_analyzer_poll(void) {
   ++g_can2_tx_sequence;
 
   g_can2_send_result = can_port_send(&g_can2_port, &tx);
+  if (g_can2_send_result == CAN_PORT_OK) {
+    decode_can2_frame(&tx, true);
+  }
   while (can_port_receive(&g_can2_port, &rx) == CAN_PORT_OK) {
     g_can2_rx_id = rx.id;
     g_can2_rx_dlc = rx.dlc;
     g_can2_rx_first_byte = rx.data[0];
+    decode_can2_frame(&rx, false);
   }
   capture_can2_status();
   return g_can2_send_result == CAN_PORT_OK ? 0 : 1;
