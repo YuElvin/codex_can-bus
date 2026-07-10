@@ -273,6 +273,7 @@ static void bringup_default_task(void *argument)
   g_w5500_bringup_status = w5500_bringup_run();
   bringup_print_status("w5500");
   g_tf_card_bringup_status = tf_card_bringup_run();
+  (void)w5500_http_load_active_dbc();
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;
 

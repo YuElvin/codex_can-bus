@@ -46,6 +46,17 @@ volatile uint32_t g_w5500_http_dbc_active_signals = 0u;
 volatile uint32_t g_w5500_http_dbc_active_skipped = 0u;
 volatile uint32_t g_w5500_http_dbc_active_errors = 0u;
 volatile uint32_t g_w5500_http_dbc_active_valid = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_load_count = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_dbc_runtime_bytes = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_lines = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_messages = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_signals = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_skipped = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_errors = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_valid = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_generation = 0u;
+volatile uint32_t g_w5500_http_dbc_runtime_active_slot = 0xffffffffu;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -101,6 +112,7 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_INDEX 3u
 #define W5500_HTTP_PATH_DBC_UPLOAD 4u
 #define W5500_HTTP_PATH_DBC_ACTIVE 5u
+#define W5500_HTTP_PATH_DBC_RUNTIME 6u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
@@ -134,6 +146,8 @@ static char g_http_response_body[384];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
 static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
+static DbcDatabase g_http_dbc_runtime_db[2];
+static const DbcDatabase *g_http_dbc_runtime_active_db;
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
   return w5500_port_read_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, value, 1u);
@@ -337,7 +351,8 @@ static size_t build_dbc_active_body(char *body, size_t len, const DbcUploadRepor
                           "{\"ok\":true,\"data\":{\"candidate\":\"%s\",\"active\":\"%s\","
                           "\"activeBackup\":\"%s\",\"bytes\":%lu,\"lines\":%lu,"
                           "\"messages\":%lu,\"signals\":%lu,\"skipped\":%lu,"
-                          "\"errors\":%lu,\"valid\":%s,\"activated\":true}}",
+                          "\"errors\":%lu,\"valid\":%s,\"activated\":true,"
+                          "\"runtimeGeneration\":%lu}}",
                           W5500_HTTP_DBC_CANDIDATE_PATH,
                           W5500_HTTP_DBC_ACTIVE_PATH,
                           W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
@@ -347,7 +362,28 @@ static size_t build_dbc_active_body(char *body, size_t len, const DbcUploadRepor
                           (unsigned long)report->signals,
                           (unsigned long)report->skipped,
                           (unsigned long)report->errors,
-                          report->errors == 0u ? "true" : "false");
+                          report->errors == 0u ? "true" : "false",
+                          (unsigned long)g_w5500_http_dbc_runtime_generation);
+}
+
+static size_t build_dbc_runtime_body(char *body, size_t len) {
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"active\":\"%s\",\"loaded\":%s,"
+                          "\"generation\":%lu,\"activeSlot\":%lu,\"lastResult\":%lu,"
+                          "\"bytes\":%lu,\"lines\":%lu,\"messages\":%lu,"
+                          "\"signals\":%lu,\"skipped\":%lu,\"errors\":%lu}}",
+                          W5500_HTTP_DBC_ACTIVE_PATH,
+                          g_w5500_http_dbc_runtime_valid != 0u ? "true" : "false",
+                          (unsigned long)g_w5500_http_dbc_runtime_generation,
+                          (unsigned long)g_w5500_http_dbc_runtime_active_slot,
+                          (unsigned long)g_w5500_http_dbc_runtime_result,
+                          (unsigned long)g_w5500_http_dbc_runtime_bytes,
+                          (unsigned long)g_w5500_http_dbc_runtime_lines,
+                          (unsigned long)g_w5500_http_dbc_runtime_messages,
+                          (unsigned long)g_w5500_http_dbc_runtime_signals,
+                          (unsigned long)g_w5500_http_dbc_runtime_skipped,
+                          (unsigned long)g_w5500_http_dbc_runtime_errors);
 }
 
 static const char *skip_http_space(const char *text) {
@@ -424,6 +460,77 @@ static int dbc_load_candidate_report(DbcUploadReport *report) {
   report->skipped = g_http_dbc_candidate_db.skipped_lines;
   report->errors = g_http_dbc_candidate_db.error_lines;
   return 0;
+}
+
+static void dbc_record_runtime_report(const DbcUploadReport *report, uint32_t valid) {
+  g_w5500_http_dbc_runtime_bytes = (uint32_t)report->bytes;
+  g_w5500_http_dbc_runtime_lines = (uint32_t)report->lines;
+  g_w5500_http_dbc_runtime_messages = (uint32_t)report->messages;
+  g_w5500_http_dbc_runtime_signals = (uint32_t)report->signals;
+  g_w5500_http_dbc_runtime_skipped = (uint32_t)report->skipped;
+  g_w5500_http_dbc_runtime_errors = (uint32_t)report->errors;
+  g_w5500_http_dbc_runtime_valid = valid;
+}
+
+static void dbc_record_runtime_failure(const DbcUploadReport *report) {
+  if (g_http_dbc_runtime_active_db == NULL) {
+    dbc_record_runtime_report(report, 0u);
+  }
+}
+
+int w5500_http_load_active_dbc(void) {
+  DbcUploadReport report;
+  size_t read_len = 0u;
+  size_t line_count = 0u;
+  memset(&report, 0, sizeof(report));
+
+  const uint32_t current_slot = g_w5500_http_dbc_runtime_active_slot == 0u ? 0u : 1u;
+  const uint32_t next_slot = current_slot == 0u ? 1u : 0u;
+  DbcDatabase *next_db = &g_http_dbc_runtime_db[next_slot];
+
+  const int read_result = stm32h750_tf_read_file_locked(W5500_HTTP_DBC_ACTIVE_PATH,
+                                                        (uint8_t *)g_http_dbc_candidate_buffer,
+                                                        sizeof(g_http_dbc_candidate_buffer),
+                                                        &read_len);
+  if (read_result != 0) {
+    g_w5500_http_dbc_runtime_result = (uint32_t)read_result;
+    dbc_record_runtime_failure(&report);
+    return 1;
+  }
+  if (read_len > W5500_HTTP_UPLOAD_BODY_MAX) {
+    report.bytes = read_len;
+    report.errors = 1u;
+    g_w5500_http_dbc_runtime_result = 2u;
+    dbc_record_runtime_failure(&report);
+    return 2;
+  }
+
+  g_http_dbc_candidate_buffer[read_len] = '\0';
+  const uint32_t valid =
+    dbc_parse_text(next_db, g_http_dbc_candidate_buffer, read_len, &line_count) ? 1u : 0u;
+  report.bytes = read_len;
+  report.lines = line_count;
+  report.messages = next_db->message_count;
+  report.signals = next_db->signal_count;
+  report.skipped = next_db->skipped_lines;
+  report.errors = next_db->error_lines;
+  if (valid == 0u) {
+    g_w5500_http_dbc_runtime_result = 3u;
+    dbc_record_runtime_failure(&report);
+    return 3;
+  }
+
+  g_http_dbc_runtime_active_db = next_db;
+  g_w5500_http_dbc_runtime_active_slot = next_slot;
+  g_w5500_http_dbc_runtime_generation++;
+  g_w5500_http_dbc_runtime_result = 0u;
+  g_w5500_http_dbc_runtime_load_count++;
+  dbc_record_runtime_report(&report, 1u);
+  return 0;
+}
+
+const DbcDatabase *w5500_http_active_dbc_snapshot(void) {
+  return g_w5500_http_dbc_runtime_valid != 0u ? g_http_dbc_runtime_active_db : NULL;
 }
 
 static int http_send_bytes(const uint8_t *data, size_t len) {
@@ -638,6 +745,11 @@ static int http_handle_dbc_active(void) {
     http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
     return http_send_json_error(500u, "active_save_failed", "dbc active save failed");
   }
+  if (w5500_http_load_active_dbc() != 0) {
+    dbc_record_active_report(&report, 0u);
+    http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
+    return http_send_json_error(500u, "runtime_load_failed", "dbc runtime load failed");
+  }
 
   dbc_record_active_report(&report, 1u);
   const size_t response_len = build_dbc_active_body(g_http_response_body, sizeof(g_http_response_body), &report);
@@ -764,6 +876,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_STATUS;
     body_len = build_can_status_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/dbc/runtime")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_DBC_RUNTIME;
+    body_len = build_dbc_runtime_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {

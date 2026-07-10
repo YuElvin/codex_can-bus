@@ -1149,3 +1149,104 @@
 - 已提交 `ae8a0ff Activate DBC candidate file`。
 - 已推送到 `origin/codex/W5500`，远端从 `43006bd` 更新到 `ae8a0ff`。
 - 提交后为记录本提交/推送结果，本文件追加本段记录；该记录不修改固件源码，因此不需要重新编译和反汇编。
+
+## 2026-07-09 23:54:45 +08:00
+
+### 用户请求
+
+- 委托继续开发 `/Users/elvin/Desktop/project/can_bus`，实际解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500`。
+- 要求先按 `AGENTS.md` 读取治理文档和当前记录，再按计划设计运行态 DBC 快照/信号缓存接入的最小可验证步骤；不要扩展完整 Web UI、分片上传、指定文件激活或并发 HTTP；源码改动后必须运行 `./scripts/verify.sh`、反汇编、硬件验证并更新本文件。
+
+### 本轮假设、成功标准和验证方式
+
+- 假设：本轮只做 active DBC 运行态快照加载、指针切换和只读诊断接口；不做 CAN 帧实时解码、`SignalCache` 更新、ConfigTask、完整 Web UI、分片上传或并发 HTTP。
+- 成功标准：固件能在 TF 初始化后从 `/dbc/active.dbc` 读回并解析到运行态 `DbcDatabase`；`POST /api/dbc/active` 成功写 active 后再次从 active 文件读回并切换运行态快照；无效候选激活失败时不替换既有 runtime；`GET /api/dbc/runtime` 和 ST-Link 变量可验证当前 runtime 状态。
+- 验证方式：读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件；执行 `git diff --check`、`./scripts/verify.sh`；用 `arm-none-eabi-nm/strings/objdump/size` 做关键路径检查；OpenOCD 烧录；主机 `route/ping/curl/arp`；OpenOCD `mdw` 读取运行态、W5500、TF、CAN2 诊断变量。
+
+### 实际操作
+
+1. 确认当前实际仓库为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500...origin/codex/W5500`，起始工作区干净。
+2. 在 `firmware/bringup/w5500_bringup.c` 新增运行态 DBC 双槽：
+   - `g_http_dbc_runtime_db[2]` 和 `g_http_dbc_runtime_active_db` 保存当前 active DBC 快照。
+   - `w5500_http_load_active_dbc()` 从 `/dbc/active.dbc` 读回最多 `1025` 字节，解析到非活动槽，只有 `dbc_parse_text()` 返回有效后才切换 active 指针、`activeSlot` 和 `generation`。
+   - 失败路径只记录 `runtime_result`；如果已有有效 runtime，不清空旧快照。
+   - 新增 ST-Link 诊断变量 `g_w5500_http_dbc_runtime_load_count/result/bytes/lines/messages/signals/skipped/errors/valid/generation/active_slot`。
+3. 在 `POST /api/dbc/active` 保存 `/dbc/active.dbc` 成功后调用 `w5500_http_load_active_dbc()`，响应增加 `runtimeGeneration`。
+4. 新增 `GET /api/dbc/runtime`，返回 `{active,loaded,generation,activeSlot,lastResult,bytes,lines,messages,signals,skipped,errors}`。
+5. 在 `include/platform/stm32h750_bringup.h` 暴露 `w5500_http_load_active_dbc()` 和后续解码任务可用的 `w5500_http_active_dbc_snapshot()`。
+6. 在 `cube_mx/Core/Src/main.c` 的 `tf_card_bringup_run()` 后调用 `w5500_http_load_active_dbc()`，使板上已有 `/dbc/active.dbc` 可在启动时形成 runtime 快照。
+7. 同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md` 和 `ARCHITECTURE_DESIGN.md`，记录运行态 active DBC 快照已验证、信号缓存仍未接入、RAM_D1 水位上升。
+
+### 验证结果
+
+- `git diff --check` 通过。
+- `./scripts/verify.sh` 通过：
+  - 主机 CTest 8/8 全部通过。
+  - STM32 固件重新编译并链接成功。
+  - FLASH `64576 B / 128 KB = 49.27%`，RAM_D1 `183008 B / 512 KB = 34.91%`。
+  - ELF 尺寸：`text=64364`、`data=204`、`bss=182800`、`dec=247368`。
+- ELF 符号和字符串检查：
+  - `w5500_http_load_active_dbc`、`dbc_parse_text`、`w5500_http_status_poll` 存在。
+  - `g_http_dbc_runtime_db` 位于 BSS，大小 `0xC830`；`g_http_dbc_candidate_db` 大小 `0x6418`；`g_http_dbc_candidate_buffer` 大小 `0x401`。
+  - 新增 `g_w5500_http_dbc_runtime_*` 诊断变量存在。
+  - ELF 字符串包含 `/api/dbc/runtime`、`runtime_load_failed`、`runtimeGeneration`、`/dbc/active.dbc` 和 runtime JSON 字段。
+- 反汇编结论：
+  - `w5500_http_load_active_dbc` 先调用 `stm32h750_tf_read_file_locked` 读取 `/dbc/active.dbc`，长度上限为 `1025`，再调用 `dbc_parse_text`。
+  - `dbc_parse_text` 返回失败或文件超长时走错误分支，不写入 runtime active 指针、slot 或 generation。
+  - 解析成功后才写入 `g_http_dbc_runtime_active_db`、`g_w5500_http_dbc_runtime_active_slot`，递增 `g_w5500_http_dbc_runtime_generation/load_count`，并记录 `bytes/lines/messages/signals/skipped/errors/valid`。
+  - `POST /api/dbc/active` 路径在 active 文件保存成功后调用 `w5500_http_load_active_dbc`；runtime 加载失败时返回 `runtime_load_failed`。
+  - `GET /api/dbc/runtime` 路径在 `w5500_http_status_poll` 中返回 runtime 诊断 JSON，path code 为 6。
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.248193 V`。
+- 主机网络和 HTTP 验证：
+  - `route -n get 192.168.1.88` 显示路由走 `en2`。
+  - `ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，延迟约 `0.543-1.062 ms`；复位后复查也成功 2/2，延迟约 `0.458-0.549 ms`。
+  - ARP 显示 `192.168.1.88` MAC 为 `02:00:00:12:34:56`。
+  - 启动后 `GET /api/status` 返回 HTTP 200，`rtos.started=1`、`ready=1`、`w5500.status=0`、`link=1`、`version=4`、`tf.status=0`、`qspi.status=0`。
+  - 启动后 `GET /api/dbc/runtime` 返回 HTTP 200，`loaded=true/generation=1/activeSlot=0/lastResult=0/bytes=165/lines=4/messages=1/signals=2/skipped=1/errors=0`，证明已有 `/dbc/active.dbc` 上电后进入 runtime。
+  - 上传有效候选返回 HTTP 200，`bytes=165/lines=4/messages=1/signals=2/skipped=1/errors=0/valid=true`。
+  - `POST /api/dbc/active` 返回 HTTP 200，`activated=true/runtimeGeneration=2`；随后 `GET /api/dbc/runtime` 返回 `generation=2/activeSlot=1/errors=0`。
+  - 上传无效候选返回 HTTP 200 但 `errors=1/valid=false`；随后 `POST /api/dbc/active` 返回 HTTP 400 `candidate_invalid`；再查 runtime 仍为 `generation=2/activeSlot=1/bytes=165/messages=1/signals=2/errors=0`，证明无效候选未替换运行态快照。
+  - 最后重新上传有效候选并再次激活，`POST /api/dbc/active` 返回 `runtimeGeneration=3`，`GET /api/dbc/runtime` 返回 `generation=3/activeSlot=0/bytes=165/messages=1/signals=2/errors=0`，恢复板端最终有效状态。
+  - `GET /api/can/status` 返回 HTTP 200，`status=0/tx=41/rx=0/errors=0/busOff=0/tec=0/rec=0/sendResult=0`；本轮未用 Windows CANtest 复核外部 CAN。
+- ST-Link/OpenOCD 读数：
+  - 首次不中断读取未输出 `mdw` 数据，OpenOCD 报告 `target was in unknown state when halt was requested`；随后执行 `reset run`、等待 5 秒、`halt` 后成功读取。
+  - 复位后 runtime 诊断：`active_slot=0`、`runtime_result=0`、`generation=1`、`valid=1`、`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA5`、`load_count=1`。
+  - 复位后 active/candidate/upload 诊断尚未触发，相关 result 为 `0xffffffff` 或计数为 0，符合复位后的状态。
+  - TF 替换/写入最近状态：`restore=0`、`backup_rename=0`、`rename=0`、`unlink=0`、`write_len=0x12`、`open/write/close=0`、`attempts=1`；该读数来自复位前最后一次 TF 写入后保留的全局变量初始化/运行状态，active runtime 结论以 runtime 变量和 HTTP 为准。
+  - W5500：`g_w5500_phycfgr=0xBF`、`g_w5500_version=4`、`g_w5500_network_configured=1`、`g_w5500_link_up=1`。
+  - FreeRTOS：`g_freertos_task_started=1`、`g_freertos_bringup_complete=1`、`g_freertos_loop_count=4`。
+  - CAN2：`g_can2_send_result=0`、`g_can2_error_count=0`、`g_can2_bus_off=0`、`g_can2_tec=0`、`g_can2_rec=0`、`g_can2_rx_count=0`、`g_can2_tx_count=6`。
+
+### 当前结论
+
+- 本轮最小运行态 DBC 快照符合当前计划目标：固件已能从 `/dbc/active.dbc` 加载 active DBC 到运行态双槽快照，激活成功后切换 runtime generation，无效候选不替换既有 runtime。
+- 当前仍不是完整实时解码系统：尚未把 `w5500_http_active_dbc_snapshot()` 接入 CAN RX 路径、`DbcDecodeTask`、`SignalCache`、规则、日志或 Web 实时信号接口。
+
+### 问题点
+
+- 双槽运行态 `DbcDatabase` 明显增加 RAM_D1，本轮从上一基线约 `131720 B / 512 KB = 25.12%` 上升到 `183008 B / 512 KB = 34.91%`；后续接信号缓存或日志缓存前必须继续复查 RAM。
+- 本轮 ST-Link 第一次直接 halt 读取未输出 mdw 数据，改用 `reset run` 后等待再 halt 才成功；复位后读数适合验证启动加载 active DBC，但不会保留复位前 HTTP 激活计数。
+- 本轮 CAN2 仍未使用 Windows CANtest 复核外部 RX；当前 CAN 回归依据为 `/api/can/status` 和 ST-Link 变量。
+
+## 2026-07-10 18:26:26 +08:00
+
+### 用户请求
+
+- 要求按 `03_Context.md` 和 `ARCHITECTURE_DESIGN.md` 持续分阶段开发；每完成一步必须烧录验证，符合进度目标后提交推送，并在后续新对话继续下一步。
+
+### 本轮实际复核
+
+- 先确认实际工作目录为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`；未提交的 9 个文件是上一最小里程碑“active DBC 运行态双槽快照”的源码和同步文档，不是无关改动。
+- `git diff --check` 通过；`./scripts/verify.sh` 通过：主机 CTest 8/8 全部通过，STM32 构建目录无待重建目标。
+- 本轮对已有源码产物重新做反汇编检查：`w5500_http_load_active_dbc` 先以 1025 字节上限调用 `stm32h750_tf_read_file_locked()`，随后调用 `dbc_parse_text()`；错误路径不写 runtime active 指针、slot 或 generation，成功路径才切换指针/slot 并递增 generation。`bringup_default_task` 在 TF 初始化完成后调用该函数。
+- ELF 尺寸复核：`text=64364`、`data=204`、`bss=182800`；运行态双槽 `g_http_dbc_runtime_db` 为 `0xC830`，候选数据库为 `0x6418`，RAM_D1 水位仍须在后续 SignalCache/日志扩展前复查。
+- OpenOCD/ST-Link 已重新烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex`，输出 `Programming Finished`、`Verified OK`，目标电压 `3.268051 V`。
+- 烧录后主机路由为 `en2`，`ping -c 2 -S 192.168.1.100 192.168.1.88` 成功 2/2，ARP MAC 为 `02:00:00:12:34:56`。
+- 烧录后 HTTP：`GET /api/status` 返回 HTTP 200，`rtos.started=1`、`ready=1`、W5500 link/version 正常、TF/QSPI status 均为 0；`GET /api/dbc/runtime` 返回 HTTP 200，`loaded=true/generation=1/activeSlot=0/bytes=165/lines=4/messages=1/signals=2/skipped=1/errors=0`；`GET /api/can/status` 返回 HTTP 200，`status=0/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+- OpenOCD 运行态变量读取：`active_slot=0`、`runtime_result=0`、`generation=1`、`valid=1`、`errors=0`、`skipped=1`、`signals=2`、`messages=1`、`lines=4`、`bytes=0xA5`、`load_count=1`。
+
+### 当前结论和问题点
+
+- 当前里程碑符合计划：active DBC 可在启动和激活后成为可读取的双槽运行态快照，且重烧录验证通过；可提交推送。
+- 尚未把 runtime 快照接入 CAN RX 解码、`SignalCache`、实时信号 API、日志或规则；下一对话应只实现“最小 CAN 帧解码到 SignalCache”的可验证闭环。
+- 本轮未使用 Windows CANtest 复核外部 RX，CAN 回归仅覆盖当前 HTTP 状态和板端诊断变量；后续修改 CAN 收发/调度时仍需外部分析仪复核。

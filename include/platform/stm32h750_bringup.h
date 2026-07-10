@@ -4,6 +4,7 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "ports/can_port.h"
+#include "dbc_parser.h"
 #include "ports/tf_card_port.h"
 #include "ports/w5500_port.h"
 
@@ -64,6 +65,8 @@ int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
+int w5500_http_load_active_dbc(void);
+const DbcDatabase *w5500_http_active_dbc_snapshot(void);
 int w5500_http_status_poll(void);
 
 #endif
