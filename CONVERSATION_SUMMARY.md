@@ -1250,3 +1250,9 @@
 - 当前里程碑符合计划：active DBC 可在启动和激活后成为可读取的双槽运行态快照，且重烧录验证通过；可提交推送。
 - 尚未把 runtime 快照接入 CAN RX 解码、`SignalCache`、实时信号 API、日志或规则；下一对话应只实现“最小 CAN 帧解码到 SignalCache”的可验证闭环。
 - 本轮未使用 Windows CANtest 复核外部 RX，CAN 回归仅覆盖当前 HTTP 状态和板端诊断变量；后续修改 CAN 收发/调度时仍需外部分析仪复核。
+
+### 提交推送结果
+
+- 已提交 `bc5e837 Load active DBC into runtime snapshot`，包含运行态 DBC 双槽快照、启动/激活加载、`GET /api/dbc/runtime` 和同步治理记录。
+- 已推送到 `origin/codex/W5500`，远端从 `34fd792` 更新到 `bc5e837`。
+- 本段只补充提交推送事实，不改固件源码；本次无需重新编译或反汇编。
