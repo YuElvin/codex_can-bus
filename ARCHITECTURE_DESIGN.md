@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；TX self-test 与外部 CANtest RX FIFO 均已通过同一解码函数完成现场验证。既有 `bringup` 监控循环还会每约 1 秒复制最多两项快照，使用 FatFs mutex 追加 `/log/signal.csv`；本步不创建 LogTask、队列或日志缓冲。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；TX self-test 与外部 CANtest RX FIFO 均已通过同一解码函数完成现场验证。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。
 
 ### 4.2 目标任务拆分
 
@@ -88,7 +88,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | `CanTxTask` | 高 | 1024-1536 words | `can_tx_q` + 周期 timer | 发送原始帧/周期帧，处理 TX FIFO 满 | `can_tx_q` |
 | `DbcDecodeTask` | 高 | 3072-4096 words | `can_rx_q` | DBC 查表、信号解码、更新 `SignalCache` | DBC 快照、信号缓存 |
 | `RuleTask` | 中高 | 2048 words | 20-50ms 周期 | 继电器规则、超时保护、默认状态 | 信号缓存、规则快照、继电器 |
-| `LogTask` | 中 | 3072 words | 100ms 采样 + buffer 阈值 | CSV 行缓冲，批量写 TF 卡 | FatFs mutex、日志 buffer |
+| `LogTask` | 中 | 1024 words | 100ms 调度、1s 采样 + 512B/5s flush | 最多两项 CSV 行缓冲，单批写 TF 卡 | FatFs mutex、768B 日志 buffer |
 | `NetTask` | 中 | 3072-4096 words | W5500 socket 事件/轮询 | W5500 socket 服务、连接维护 | W5500 mutex/socket 状态 |
 | `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | REST、静态文件、上传下载 | FatFs mutex、配置 mutex、命令队列 |
 | `ConfigTask` | 低 | 2048 words | 命令队列 | 配置校验、保存、备份到 W25Q128 | `cfg_cmd_q`、FatFs mutex、QSPI mutex |
@@ -123,7 +123,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.5 日志
 
-当前最小实现由 `bringup` 监控循环每约 1 秒从 `SignalCache` 复制最多两项，CSV 列为 `updated_ms,key,value,raw,unit,quality`，并在 FatFs mutex 下追加 `/log/signal.csv`。后续 `LogTask` 再按配置周期取快照、使用 RAM 行缓冲、批量 flush 与文件轮换；TF 不可用时再定义 `log_degraded`、丢弃/环形缓存和统计策略。
+当前源码由独立 `LogTask` 每 1 秒从 `SignalCache` 复制最多两项，CSV 列保持 `updated_ms,key,value,raw,unit,quality`；使用 768 B RAM 行缓冲，达到 512 B 或 5 秒后才在 FatFs mutex 下单批追加。初始化读取 `/log/signal.csv`：成功或 `FR_NO_FILE` 固定该路径，其他读取错误固定 `/log/signal-recovery.csv`；`g_log_path_mode/g_log_path_switch_count/g_log_active_file_size` 用于诊断。失败时记录 `g_log_failure_count/g_log_drop_count` 并清空本批，不实现重试、轮换、下载、HTTP 配置或队列。当前默认路径已持续写入；recovery 分支待实机验证。
 
 ## 6. 共享资源与同步
 
@@ -236,7 +236,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test、外部 RX 解码、`/api/signals` 和最小 `/log/signal.csv` 追加均已验证；专用日志任务和规则待做 |
+| 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发，规则待做 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
@@ -247,7 +247,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
-| TF/FatFs 并发损坏 | 全局 `fs_mutex`，当前 CSV 追加与 HTTP/DBC 文件操作共用该锁；后续 LogTask 再加入批量 flush |
+| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；曾读到 CSV `FR_DISK_ERR=1`，最终默认路径运行已恢复成功；不自动修复，保留一次性 recovery 选择和失败/丢弃诊断 |
 | W25Q128 上电自检擦写正式数据 | 正式配置备份前移除或改成按需触发最后扇区测试 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |

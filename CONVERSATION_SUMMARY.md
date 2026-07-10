@@ -1428,3 +1428,77 @@
 
 - 已提交 `a8a504d Append decoded signals to TF CSV`，包含 CSV 序列化核心和主机测试、FatFs 追加写、1 秒监控循环、ST-Link 诊断以及同步治理/架构记录。
 - 已推送到 `origin/codex/W5500`，远端从 `231bbc3` 更新到 `a8a504d`。本段只补充提交推送事实，不修改固件源码，无需重新编译或反汇编。
+
+## 2026-07-10 独立最小 LogTask（现场阻断，未提交）
+
+### 用户请求、边界和实现
+
+- 用户要求用独立最小 LogTask 替换 bring-up 1 秒监控循环的直接 CSV 写：固定复制最多两项 SignalCache、1 秒采样、内存行缓冲、阈值或固定时限批量 flush，继续复用 FatFs `fs_mutex`；不改 `/api/signals`、DBC 或 CAN 路径，不增加队列、重试、轮换、下载 API、HTTP 配置或通用系统。
+- 新增 portable `signal_log_buffer` 及 `test_signal_log_buffer`。测试覆盖正常的阈值/时限 flush 判定、清空后的无 flush，以及容量不足时返回 FULL 且原缓冲内容不变；原 `signal_csv` 测试仍覆盖 CSV 表头和字段兼容性。
+- `LogTask` 使用 768 B 静态行缓冲、每 100 ms 调度、每 1 秒复制两项；缓冲达到 512 B 或距上次 flush 5 秒时，通过既有 `stm32h750_tf_append_file_locked()` 单批 `f_open/f_lseek/f_write/f_close`。仅 LogTask 写 `/log/signal.csv`，bring-up 监控循环直接写入已移除。
+- 新增 ST-Link 诊断：`g_log_task_started/loop_count/sample_count/flush_count/write_count/failure_count/drop_count/buffer_len/buffer_samples/last_result`；保留原 `g_tf_csv_write_*` 作为实际写入结果、长度和文件大小诊断。
+- 首启修正：`stm32h750_tf_file_size_locked()` 对不存在文件会因 `FA_READ` 返回失败；仅 `FR_NO_FILE=4` 被作为大小 0 继续，以便 append 创建文件并写表头，其他错误记录失败/丢弃，不能伪装成首启。
+
+### 构建、反汇编和烧录
+
+- `git diff --check` 通过；`./scripts/verify.sh` 通过，主机 CTest 12/12 通过。
+- STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf` 重新链接：FLASH `69824 B / 128 KB = 53.27%`，RAM_D1 `203600 B / 512 KB = 38.83%`，ELF `text=69604/data=212/bss=203384`。
+- 定向反汇编确认 `signal_log_task()` 使用 `1000`、`5000`、`512` 和 `768` 常量；调用 `can2_signal_cache_copy()`、`signal_log_buffer_append_snapshot()`、`signal_log_buffer_should_flush()` 和 `stm32h750_tf_append_file_locked()`，失败路径累加失败/丢弃并清空缓冲。`bringup_default_task()` 已无直接 CSV 写调用。追加 helper 仍为 mutex 下的 `f_open/f_lseek/f_write/f_close` 单批路径。
+- OpenOCD/ST-Link 烧录当前 HEX 成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.250368 V`。
+
+### 现场验证结果与阻断
+
+- LogTask 已启动且持续运行：第一次读取 `task_started=1`、`loop_count=45`、`sample_count=27`；第二次为 `loop_count=54`、`sample_count=36`。CAN 同期持续正常：外部 RX `13→39`、TX self-test `14→40`、matched `27→79`、signal updates `54→158`、cache=2、decode errors=0；`GET /api/signals` 与 `GET /api/can/status` 均返回 HTTP 200，后者为 `tx=34/rx=32/errors=0/busOff=0/tec=0/rec=0/sendResult=0`，ping 2/2 且 ARP 为 `02:00:00:12:34:56`。
+- 但 LogTask 未产生成功批量写：两次读数均为 `flush_count=0/write_count=0`，同时失败/丢弃从 `26/26` 增至 `35/35`。进一步读取证实 `g_tf_card_bringup_status=0`、`g_tf_fs_mutex_ready=1`、`g_tf_fs_lock_result=0`，而 `/log/signal.csv` 的 `f_open(FA_READ)` 返回 `FR_DISK_ERR=1`，不是允许首启的 `FR_NO_FILE=4`。
+- 因用户限定不增加自动修复或重试，LogTask 对该错误只记录失败/丢弃，不写入、不清理或替换现有文件。该策略符合最小失败边界，但未满足“连续两次证明批量 flush 与文件增长”的验收条件。
+- 按后续要求执行一次受控 `reset run`、等待 8 秒 TF bring-up 后再读，并在 7 秒后第二次读取；两次均为 `g_tf_card_bringup_status=0`、`g_tf_fs_mutex_ready=1`、`g_tf_fs_lock_result=0`、`g_tf_read_open_result=1`。LogTask 的 `sample_count=7→13`、`failure_count=6→12`、`drop_count=6→12`，`flush_count=0/write_count=0`。因此该 `FR_DISK_ERR=1` 是复位后持续的文件系统/文件现场阻断，而非旧任务状态；仍未改写或修复该文件。
+
+### 当前结论
+
+- 源码、主机测试、构建、反汇编、烧录、LogTask 启动、CAN 与 HTTP 回归均已完成；首启 `FR_NO_FILE` 分支已实现。
+- 当前 TF 文件读取 `FR_DISK_ERR=1` 是现场阻断，不能宣称独立 LogTask CSV 批量写已验证；本轮未提交或推送。恢复验证前应先在不破坏 `/log/signal.csv` 的前提下诊断该文件/TF 介质错误，再读取两次 flush/write/文件大小增长。
+
+## 2026-07-10 LogTask 隔离文件系统健康探针（未提交）
+
+### 用户请求与实现边界
+
+- 用户要求只做受控隔离 probe：绝不删除、截断、修复、写入或改名既有 `/log/signal.csv`；仅在 TF bring-up 成功后一次性用已有 `fs_mutex` + append helper 向全新 `/log/logtask_probe.csv` 追加固定 `logtask_probe\n`，并记录 ST-Link 可读的总体、open/write/close、长度和最终大小结果。probe 不在循环中运行，也不成为 LogTask 新路径、轮换或恢复策略。
+- 初版在 TF mount 返回 2 时仍进入 probe，现场发现任务停在 FatFs 等待而 probe 变量仍为初值；随即将调用收紧为仅 `g_tf_card_bringup_status==0`，否则 `g_logtask_probe_skipped=1` 且不触碰文件。该分支经反汇编确认。
+
+### 构建、反汇编和烧录
+
+- `git diff --check` 通过；`./scripts/verify.sh` 通过，主机 CTest 12/12 通过。probe 是 HAL/FatFs 一次性调用，没有新的可脱离 HAL 纯逻辑，因此未伪造主机 FatFs 测试。
+- 最终 ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`：FLASH `70008 B / 128 KB = 53.41%`，RAM_D1 `203632 B / 512 KB = 38.84%`，`text=69772/data=228/bss=203400`。
+- `bringup_default_task` 反汇编确认：先执行 `tf_card_bringup_run()`，返回为 0 时才内联调用 `stm32h750_tf_append_file_locked()`，固定长度 14；非 0 跳到 skipped 分支，随后才加载 active DBC 并创建 CAN/W5500/LogTask。OpenOCD 烧录成功，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.250368 V`。
+
+### 最终现场读数与结论
+
+- 最终受控启动后 TF 正常：`g_tf_card_bringup_status=0`、`g_tf_fs_lock_result=0`、`g_tf_fs_mutex_ready=1`。probe 已执行一次且成功：`attempted=1/skipped=0/result=0/open=0/write=0/close=0/write_len=14/file_size=14`。
+- 原文件问题保持不变：`g_tf_read_open_result=1 (FR_DISK_ERR)`；LogTask `sample_count=55`、`failure_count=54`、`drop_count=54`，`flush_count=0/write_count=0`，故没有改写 `/log/signal.csv`。这证明当前 TF 能创建/写入全新文件，而阻断限定为既有 `signal.csv` 特定文件损坏。
+- 同期 CAN/API 回归正常：外部 RX=60、TX self-test=61、cache=2、decode errors=0、signal updates=242、matched/attempts=121；ping 2/2，`GET /api/signals` 和 `GET /api/can/status` 均为 HTTP 200，后者 `tx=55/rx=53/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+- 结论严格限制为“原 `signal.csv` 特定文件损坏、TF 仍可创建/写新文件”。未删除、截断、修复或替换原文件，未把 LogTask 改为新路径，未提交或推送；等待根任务决定原文件处置方式。
+
+## 2026-07-10 LogTask 最小 recovery 路径选择（现场分支未覆盖，未提交）
+
+### 根任务授权与最终实现
+
+- 根任务在隔离 probe 成功后授权最小恢复策略：最终产品移除所有 `/log/logtask_probe.csv` 代码和探针全局；不再每次启动写 probe。
+- `LogTask` 初始化只读取一次 `/log/signal.csv` 大小。返回 0 或 `FR_NO_FILE=4` 时固定默认路径；其他返回时固定 `/log/signal-recovery.csv`，初始大小视为 0。新增 `g_log_path_mode`（0=default、1=recovery）、`g_log_path_switch_count` 和 `g_log_active_file_size`。选择后整次运行只向选中路径写，不重试切换、不删除/修复旧文件、不实现轮换或下载。
+- 新增 portable `signal_log_select_path()`；主机 `test_signal_log_buffer` 覆盖成功、`FR_NO_FILE`、`FR_DISK_ERR=1` 与另一错误均按预期选择。`stm32h750_tf_file_size_locked()` 现在原样返回 FatFs open/close 错误，以区分 `FR_NO_FILE` 与其他失败；静态文件调用仍仅判断非 0 为失败。
+
+### 构建和反汇编
+
+- `git diff --check` 通过；`./scripts/verify.sh` 通过，主机 CTest 12/12 通过。最终 ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`：FLASH `69892 B / 128 KB = 53.32%`，RAM_D1 `203608 B / 512 KB = 38.84%`，`text=69668/data=216/bss=203392`。
+- `signal_log_task` 反汇编确认：入口调用 `stm32h750_tf_file_size_locked()` 与 `signal_log_select_path()` 一次，保留 `1000/5000/512/768` 常量；recovery 分支递增切换计数，flush 把固定活动路径传给 append helper。ELF 字符串只包含 `/log/signal.csv` 和 `/log/signal-recovery.csv`，不再包含 `logtask_probe`。
+
+### 现场结果与未完成边界
+
+- OpenOCD/ST-Link 烧录成功：`Programming Finished`、`Verified OK`，目标电压约 `3.251976 V`。本次启动默认文件大小读取却返回 0，故 mode=0、switch=0，未触发 recovery。首次读数 write/flush=3/3、活动大小=15846、sample=18、failure/drop=0；第二次为 write/flush=12/12、活动大小=20976、sample=63、failure/drop=0，证明默认 LogTask 批量写持续正常。
+- CAN/网络回归正常：第二次诊断外部 RX=63、TX self-test=64、cache=2、decode errors=0、signal updates=254、matched/attempts=127；ping 2/2，`GET /api/signals` 和 `GET /api/can/status` 均 HTTP 200，后者 `tx=58/rx=56/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+- 先前 `FR_DISK_ERR=1` 未在本次最终启动复现，且默认文件已按明确定义的成功分支写入。因此没有 recovery 文件大小增长的现场证据，不能声称 recovery 分支已验证；不人为损坏默认文件以覆盖分支。本轮不提交、不推送，等待根任务决定是否接受默认路径验证或等待真实错误再次出现。
+
+### 根任务最终复核
+
+- 根任务确认本阶段的主验收是独立 LogTask 的持续批量写；默认路径已在实机连续两次满足该目标，不能因无法非破坏性触发异常 recovery 分支而阻断该主阶段。recovery 保留为已编译、反汇编和主机单测覆盖、待真实错误条件复验的分支。
+- 根任务再次执行 `git diff --check` 与 `./scripts/verify.sh`：主机 CTest 12/12 通过，STM32 构建无工作待做。首次直接运行 `arm-none-eabi-nm` 因未加载 `env.sh` 报命令不存在；加载项目环境后重试成功，反汇编确认 `signal_log_task` 仅在入口调用路径选择一次，使用 `1000/5000/512/768` 常量，后续 flush 使用固定活动路径，最终 ELF 不含 probe 字符串。
+- 已同步修正治理文档中过时的“LogTask 批量写未通过/未验证 recovery 则不提交”措辞；提交时必须继续明确 recovery 实机待验证。

@@ -33,7 +33,7 @@
 
 #include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
-#include "signal_csv.h"
+#include "signal_log_buffer.h"
 #include "task.h"
 
 /* USER CODE END Includes */
@@ -73,6 +73,19 @@ volatile uint32_t g_tf_csv_write_count;
 volatile uint32_t g_tf_csv_write_result = 0xffffffffu;
 volatile uint32_t g_tf_csv_write_len;
 volatile uint32_t g_tf_csv_file_size;
+volatile uint32_t g_log_task_started;
+volatile uint32_t g_log_task_loop_count;
+volatile uint32_t g_log_sample_count;
+volatile uint32_t g_log_flush_count;
+volatile uint32_t g_log_write_count;
+volatile uint32_t g_log_failure_count;
+volatile uint32_t g_log_drop_count;
+volatile uint32_t g_log_buffer_len;
+volatile uint32_t g_log_buffer_samples;
+volatile uint32_t g_log_last_result = 0xffffffffu;
+volatile uint32_t g_log_path_mode = 0xffffffffu;
+volatile uint32_t g_log_path_switch_count;
+volatile uint32_t g_log_active_file_size;
 
 /* USER CODE END PV */
 
@@ -84,7 +97,7 @@ static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
-static void signal_csv_log_snapshot(void);
+static void signal_log_task(void *argument);
 
 /* USER CODE END PFP */
 
@@ -237,38 +250,97 @@ static void bringup_print_status(const char *phase)
   bringup_uart_write(line);
 }
 
-static void signal_csv_log_snapshot(void)
+static void signal_log_task(void *argument)
 {
-  static char csv_buffer[512];
-  SignalCacheEntry entries[SIGNAL_CSV_MAX_ITEMS];
+  enum {
+    LOG_SAMPLE_MS = 1000u,
+    LOG_FLUSH_MS = 5000u,
+    LOG_FLUSH_THRESHOLD = 512u,
+  };
+  static char storage[768];
+  static const char default_path[] = "/log/signal.csv";
+  static const char recovery_path[] = "/log/signal-recovery.csv";
+  SignalLogBuffer buffer;
+  const char *active_path;
+  uint32_t last_sample_ms;
+  uint32_t last_flush_ms;
   size_t file_size = 0u;
-  const size_t count = can2_signal_cache_copy(entries, SIGNAL_CSV_MAX_ITEMS);
-  if (count == 0u) {
-    g_tf_csv_write_result = 2u;
-    g_tf_csv_write_len = 0u;
-    return;
-  }
-  if (stm32h750_tf_file_size_locked("/log/signal.csv", &file_size) != 0) {
+  const int default_file_size_result = stm32h750_tf_file_size_locked(default_path, &file_size);
+  const SignalLogPathMode path_mode = signal_log_select_path(default_file_size_result);
+
+  (void)argument;
+  active_path = path_mode == SIGNAL_LOG_PATH_RECOVERY ? recovery_path : default_path;
+  if (path_mode == SIGNAL_LOG_PATH_RECOVERY ||
+      default_file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) {
     file_size = 0u;
   }
-  const size_t length = signal_csv_build_rows(entries,
-                                               count,
-                                               file_size == 0u,
-                                               csv_buffer,
-                                               sizeof(csv_buffer));
-  if (length == 0u) {
-    g_tf_csv_write_result = 3u;
-    g_tf_csv_write_len = 0u;
-    return;
+  g_log_path_mode = (uint32_t)path_mode;
+  if (path_mode == SIGNAL_LOG_PATH_RECOVERY) {
+    ++g_log_path_switch_count;
   }
-  g_tf_csv_write_len = (uint32_t)length;
-  g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked("/log/signal.csv",
-                                                                       (const uint8_t *)csv_buffer,
-                                                                       length,
-                                                                       &file_size);
+  g_log_active_file_size = (uint32_t)file_size;
   g_tf_csv_file_size = (uint32_t)file_size;
-  if (g_tf_csv_write_result == 0u) {
-    ++g_tf_csv_write_count;
+  signal_log_buffer_init(&buffer, storage, sizeof(storage));
+  last_sample_ms = HAL_GetTick();
+  last_flush_ms = last_sample_ms;
+  g_log_task_started = 1u;
+
+  for (;;) {
+    const uint32_t now_ms = HAL_GetTick();
+    if ((uint32_t)(now_ms - last_sample_ms) >= LOG_SAMPLE_MS) {
+      SignalCacheEntry entries[2];
+      const size_t count = can2_signal_cache_copy(entries, 2u);
+      last_sample_ms = now_ms;
+      ++g_log_sample_count;
+      if (count == 0u) {
+        ++g_log_drop_count;
+      } else {
+        const SignalLogBufferResult result = signal_log_buffer_append_snapshot(&buffer,
+                                                                                 entries,
+                                                                                 count,
+                                                                                 file_size == 0u && buffer.length == 0u);
+        if (result != SIGNAL_LOG_BUFFER_OK) {
+          if (result == SIGNAL_LOG_BUFFER_SERIALIZE_ERROR) {
+            ++g_log_failure_count;
+          }
+          ++g_log_drop_count;
+          g_log_last_result = (uint32_t)result + 2u;
+        } else {
+          ++g_log_buffer_samples;
+          g_log_buffer_len = (uint32_t)buffer.length;
+        }
+      }
+    }
+
+    if (signal_log_buffer_should_flush(&buffer,
+                                       LOG_FLUSH_THRESHOLD,
+                                       last_flush_ms,
+                                       now_ms,
+                                       LOG_FLUSH_MS)) {
+      ++g_log_flush_count;
+      g_tf_csv_write_len = (uint32_t)buffer.length;
+      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(active_path,
+                                                                          (const uint8_t *)buffer.data,
+                                                                          buffer.length,
+                                                                          &file_size);
+      g_tf_csv_file_size = (uint32_t)file_size;
+      g_log_active_file_size = (uint32_t)file_size;
+      g_log_last_result = g_tf_csv_write_result;
+      last_flush_ms = now_ms;
+      if (g_tf_csv_write_result == 0u) {
+        ++g_tf_csv_write_count;
+        ++g_log_write_count;
+      } else {
+        ++g_log_failure_count;
+        g_log_drop_count += g_log_buffer_samples;
+      }
+      signal_log_buffer_clear(&buffer);
+      g_log_buffer_len = 0u;
+      g_log_buffer_samples = 0u;
+    }
+
+    ++g_log_task_loop_count;
+    vTaskDelay(pdMS_TO_TICKS(100u));
   }
 }
 
@@ -336,11 +408,19 @@ static void bringup_default_task(void *argument)
     g_w5500_task_started = 0xffffffffu;
     Error_Handler();
   }
+  if (xTaskCreate(signal_log_task,
+                  "log",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 1u,
+                  NULL) != pdPASS) {
+    g_log_task_started = 0xffffffffu;
+    Error_Handler();
+  }
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000u));
     g_freertos_loop_count++;
-    signal_csv_log_snapshot();
     bringup_print_status("run");
   }
 }

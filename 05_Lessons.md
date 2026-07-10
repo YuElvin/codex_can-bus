@@ -23,3 +23,5 @@
 - L-021：外部 CAN 解码验收至少要连续两次读取并确认 `g_can2_dbc_rx_frame_count`、matched 与 signal_updates 同步增长，同时核对 last RX ID/DLC；单次静态计数不能证明持续外部输入。
 - L-022：在当前 CAN2 单写者、W5500 单读者阶段，HTTP 读取 SignalCache 时用短 FreeRTOS 临界区复制固定小快照；不要直接序列化正在被 CAN2 任务更新的缓存结构。
 - L-023：最小 CSV 可复用同一 `can2_signal_cache_copy()` 快照和 FatFs mutex；空文件只写一次表头，后续在 `f_lseek(f_size())` 后追加。验收必须连续读取 `g_tf_csv_write_count/g_tf_csv_write_result/g_tf_csv_write_len/g_tf_csv_file_size`，同时确认 CAN RX、匹配和信号更新继续增长。
+- L-024：LogTask 首次检查 `/log/signal.csv` 时，`FR_NO_FILE` 仅表示新卡/首启，应以文件大小 0 继续并写表头；其他 FatFs 返回码不能伪装为首启。2026-07-10 曾现场读到 `FR_DISK_ERR=1`，但最终恢复固件启动时同一路径读取成功；因此错误可能间歇，不能人为破坏文件复现。
+- L-025：隔离 append probe 可用于一次性区分“原文件”与“介质”问题，但最终产品必须移除其代码和全局。最终恢复策略应在 LogTask 初始化只选择一次：默认大小读取成功或 `FR_NO_FILE` 用默认路径，其他错误用固定 recovery 路径；不得循环切换或自动修复。recovery 分支只有在真实读取失败时才能声称已验证。

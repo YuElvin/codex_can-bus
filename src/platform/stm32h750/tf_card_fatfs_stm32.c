@@ -278,18 +278,18 @@ int stm32h750_tf_file_size_locked(const char *path, size_t *file_size) {
   if (file_size == NULL ||
       build_fatfs_path(&ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK ||
       tf_fs_lock() != 0) {
-    return 1;
+    return -1;
   }
   g_tf_read_open_result = f_open(&file, full_path, FA_READ);
   if (g_tf_read_open_result != FR_OK) {
     tf_fs_unlock();
-    return 1;
+    return (int)g_tf_read_open_result;
   }
   *file_size = (size_t)f_size(&file);
   g_tf_read_file_size = (uint32_t)*file_size;
   g_tf_read_close_result = f_close(&file);
   tf_fs_unlock();
-  return g_tf_read_close_result == FR_OK ? 0 : 1;
+  return g_tf_read_close_result == FR_OK ? 0 : (int)g_tf_read_close_result;
 }
 
 int stm32h750_tf_read_file_chunk_locked(const char *path,
