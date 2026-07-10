@@ -1344,3 +1344,18 @@
 - 第三次连续只读 OpenOCD 诊断仍显示 `g_can2_dbc_rx_frame_count=0`、CAN2 RX=0；同时 TX self-test=57、matched=57、signal_updates=114、cache=2、decode_errors=0。
 - 固件、DBC runtime 和自检解码均在运行，但没有来自 Windows CANtest 的外部输入，因而无法客观完成外部 RX→DBC→SignalCache 验收。
 - 后续恢复条件：Windows CANtest 以 500 kbit/s classic CAN 向 `PB5/FDCAN2_RX` 持续发送标准帧 `0x321`、数据 `C2 A5 34 12 02 03 04 05`；恢复后先读取 RX 来源、匹配、更新和缓存诊断，再推进下一阶段。
+
+## 2026-07-10 20:57:14 +08:00
+
+### 用户确认与现场验收
+
+- 用户确认 Windows CANtest 已开始持续发送外部信号；本轮直接读取运行中固件，不复位或重烧录，以保留累计 RX 证据。
+- 第一次 OpenOCD 读数：RX source=95、TX self-test=8002、last message=`0x321`、cache=2、decode errors=0、signal updates=16194、matched=8097、attempts=8097；runtime generation=1、valid=1、signals=2、messages=1。
+- 间隔后第二次读数：RX source 增至 115，matched/attempts 由 8097 增至 8137，signal updates 由 16194 增至 16274，cache 保持 2、decode errors 保持 0，证明外部输入持续进入 active DBC→decoder→SignalCache 路径。
+- OpenOCD 单独读取最后 RX：ID=`0x321`、DLC=8、last first byte=`0xFF`，说明当前分析仪帧数据与此前示例 payload 可不同，但帧 ID/DLC 与 active DBC 相匹配且成功解码。
+- HTTP 顺序验证：`GET /api/dbc/runtime` 返回 HTTP 200，`bytes=151/messages=1/signals=2/errors=0`；`GET /api/can/status` 返回 HTTP 200，`rx=119/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+
+### 结论
+
+- 外部 CANtest→FDCAN2_RX→active DBC→SignalCache 已客观验证完成；TX self-test 与外部 RX 仍保留独立计数，不混写证据。
+- 本轮未改固件源码，因此未重新编译、反汇编或烧录；验证对象是之前已烧录且持续运行的当前固件。下一步按计划实现最小只读实时信号 API。

@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；成功发送的 `0x321` 只作 TX self-test，外部 RX FIFO 也调用同一解码函数但尚未完成现场解码验证。本轮不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照并更新单个 `SignalCache`；TX self-test 与外部 CANtest RX FIFO 均已通过同一解码函数完成现场验证。本轮不并发化 TF/FatFs、QSPI 或 HTTP 写操作。
 
 ### 4.2 目标任务拆分
 
@@ -236,7 +236,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行；完整队列/mutex 待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test 已验证；外部 RX 解码、Web 物理值和 CSV 待做 |
+| 10 | 实时解码和日志 | 部分已验证 | active DBC 到 `SignalCache` 的 TX self-test 与外部 RX 解码已验证；Web 物理值和 CSV 待做 |
 | 11 | 规则/继电器 | 待做 | 延时、滞回、超时动作正确 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 

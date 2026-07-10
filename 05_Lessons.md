@@ -20,3 +20,4 @@
 - L-018：DBC 活动文件切换前必须重新从 TF 读回候选并复用 portable parser 校验；无效候选只返回错误，不触发 `/dbc/active.dbc` 替换。最小阶段先保留候选文件，使用 `/dbc/active.write.tmp` + `/dbc/active.prev.dbc` 保护旧活动文件。
 - L-019：运行态 active DBC 加载要解析到非活动槽，只有 parser 返回有效后才切换 active 指针、slot 和 generation；reload 失败或无效文件不能清空既有有效快照。双槽 `DbcDatabase` 会显著增加 RAM_D1，本轮从 25.12% 升到 34.91%，后续接信号缓存前必须继续复查内存。
 - L-020：CAN 解码验证必须区分来源：成功发送的周期诊断帧可作为 TX self-test 验证 active DBC→decoder→`SignalCache`，不能替代外部 CANtest→FDCAN2_RX 验证；分别读取 `g_can2_dbc_tx_self_test_frame_count` 和 `g_can2_dbc_rx_frame_count`。
+- L-021：外部 CAN 解码验收至少要连续两次读取并确认 `g_can2_dbc_rx_frame_count`、matched 与 signal_updates 同步增长，同时核对 last RX ID/DLC；单次静态计数不能证明持续外部输入。
