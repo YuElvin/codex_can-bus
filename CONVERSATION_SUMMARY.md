@@ -1291,3 +1291,9 @@
 - 本轮已客观验证 active DBC → portable decoder → `SignalCache` 的板端 TX self-test 闭环，外部 RX 分支已实现并通过反汇编确认。
 - 外部 CANtest → FDCAN2_RX 的解码尚未完成现场验证：本轮 `g_can2_rx_count=0` 与 `g_can2_dbc_rx_frame_count=0`，不能把 TX self-test 写成外部 RX 成功。下一步应由 CANtest 发送匹配 `0x321` 帧并确认 RX 来源计数、缓存更新计数递增。
 - 未实现实时信号 API、日志、规则、配置任务、队列或并发缓存保护；这些均不属于本轮范围。
+
+### 提交推送结果
+
+- 已提交 `2f0b767 Decode active DBC frames into SignalCache`，包含 portable 解码器、主机单测、CAN2 TX self-test/RX 来源区分和全部同步文档。
+- 已推送到 `origin/codex/W5500`，远端从 `60c3734` 更新到 `2f0b767`。
+- 本段只补充提交推送事实，不改固件源码；不需要重新编译或反汇编。
