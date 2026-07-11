@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；`marker==42434` 的 Relay1 经过固定 1000 ms 连续匹配延时才置高，实测首次/约 300 ms 保持低、约 1.3 s 后高，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖输入已实测可压过自动高态，释放后自动状态恢复；它仅用于最小目标侧验收，不是完整配置接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖输入已实测可压过自动高态，释放后自动状态恢复；它仅用于最小目标侧验收，不是完整配置接口。
 
 ### 4.2 目标任务拆分
 
@@ -237,7 +237,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
-| 11 | 规则/继电器 | 部分已验证 | 最小 `marker==42434` 规则已烧录验证：1000 ms 连续匹配后 PE7 高、PE8 低，停帧超过 1500 ms 两路安全回低；ST-Link 手动两路 OFF 覆盖优先且释放后自动恢复；完整配置和滞回待做 |
+| 11 | 规则/继电器 | 部分已验证 | 最小固定高滞回规则已烧录验证：`on=42434/off=42432`，1000 ms 连续匹配后 PE7 高、42433 保持、42432 释放，PE8 始终低，停帧超过 1500 ms 两路安全回低；ST-Link 手动两路 OFF 覆盖优先且释放后自动恢复；完整配置待做 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
 ## 13. 风险与规避

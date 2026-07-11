@@ -102,6 +102,7 @@ volatile uint32_t g_rule_task_manual_relay2;
 volatile uint32_t g_rule_task_manual_active;
 volatile uint32_t g_rule_task_condition_since_ms;
 volatile uint32_t g_rule_task_delay_pending;
+volatile uint32_t g_rule_task_hysteresis_latched;
 
 /* USER CODE END PV */
 
@@ -279,7 +280,8 @@ static void rule_apply_relays(const RelayState relays[RULE_RELAY_COUNT])
 static void rule_task(void *argument)
 {
   enum {
-    RULE_MARKER_VALUE = 42434u,
+    RULE_MARKER_ON_VALUE = 42434u,
+    RULE_MARKER_OFF_VALUE = 42432u,
     RULE_DELAY_MS = 1000u,
     RULE_TIMEOUT_MS = 1500u,
   };
@@ -288,8 +290,9 @@ static void rule_task(void *argument)
     .id = "can2_marker",
     .enabled = true,
     .signal_key = "Can2Data.marker",
-    .op = RULE_OP_EQ,
-    .threshold = (double)RULE_MARKER_VALUE,
+    .op = RULE_OP_HYSTERESIS_HIGH,
+    .on_threshold = (double)RULE_MARKER_ON_VALUE,
+    .off_threshold = (double)RULE_MARKER_OFF_VALUE,
     .relay = 0u,
     .action_state = RELAY_STATE_ON,
     .delay_ms = RULE_DELAY_MS,
@@ -333,6 +336,7 @@ static void rule_task(void *argument)
     g_rule_task_condition_since_ms = engine.rules[0].condition_since_ms;
     g_rule_task_delay_pending = engine.rules[0].condition_since_ms != 0u &&
                                   g_rule_task_relay1_output == (uint32_t)RELAY_STATE_OFF ? 1u : 0u;
+    g_rule_task_hysteresis_latched = engine.rules[0].latched_state ? 1u : 0u;
     g_rule_task_safe_active = marker_safe ? 1u : 0u;
     g_rule_task_manual_active = manual_enabled ? 1u : 0u;
     ++g_rule_task_evaluation_count;
