@@ -67,6 +67,7 @@ int can_external_bringup_run(void);
 int can2_analyzer_bringup_run(void);
 int can2_analyzer_poll(void);
 size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
+size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity);
 int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w5500_bringup_run(void);

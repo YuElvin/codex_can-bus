@@ -65,8 +65,25 @@ static int test_stale_and_rule_snapshot_export(void) {
   return 0;
 }
 
+static int test_rule_snapshot_export_preserves_can_marker(void) {
+  SignalCache cache;
+  signal_cache_init(&cache);
+
+  ASSERT_TRUE(signal_cache_upsert(&cache, "Can2Data", "marker", "count", 42434.0, 42434, 250u));
+
+  SignalSnapshot snapshots[1];
+  const size_t count = signal_cache_export_rule_snapshots(&cache, snapshots, 1u);
+  ASSERT_EQ_SIZE(1u, count);
+  ASSERT_TRUE(strcmp(snapshots[0].key, "Can2Data.marker") == 0);
+  ASSERT_TRUE(snapshots[0].valid);
+  ASSERT_TRUE(snapshots[0].value == 42434.0);
+  ASSERT_TRUE(snapshots[0].updated_ms == 250u);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_upsert_and_find() == 0);
   ASSERT_TRUE(test_stale_and_rule_snapshot_export() == 0);
+  ASSERT_TRUE(test_rule_snapshot_export_preserves_can_marker() == 0);
   return 0;
 }

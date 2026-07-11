@@ -1502,3 +1502,94 @@
 - 根任务确认本阶段的主验收是独立 LogTask 的持续批量写；默认路径已在实机连续两次满足该目标，不能因无法非破坏性触发异常 recovery 分支而阻断该主阶段。recovery 保留为已编译、反汇编和主机单测覆盖、待真实错误条件复验的分支。
 - 根任务再次执行 `git diff --check` 与 `./scripts/verify.sh`：主机 CTest 12/12 通过，STM32 构建无工作待做。首次直接运行 `arm-none-eabi-nm` 因未加载 `env.sh` 报命令不存在；加载项目环境后重试成功，反汇编确认 `signal_log_task` 仅在入口调用路径选择一次，使用 `1000/5000/512/768` 常量，后续 flush 使用固定活动路径，最终 ELF 不含 probe 字符串。
 - 已同步修正治理文档中过时的“LogTask 批量写未通过/未验证 recovery 则不提交”措辞；提交时必须继续明确 recovery 实机待验证。
+# 2026-07-11 派送会话状态复核
+
+- 用户要求检查已派送新会话是否能继续执行全量开发目标。本轮实际读取两个 RuleTask 派送会话：`019f4cc6-581c-78e0-813c-80d5b4ef4733` 与 `019f4cc6-ccba-7323-bcea-184645e5f634`。两者均为 `completed/notLoaded`，仅保存委派输入，没有 assistant 工具调用、文件修改、构建、烧录或提交记录，因此不能把它们视为已开始或已完成阶段 11。
+- 当前实际工作区解析为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500` 与 `origin/codex/W5500` 同步且无未提交改动；最新已推送提交仍为 `e512adc Move CSV logging to LogTask`。故可从该干净基线在当前会话继续最小 `RuleTask`/PE7 继电器阶段；本轮仅作会话状态核验，未改固件、未编译、未反汇编、未烧录。
+- 对已归档的替代会话执行恢复后再次发送继续指令，实际返回其归档 rollout 文件不存在，不能复用。已据此在同一项目本地环境重新创建新会话 `019f4d5e-0ce7-7d70-af0c-a2fc84c788bb`，完整交接阶段 11 的最小范围、验证和提交条件；该会话创建成功后由其接管后续开发。创建操作本身未修改固件、未编译、未反汇编、未烧录。
+
+## 2026-07-11 阶段 11 最小 RuleTask/继电器集成（进行中）
+
+### 已确认边界、假设和实现
+
+- 启动时实际发现工作区只有前一轮会话交接记录修改；该记录说明基线是已推送 `e512adc Move CSV logging to LogTask`，没有遗漏的 RuleTask 源码改动，继续保留并追加。
+- 当前 `MX_GPIO_Init()` 已把 `PE7/PE8` 配置为推挽输出并写低。当前 CAN2 周期诊断帧为标准帧 `0x321`、数据前两字节 `C2 A5`；对应 current active DBC 的 little-endian `Can2Data.marker` 值为 `0xA5C2=42434`。
+- 本轮只增加一条内置诊断规则：`Can2Data.marker == 42434` 时 Relay1/PE7 高，Relay2/PE8 始终低；规则超时为 1500 ms、安全态低。1500 ms 用于兼容当前 CAN2 轮询约 1000 ms 周期，避免连续输入被误判为超时。没有 CRUD、HTTP 规则、配置保存、手动 API、多规则、队列或持久化。
+- 已增加 `can2_signal_cache_export_rule_snapshots()`：在 CAN 缓存侧以短 FreeRTOS 临界区调用已有 `signal_cache_export_rule_snapshots()`；RuleTask 本身不直接访问 CAN 缓存。RuleTask 每 50 ms 调用既有 portable `rule_engine`，集中写 PE7/PE8，并导出任务启动/循环/评估/输入数、两个输出、GPIOE ODR、有效匹配和安全态全局。保留既有 rule_engine 逻辑，不重写其延时、滞回、超时或手动优先级。
+- 已为 `Can2Data.marker` 的 core SignalCache→Rule Snapshot 桥接增加主机单测；尚未执行本轮 `./scripts/verify.sh`、反汇编、烧录或现场读取，结果待后续真实命令确认。
+
+### 构建与反汇编结果
+
+- `git diff --check && ./scripts/verify.sh` 已通过。主机 `build/host` 的 CTest 12/12 通过，包含既有 `rule_engine` 全部测试及新增 `Can2Data.marker` 快照导出测试。
+- STM32 固件 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex/.bin` 编译通过，无新增编译错误；FLASH `71084 B / 128 KB = 54.23%`，RAM_D1 `207496 B / 512 KB = 39.58%`，较上一已推送 LogTask 基线的 RAM 增量来自 static `RuleEngine` 与 RuleTask。
+- 定向反汇编确认：`bringup_default_task()` 在 CAN/W5500/LogTask 创建后创建 `rule` 任务（1024 words、`tskIDLE_PRIORITY+2`）；`rule_task()` 固化 `42434` 与 `1500`，调用 `can2_signal_cache_export_rule_snapshots(..., 2)`、已有 `rule_engine_evaluate()`、集中 `rule_apply_relays()` 和 `vTaskDelay(50)`；`can2_signal_cache_export_rule_snapshots()` 严格是 `vPortEnterCritical()` → `signal_cache_export_rule_snapshots()` → `vPortExitCritical()`；`rule_apply_relays()` 分别调用 `HAL_GPIO_WritePin(GPIOE, 0x80)` 与 `HAL_GPIO_WritePin(GPIOE, 0x100)` 并读取 GPIOE ODR。详见以下现场结果。
+
+### 烧录、现场证据与未完成边界
+
+- 首次受限 OpenOCD 报 `Error: open failed`，未触及板子；授权后通过 ST-Link（目标电压 `3.269658 V`）烧录，输出 `Programming Finished`、`Verified OK`、`Resetting Target`。后续以 GDB 只读读取 ELF 全局，临时 OpenOCD 服务已关闭。
+- 已完成启动时：RuleTask `started=1`、`evaluation=loop=1268`，`input_count=0/safe_active=1/rule_matched=0`，Relay1/Relay2 输出均为 0、GPIOE ODR=0；CAN/W5500/LogTask 也均 started=1，loop 为 `64/1268/334`，`freertos_bringup_complete=1`。因此无有效 SignalCache 输入时 PE7/PE8 安全低已有实机证据。
+- 主机回归：路由为 `en2`，ping `192.168.1.88` 2/2（约 `0.732-0.904 ms`），ARP `02:00:00:12:34:56`，`GET /api/status` 和 `GET /api/can/status` 均 HTTP 200；后者为 CAN2 `status=0/tx=114/rx=120/errors=0/busOff=0/tec=0/rec=0/sendResult=0`，确认 CAN transport、网络/API 正常。
+- 阻断事实：本次启动 TF status=2，runtime active DBC 为 `result=1/valid=0/generation=0/load_count=0`，DBC RX/matched/updates/cache 均为 0。CAN transport RX=120 不能变成 RuleTask marker 输入；RuleTask 正确保持安全低。一次不写文件的 reset run 重试后，15 秒仍在 `SD_read()`，随后 TF 仍返回 2；未删除、截断、改名或写入 TF 文件。
+- 本轮源码、桥接单测、`./scripts/verify.sh`（CTest 12/12）、STM32 编译、反汇编、烧录、无输入安全低和 CAN/W5500 回归均完成；ELF FLASH `71084 B/128 KB=54.23%`、RAM_D1 `207496 B/512 KB=39.58%`。但 PE7 marker 高、PE8 低及 1500 ms 超时回低未完成，不能提交或推送为阶段 11 完成。
+
+## 2026-07-11 TF 启动与 active DBC 加载阻断修复（进行中）
+
+### 已确认因果与最小修改
+
+- 保留上一轮 8 个未提交 RuleTask/治理记录修改；开始前 `git diff --check` 通过，未覆盖既有 RuleTask 代码。
+- `tf_card_bringup_run()` 返回 `2` 的直接含义是 `f_mount()` 未成功。当前平台层的 `BSP_SD_ReadBlocks_DMA()` 是阻塞式 `HAL_SD_ReadBlocks()` 包装：成功后在返回前同步调用 `BSP_SD_ReadCpltCallback()`。但 `cube_mx/FATFS/Target/sd_diskio.c` 的直接读取路径在该函数返回后才执行 `ReadStatus = 0`，会清除已经同步置位的完成标志并等待到 30 秒超时；scratch 逐扇区分支也在调用前缺少同样的显式清零。
+- 本轮仅将 `ReadStatus = 0` 移到直接读取调用前，并在 scratch 每扇区调用前清零；未改 SDMMC 配置、TF 文件、active DBC、SignalCache、CAN 或 RuleTask 条件。这与当前阻断的同步完成回调因果直接对应。
+
+### 待完成验证
+
+- 修复后 `git diff --check` 通过；`./scripts/verify.sh` 通过，host CTest `12/12` 通过。STM32 固件重新链接成功：FLASH `71084 B / 128 KB = 54.23%`，RAM_D1 `207496 B / 512 KB = 39.58%`，ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`。编译仍报告 `sd_diskio.c` 既有 `int`/`UINT` 比较的 4 条 `-Wsign-compare` 警告；本轮未改其类型，避免扩大范围。
+- 最终按 CubeMX 原文件风格把 `sd_diskio.c` 全部恢复为 CRLF；`file` 确认只有 CRLF 终止符，`git diff --numstat -- cube_mx/FATFS/Target/sd_diskio.c` 为 `2/1`。CRLF 会被默认 `git diff --check` 作为新增行尾 CR 报告，因此最终以 `git -c core.whitespace=cr-at-eol diff --check` 完成等价空白检查并通过；未修改仓库或全局 Git 配置。恢复 CRLF 后再次执行 `./scripts/verify.sh`，host CTest 仍为 `12/12`，STM32 重编译/链接仍通过且尺寸不变。
+- 定向反汇编确认 `SD_read()` 的直接路径在 `bl BSP_SD_ReadBlocks_DMA` 前执行 `str r3, [ReadStatus]`，scratch 循环同样在每次 `bl` 前清零；`BSP_SD_ReadBlocks_DMA()` 调用阻塞式 `HAL_SD_ReadBlocks()`，成功后才调用 `BSP_SD_ReadCpltCallback()`。因此修复后的目标指令顺序与同步回调模型一致。
+- 修复前曾启动一次临时 ST-Link/GDB 只读诊断尝试；GDB 因当前 ELF 未含调试类型信息而对未显式强制类型的全局变量均提示 `unknown type`，没有获得可用数值。会话已结束并恢复/断开目标，不把这次尝试作为任何硬件结论。
+- 硬件烧录、TF mount/smoke、`/dbc/active.dbc` runtime 恢复、CANtest marker → PE7 高、1500 ms 超时回低及 CAN/W5500/HTTP 回归尚未进行；不得将它们记为已验证或提交推送。
+
+## 2026-07-11 TF 读取顺序修复实机验证与 RuleTask 继续验收
+
+### 构建、反汇编与烧录
+
+- `sd_diskio.c` 已保持 CubeMX 原有 CRLF；该文件普通 `git diff --numstat` 为 `2/1`，逻辑仅为两处 `ReadStatus` 前置清零。普通 `git diff --check` 会把新增 CRLF 行的 `CR` 报为 trailing whitespace；`git -c core.whitespace=cr-at-eol diff --check` 通过，未改仓库/全局 Git 配置。
+- `./scripts/verify.sh` 通过：host CTest `12/12`，STM32 构建无待重建目标。定向反汇编再次确认 `SD_read()` 直接和 scratch 两分支的 `str ReadStatus, 0` 都位于 `bl BSP_SD_ReadBlocks_DMA` 之前；wrapper 成功后调用 `BSP_SD_ReadCpltCallback()`。
+- 首次烧录因前一次本会话遗留 OpenOCD 服务占用 ST-Link 而 `OpenOCD init failed`；确认并终止该 PID 后重试成功。OpenOCD 输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压 `3.250368 V`。
+
+### TF/DBC 恢复实机证据
+
+- 复位运行 15 秒后 GDB/ST-Link 读取：`g_tf_card_bringup_status=0`；`g_w5500_http_dbc_runtime_result=0`、`generation=1`、`valid=1`、`load_count=1`。因此本轮 TF mount/smoke 与 `/dbc/active.dbc` 启动加载已恢复，不再是 RuleTask 验收阻断。
+- 同期 CAN DBC 诊断为 RX source `15`、TX self-test `15`、last ID `0x321`、SignalCache count `2`；RuleTask 已启动且有两项输入，`started=1`、`input_count=2`、`safe_active=0`。主机 `en2` 路由正常，ping `192.168.1.88` 为 `2/2`；`GET /api/dbc/runtime` 返回 `loaded=true/generation=1/bytes=151/messages=1/signals=2/errors=0`，`GET /api/can/status` 返回 `errors=0/busOff=0/sendResult=0`。
+
+### RuleTask 当前真实边界
+
+- `GET /api/signals` 实际返回 `Can2Data.marker.raw=65535`、`Can2Data.sequence.raw=65535`，均由当前外部 CAN 输入更新；所以 `Can2Data.marker == 42434` 条件不成立，现场读取到 Relay1/PE7=0、`rule_matched=0` 是正确安全行为，不能把它写为规则失败。
+- 要完成 PE7 高态验证，CANtest 必须停止持续覆盖的 `FF FF ...` 帧，改为持续发送 classic CAN `0x321`、8 字节 `C2 A5 34 12 02 03 04 05`（little-endian marker=`0xA5C2=42434`）。之后复读应同时看到 `/api/signals` marker=42434、`rule_matched=1`、Relay1/PE7=1、Relay2/PE8=0；停止该帧超过 1500 ms 后再确认两路输出回低和 `safe_active=1`。在此之前不修改规则条件、不注入 SignalCache、不提交推送。
+- 本次 ST-Link 读取使用的临时 OpenOCD 服务已在读取结束后终止，未遗留调试服务占用接口。
+
+## 2026-07-11 RuleTask 匹配帧复读
+
+- 用户要求只读复查，不修改规则、不注入 SignalCache。`GET /api/signals` 返回有效输入 `Can2Data.marker.raw=42435`、`Can2Data.sequence.raw=4660`，已不再是此前的 `65535`，但仍不等于规则常量 `42434`。
+- 随后 ST-Link 读取：RuleTask `started=1`、`input_count=2`、`safe_active=0`、`rule_matched=0`、Relay1=0、Relay2=0、GPIOE ODR=0，评估/loop 均为 `0x141d`；CAN DBC RX source=`0xe4`、TX self-test=`0x102`、last ID=`0x321`、cache=2。该低态与实际 marker 差 1 一致，不是 RuleTask 故障。
+- 未执行 PE7 高态或停止后 1500 ms 回低验收，也未改代码、规则或 DBC。下一次只在 `/api/signals` 显示 marker=`42434` 后才继续读取高态；CANtest 第 0/1 字节应为 `C2 A5`，当前 `42435` 对应的低字节不是 `C2`。临时 OpenOCD 服务已终止。
+- 根会话在确认临时 OpenOCD 不再运行后，直接执行 `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/stm32h750/can_bus_gateway_stm32h750.hex verify reset exit"`；当前环境仅输出 `OpenOCD init failed`，未出现 ST-Link 连接、目标电压、`Programming Finished` 或 `Verified OK`，因此本次命令不能算烧录成功，也没有新的板上读数。RuleTask 与 TF 修复继续保持未提交、未推送，待可用的 ST-Link 硬件访问后重试。
+- 随后原 TF/DBC 分派会话已恢复并完成实机重试：该会话报告 TF status=0、active DBC runtime `result=0/valid=1/generation=1/load_count=1`，外部 DBC 缓存增长；但 `Can2Data.marker` 先后实读为 65535、42435，均不匹配 RuleTask 内置诊断值 42434，故 Relay1/PE7 正确保持低。根会话再通过只读 `curl http://192.168.1.88/api/signals` 读取到 marker=58623（`0xE4FF`）、sequence=4660，证明 CAN 总线当前仍在发送非目标字节序列；未修改规则、固件或 CAN 配置。高态与超时验收仍需 CANtest 实际持续发送 `0x321: C2 A5 34 12 02 03 04 05`，并停止其他覆盖该 ID 的发送源。
+- 用户固定目标 CANtest 信号后，根会话只读 HTTP 已确认 `Can2Data.marker=42434/raw=42434`、`sequence=4660`，CAN2 status=0、rx=30911、errors=0。随后通过 OpenOCD ST-Link V2 GDB 服务（目标电压 `3.250368 V`）暂停读取：`g_rule_task_started=1`、loop/evaluation=155、input_count=2、Relay1 output=1、Relay2 output=0、GPIOE ODR=`0x80`、rule_matched=1、safe_active=0。故实际连续目标输入下 PE7 已高、PE8 保持低；尚待用户停帧超过 1500 ms 后读取两路安全回低，未提交或推送。
+- 随后再次 GDB 只读：input_count=2、Relay1=1、Relay2=0、GPIOE ODR=`0x80`、matched=1、safe_active=0，说明目标帧当时仍在持续输入，尚未进入超时窗口；没有把该高态复读误记为超时验收通过。
+- 在用户尚未确认停帧时再次只读 GDB，状态仍为 input_count=2、Relay1=1、Relay2=0、GPIOE ODR=`0x80`、matched=1、safe_active=0；证明目标输入继续到达，故 1500 ms 超时回低仍未具备现场触发条件。
+- 连续多次请求停止 CANtest 后，实际 GDB 状态仍保持 Relay1=1、GPIOE ODR=`0x80`、safe_active=0；当前唯一未完成的阶段 11 验收为“停止有效 marker 输入超过 1500 ms 后 PE7/PE8 两路安全回低”。由于该外部发送状态未改变，项目全量目标暂记为等待用户停止发送后复验；RuleTask、TF 修复及治理记录均保持未提交，不能推送。
+- 阻断状态下再次只读 GDB，Relay1=1、Relay2=0、GPIOE ODR=`0x80`、matched=1、safe_active=0，外部输入仍持续；没有状态变化，继续等待停帧后复验。
+- 停止外部发送后发现 PE7 仍保持高，源码核对确认原因是 `can2_analyzer_poll()` 每秒把内部 TX self-test `0x321/C2 A5` 解码进了与外部 RX 共用的 `g_can2_signal_cache`，持续刷新 RuleTask 输入并掩盖超时。已最小修改 `firmware/bringup/can_bringup.c`：增加 `g_can2_tx_self_test_signal_cache`，`decode_can2_frame()` 按 `tx_self_test` 选择独立 self-test 或外部 RX 缓存；self-test 仍通过同一 DBC 解码器验证，但 HTTP/Log/RuleTask 继续只读外部缓存。`git -c core.whitespace=cr-at-eol diff --check`、`./scripts/verify.sh` 通过，CTest 12/12；STM32 重新编译为 FLASH `71116 B/128 KB=54.26%`、RAM_D1 `226960 B/512 KB=43.29%`（额外固定 SignalCache 约 19 KB）。反汇编确认 tx self-test 选择 `0x240120e8`，外部 RX 选择 `0x24016cf0`。
+- 新固件已通过 ST-Link V2（目标电压 `3.250368 V`）烧录，输出 `Programming Finished`、`Verified OK`、`Resetting Target`。外部发送保持停止时，GDB 读取 `g_rule_task_started=1`、input_count=0、Relay1=0、Relay2=0、GPIOE ODR=0、matched=0、safe_active=1，证明隔离后内部 self-test 不再使 PE7 保持高，安全低态成立。尚待重新发送目标外部帧验证修复后 PE7 高、再停帧验证 1500 ms 回低；本轮未提交或推送。
+
+## 2026-07-11 RuleTask 修复后外部输入复验等待
+
+- 本轮先读取项目治理文件、当前工作区与板端状态；工作区仍是 `codex/W5500`，RuleTask、TF 修复和 self-test 隔离相关文件均保持未提交。未修改固件，因此本轮未编译、未执行新的反汇编或烧录。
+- `GET /api/signals` 曾返回保存的 `Can2Data.marker=42434/raw=42434`、`sequence=4660`，CAN HTTP 状态为 `status=0/tx=166/rx=106/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。随后为判定该快照是否仍是新鲜外部输入，使用现有 OpenOCD GDB 服务暂停读取当前 ELF 符号地址：`started=1`、`input_count=2`，但 Relay1=0、Relay2=0、GPIOE ODR=0、`rule_matched=0`、`safe_active=1`。
+- 该低态说明 HTTP 中的 marker 是最后接收的缓存快照，当前外部帧并未持续到达且已超过 RuleTask 的 1500 ms 安全超时；不能把它当成修复后的 PE7 高态证据。需要在持续发送 `0x321: C2 A5 34 12 02 03 04 05` 的新鲜输入窗口内再次读取，随后停止该帧超过 1500 ms 后复读回低，才可完成阶段 11 并提交推送。
+- 随后 RX 从 `106` 增至 `127`，`GET /api/signals` 再次确认 marker=42434；在同一烧录固件上 GDB 实读：`started=1`、`input_count=2`、Relay1/PE7=1、Relay2/PE8=0、GPIOE ODR=`0x80`、`rule_matched=1`、`safe_active=0`。这是 self-test 隔离修复后的真实外部目标帧高态证据。现仅待停止该帧超过 1500 ms 后复读两路输出安全回低；未改代码、未重新编译、未重新烧录、未提交推送。
+- 请求停止后的轮询仍显示 CAN RX 从 `127` 增至 `138`，`/api/signals` 仍为 marker=42434；因此外部目标帧仍在到达，未满足 1500 ms 超时触发条件。本次未改代码、未编译、未反汇编、未烧录，也没有把持续高态误记为回低验收。
+- 最终复查 CAN RX 保持 `138` 不再增长，已超过 1500 ms；GDB 实读 `started=1`、`input_count=2`、Relay1/PE7=0、Relay2/PE8=0、GPIOE ODR=0、`rule_matched=0`、`safe_active=1`。结合此前同一烧录版本在持续目标帧下的 PE7=1/PE8=0/ODR=`0x80`，阶段 11 最小内置规则的外部高态和停帧超时安全回低均已客观验证。
+- 提交前复跑 `git -c core.whitespace=cr-at-eol diff --check` 与 `./scripts/verify.sh`：通过，host CTest `12/12`；STM32 CMake 配置成功且 `ninja: no work to do`，复用已烧录的最终 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf`。本次没有新的源码编译产物；仍按规则重新执行定向反汇编：`rule_task()` 固化 `1500`、调用快照桥、`rule_engine_evaluate()` 和 50 ms `vTaskDelay()`；`rule_apply_relays()` 写 GPIOE `0x80`/`0x100`；`decode_can2_frame()` 在 `tx_self_test` 条件下分别选 `0x240120e8` self-test 与 `0x24016cf0` 外部缓存后调用同一 decoder；`SD_read()` 直接和 scratch 两路径均在 `BSP_SD_ReadBlocks_DMA()` 前写零 `ReadStatus`。结论与源码功能一致。
+- 已同步更新 `03_Context.md`、`04_Features_ADR.md` 和 `ARCHITECTURE_DESIGN.md`：最小 RuleTask 标为实机验证完成，明确 TX self-test 与外部消费缓存隔离、RAM_D1 为 `226960 B / 512 KB = 43.29%`；完整规则配置、手动优先级、延时和滞回仍列为后续阶段 11 工作，未被夸大为已完成。
+- 已提交并推送 `58aacb0 Add verified RuleTask relay safety` 到 `origin/codex/W5500`，范围为 RuleTask、外部快照桥、TX self-test 缓存隔离、TF 同步读完成标志修复、主机测试与阶段文档。下一步按用户要求在新会话继续阶段 11 的完整规则配置、手动优先级、延时和滞回最小闭环；开始前重新读取治理文件并基于该提交核验工作区。

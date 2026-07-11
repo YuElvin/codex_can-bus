@@ -33,6 +33,7 @@
 
 #include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
+#include "rule_engine.h"
 #include "signal_log_buffer.h"
 #include "task.h"
 
@@ -86,6 +87,15 @@ volatile uint32_t g_log_last_result = 0xffffffffu;
 volatile uint32_t g_log_path_mode = 0xffffffffu;
 volatile uint32_t g_log_path_switch_count;
 volatile uint32_t g_log_active_file_size;
+volatile uint32_t g_rule_task_started;
+volatile uint32_t g_rule_task_loop_count;
+volatile uint32_t g_rule_task_evaluation_count;
+volatile uint32_t g_rule_task_input_count;
+volatile uint32_t g_rule_task_relay1_output;
+volatile uint32_t g_rule_task_relay2_output;
+volatile uint32_t g_rule_task_gpioe_odr;
+volatile uint32_t g_rule_task_rule_matched;
+volatile uint32_t g_rule_task_safe_active;
 
 /* USER CODE END PV */
 
@@ -98,6 +108,7 @@ static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
 static void signal_log_task(void *argument);
+static void rule_task(void *argument);
 
 /* USER CODE END PFP */
 
@@ -248,6 +259,68 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_tf_sd_last_sta,
                  (unsigned long)g_tf_sd_last_dcount);
   bringup_uart_write(line);
+}
+
+static void rule_apply_relays(const RelayState relays[RULE_RELAY_COUNT])
+{
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7, relays[0] == RELAY_STATE_ON ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, relays[1] == RELAY_STATE_ON ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  g_rule_task_relay1_output = (uint32_t)relays[0];
+  g_rule_task_relay2_output = (uint32_t)relays[1];
+  g_rule_task_gpioe_odr = GPIOE->ODR;
+}
+
+static void rule_task(void *argument)
+{
+  enum {
+    RULE_MARKER_VALUE = 42434u,
+    RULE_TIMEOUT_MS = 1500u,
+  };
+  static RuleEngine engine;
+  const Rule marker_rule = {
+    .id = "can2_marker",
+    .enabled = true,
+    .signal_key = "Can2Data.marker",
+    .op = RULE_OP_EQ,
+    .threshold = (double)RULE_MARKER_VALUE,
+    .relay = 0u,
+    .action_state = RELAY_STATE_ON,
+    .timeout_ms = RULE_TIMEOUT_MS,
+    .safe_state = RELAY_STATE_OFF,
+    .default_state = RELAY_STATE_OFF,
+  };
+  RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
+
+  (void)argument;
+  rule_engine_init(&engine);
+  if (!rule_engine_add_rule(&engine, &marker_rule)) {
+    g_rule_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  rule_apply_relays(relays);
+  g_rule_task_started = 1u;
+
+  for (;;) {
+    SignalSnapshot signals[2];
+    const uint32_t now_ms = HAL_GetTick();
+    const size_t count = can2_signal_cache_export_rule_snapshots(signals, 2u);
+    bool marker_safe = true;
+
+    for (size_t i = 0u; i < count; ++i) {
+      if (strcmp(signals[i].key, marker_rule.signal_key) == 0) {
+        marker_safe = !signals[i].valid || now_ms - signals[i].updated_ms > RULE_TIMEOUT_MS;
+        break;
+      }
+    }
+    g_rule_task_input_count = (uint32_t)count;
+    rule_engine_evaluate(&engine, signals, count, now_ms, relays);
+    rule_apply_relays(relays);
+    g_rule_task_rule_matched = g_rule_task_relay1_output == (uint32_t)RELAY_STATE_ON ? 1u : 0u;
+    g_rule_task_safe_active = marker_safe ? 1u : 0u;
+    ++g_rule_task_evaluation_count;
+    ++g_rule_task_loop_count;
+    vTaskDelay(pdMS_TO_TICKS(50u));
+  }
 }
 
 static void signal_log_task(void *argument)
@@ -415,6 +488,15 @@ static void bringup_default_task(void *argument)
                   tskIDLE_PRIORITY + 1u,
                   NULL) != pdPASS) {
     g_log_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  if (xTaskCreate(rule_task,
+                  "rule",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 2u,
+                  NULL) != pdPASS) {
+    g_rule_task_started = 0xffffffffu;
     Error_Handler();
   }
 

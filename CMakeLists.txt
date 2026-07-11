@@ -88,6 +88,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${STM32_HAL_SOURCES}
     src/core/dbc_decoder.c
     src/core/dbc_parser.c
+    src/core/rule_engine.c
     src/core/signal_api.c
     src/core/signal_cache.c
     src/core/signal_csv.c

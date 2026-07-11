@@ -51,6 +51,7 @@ volatile uint32_t g_can2_dbc_rx_frame_count;
 static Stm32FdcanContext g_can2_ctx;
 static CanPort g_can2_port;
 static SignalCache g_can2_signal_cache;
+static SignalCache g_can2_tx_self_test_signal_cache;
 
 static const CanFrame k_fd_probe_frame = {
   .id = 0x18ff50e5u,
@@ -120,6 +121,7 @@ static void capture_can2_status(void) {
 
 static void decode_can2_frame(const CanFrame *rx, bool tx_self_test) {
   const DbcDatabase *db = w5500_http_active_dbc_snapshot();
+  SignalCache *signal_cache = tx_self_test ? &g_can2_tx_self_test_signal_cache : &g_can2_signal_cache;
   if (db == NULL) {
     return;
   }
@@ -136,9 +138,11 @@ static void decode_can2_frame(const CanFrame *rx, bool tx_self_test) {
   }
 
   ++g_can2_dbc_matched_frame_count;
-  const size_t updated = dbc_decode_frame_to_signal_cache(db, rx, &g_can2_signal_cache, HAL_GetTick());
+  const size_t updated = dbc_decode_frame_to_signal_cache(db, rx, signal_cache, HAL_GetTick());
   g_can2_dbc_signal_update_count += (uint32_t)updated;
-  g_can2_dbc_cache_count = (uint32_t)g_can2_signal_cache.count;
+  if (!tx_self_test) {
+    g_can2_dbc_cache_count = (uint32_t)g_can2_signal_cache.count;
+  }
   g_can2_dbc_last_message_id = rx->id;
   if (updated != message->signal_count) {
     ++g_can2_dbc_decode_error_count;
@@ -250,6 +254,7 @@ int can_external_bringup_run(void) {
 int can2_analyzer_bringup_run(void) {
   stm32h750_fdcan_bind(&g_can2_port, &g_can2_ctx, &hfdcan2);
   signal_cache_init(&g_can2_signal_cache);
+  signal_cache_init(&g_can2_tx_self_test_signal_cache);
 
   const CanPortConfig config = {
     .nominal_bitrate = 500000u,
@@ -297,6 +302,14 @@ size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity
   size_t count;
   taskENTER_CRITICAL();
   count = signal_cache_copy(&g_can2_signal_cache, out_entries, out_capacity);
+  taskEXIT_CRITICAL();
+  return count;
+}
+
+size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity) {
+  size_t count;
+  taskENTER_CRITICAL();
+  count = signal_cache_export_rule_snapshots(&g_can2_signal_cache, out_signals, out_capacity);
   taskEXIT_CRITICAL();
   return count;
 }
