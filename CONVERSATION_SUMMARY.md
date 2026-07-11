@@ -1595,3 +1595,24 @@
 - 已提交并推送 `58aacb0 Add verified RuleTask relay safety` 到 `origin/codex/W5500`，范围为 RuleTask、外部快照桥、TX self-test 缓存隔离、TF 同步读完成标志修复、主机测试与阶段文档。下一步按用户要求在新会话继续阶段 11 的完整规则配置、手动优先级、延时和滞回最小闭环；开始前重新读取治理文件并基于该提交核验工作区。
 - 随后已将包含上述记录的提交修订为 `8c5a585 Add verified RuleTask relay safety` 并以 `--force-with-lease` 推送到 `origin/codex/W5500`；工作区确认干净。按用户“每次新开对话”的要求，新建本地项目会话 `019f4f5c-9d76-7f60-bad2-63949fecf00c`，交接其从当前阶段 11 的完整规则配置、手动/自动优先级、延时和滞回中选择最小可烧录验收闭环继续。创建会话不修改固件、未编译、未反汇编、未烧录。
 - 用户要求检查并释放 OpenOCD。实际发现本会话遗留临时服务 PID `9944`，命令为 `openocd ... -c gdb_port 3333 ...`，会占用 ST-Link；已发送 `kill 9944`，1 秒后 `pgrep -af '[o]penocd'` 无输出，确认 OpenOCD/GDB 服务已释放。此操作不修改固件，未编译、未反汇编、未烧录。
+
+## 2026-07-11 阶段 11 手动/自动优先级最小闭环（进行中）
+
+### 本轮选择、假设与验收方式
+
+- 用户要求在完整规则配置、手动/自动优先级、延时和滞回中先选一个可烧录验收的最小步骤。已在实际仓库 `/Users/elvin/Desktop/project/can_bus_W5500` 同步并确认干净基线 `4c8f93a Record OpenOCD release`；遗留 OpenOCD/GDB 服务已确认释放。
+- 本轮选择“手动优先级”而非新增配置文件、HTTP API、持久化、多规则、延时或滞回：RuleTask 已复用的 portable `rule_engine` 本来就有 `rule_engine_set_manual()` 和主机测试，缺少的是最小目标侧受控入口与实机证据。
+- 拟新增仅供 ST-Link 诊断/验收写入的 volatile 手动覆盖输入，默认禁用，且本轮只写入两路 OFF 来安全证明它压过外部 marker 触发的自动 PE7 高态；释放覆盖后自动状态应恢复。该入口不是 HTTP API、不是持久化配置，也不扩大为完整规则管理。
+- 成功标准：持续外部 `0x321:C2 A5 34 12 02 03 04 05` 时自动 PE7=1/PE8=0；通过 ST-Link 启用两路 OFF 的手动覆盖后 PE7/PE8=0，释放后自动 PE7=1/PE8=0。固件源码改动后必须执行 `./scripts/verify.sh`、关键 ELF 反汇编、OpenOCD/ST-Link 烧录与上述现场读取；只有全部通过才更新阶段状态并提交推送。
+- 原新会话在写入最小实现后未继续产生构建、烧录或调试进程；根会话复查仅见未提交 `main.c` 与本记录改动，未见 `ninja`、`cmake`、`openocd` 或交叉编译进程。为避免停滞会话继续占用共享任务，已归档会话 `019f4f5c-9d76-7f60-bad2-63949fecf00c`；未丢弃其未验证改动，后续新会话必须先检查并在保留最小范围的前提下接手验证。
+- 第二个接手会话同样在范围核对后未继续产生构建/烧录进程；根会话确认无相关进程后归档 `019f4f60-4fff-7ae0-9d75-261d4c6bc6a5`，并直接接手该已新开阶段的未验证最小改动，避免继续等待或丢弃代码。
+- 接手后执行 `git -c core.whitespace=cr-at-eol diff --check` 与 `./scripts/verify.sh`：通过，host CTest `12/12`；STM32 构建成功，最终 ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`。定向反汇编确认 `rule_task()` 在每轮读取 `g_rule_task_manual_enabled/relay1/relay2`，调用 `rule_engine_set_manual()` 后再调用 `rule_engine_evaluate()`，仍保留 `1500 ms` 安全检查与 `vTaskDelay(50)`；因此目标指令顺序与手动优先级设计一致。
+- 已通过 OpenOCD/ST-Link V2 烧录该固件：目标电压 `3.250368 V`，输出 `Programming Finished`、`Verified OK`、`Resetting Target`。新固件默认诊断实读：RuleTask started=1、manual enabled/active=0；持续外部目标帧下自动 Relay1/PE7=1、Relay2/PE8=0、GPIOE ODR=`0x80`、matched=1、safe=0。
+- 使用 ST-Link GDB 写入 `manual_relay1=0`、`manual_relay2=0`、`manual_enabled=1` 后，实读 manual active=1、Relay1=0、Relay2=0、ODR=0，同时 `safe_active=0`，证明手动 OFF 覆盖优先于仍有效的自动 marker 条件；随后清除 `manual_enabled`，实读 manual active=0、Relay1=1、Relay2=0、ODR=`0x80`、matched=1、safe=0，证明自动高态恢复。该入口默认关闭，只用于 ST-Link 诊断/验收，不是 HTTP、持久化或完整规则配置接口。
+- 已在结束现场读取后终止临时 OpenOCD PID `20527`，1 秒后 `pgrep -af '[o]penocd'` 无输出，ST-Link 已释放。用户要求本阶段提交推送完成后检查两次新会话异常自动关闭/停滞的原因；该检查待提交后执行。
+
+### 接手核对
+
+- 新会话已按要求读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件，并确认实际路径为 `/Users/elvin/Desktop/project/can_bus_W5500`、分支为 `codex/W5500`。
+- `git status --short` 只显示本轮遗留的 `cube_mx/Core/Src/main.c` 与本记录；`git diff --check` 通过。源码差异仅新增四个零初始化的 volatile ST-Link 诊断/输入变量，并在 RuleTask 的 50 ms 循环内把两路输入转换为既有 `RelayState` 后调用 `rule_engine_set_manual()`；不新增 HTTP、持久化、配置、规则条件、多规则、延时或滞回。
+- 已复核 portable `rule_engine`：`rule_engine_evaluate()` 在 `manual.enabled` 时先复制手动继电器状态并返回，主机测试 `test_manual_override_has_priority` 已覆盖该优先级。因此遗留改动符合“复用既有手动优先级语义”的最小目标；尚未编译、反汇编、烧录或读取新变量，以下继续执行完整验证。

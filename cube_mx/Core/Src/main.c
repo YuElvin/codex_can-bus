@@ -96,6 +96,10 @@ volatile uint32_t g_rule_task_relay2_output;
 volatile uint32_t g_rule_task_gpioe_odr;
 volatile uint32_t g_rule_task_rule_matched;
 volatile uint32_t g_rule_task_safe_active;
+volatile uint32_t g_rule_task_manual_enabled;
+volatile uint32_t g_rule_task_manual_relay1;
+volatile uint32_t g_rule_task_manual_relay2;
+volatile uint32_t g_rule_task_manual_active;
 
 /* USER CODE END PV */
 
@@ -302,6 +306,11 @@ static void rule_task(void *argument)
 
   for (;;) {
     SignalSnapshot signals[2];
+    const RelayState manual_relays[RULE_RELAY_COUNT] = {
+      g_rule_task_manual_relay1 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF,
+      g_rule_task_manual_relay2 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF,
+    };
+    const bool manual_enabled = g_rule_task_manual_enabled != 0u;
     const uint32_t now_ms = HAL_GetTick();
     const size_t count = can2_signal_cache_export_rule_snapshots(signals, 2u);
     bool marker_safe = true;
@@ -313,10 +322,12 @@ static void rule_task(void *argument)
       }
     }
     g_rule_task_input_count = (uint32_t)count;
+    rule_engine_set_manual(&engine, manual_enabled, manual_relays);
     rule_engine_evaluate(&engine, signals, count, now_ms, relays);
     rule_apply_relays(relays);
     g_rule_task_rule_matched = g_rule_task_relay1_output == (uint32_t)RELAY_STATE_ON ? 1u : 0u;
     g_rule_task_safe_active = marker_safe ? 1u : 0u;
+    g_rule_task_manual_active = manual_enabled ? 1u : 0u;
     ++g_rule_task_evaluation_count;
     ++g_rule_task_loop_count;
     vTaskDelay(pdMS_TO_TICKS(50u));
