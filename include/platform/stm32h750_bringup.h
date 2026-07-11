@@ -71,6 +71,14 @@ size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size
 int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w25q128_diagnostic_run(void);
+int w25q128_rule_config_load(uint32_t *on_threshold,
+                              uint32_t *off_threshold,
+                              uint32_t *delay_ms,
+                              uint32_t *timeout_ms);
+int w25q128_rule_config_save(uint32_t on_threshold,
+                              uint32_t off_threshold,
+                              uint32_t delay_ms,
+                              uint32_t timeout_ms);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
 int w5500_http_load_active_dbc(void);

@@ -7,9 +7,9 @@
 | F-001 | W5500 SPI 网络 bring-up | [客观已验证] | 作为当前网络主路径，替代 LAN8720/RMII |
 | F-002 | FDCAN2 外部 CAN 收发 | [客观已验证] | `PB5/PB6` + MCP2562FD + USBCAN-2E-U 是当前外部 CAN 主通道 |
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
-| F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；保留 `0x00FFF000` 诊断区由显式 ST-Link 请求擦写读回，正式备份不得使用该扇区 |
+| F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，`0x00FFE000` 已烧录验证单规则记录保存、读回与复位加载 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
-| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务和最小 ConfigTask 已上板复核；ConfigTask 仅串行执行显式 QSPI 诊断，完整队列/mutex 与配置保存待实现 |
+| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务和最小 ConfigTask 已上板复核；ConfigTask 串行执行显式 QSPI 诊断和单规则保存，完整队列/mutex 与通用配置保存待实现 |
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；`0x321` TX self-test 和外部 CANtest RX 均无解码错误，且 self-test 缓存已与外部消费缓存隔离。配置生效仍待实现 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；规则和配置仍待实现 |
@@ -28,6 +28,7 @@
 | ADR-008 | 用独立最小 LogTask 替换监控循环直接 CSV 写入，并在启动时一次性选择日志路径 | 已接受，recovery 现场验收待做 |
 | ADR-009 | RuleTask 复用 portable rule_engine，仅从短临界区外部 RX SignalCache 快照集中驱动 PE7/PE8 | 已接受，最小 marker、固定延时/高滞回、手动优先级与单规则 reload 已上板验证 |
 | ADR-010 | 最小 ConfigTask 仅串行执行既有 W25Q128 显式诊断请求 | 已接受，默认零擦写、显式请求擦写读回与任务运行均已上板验证 |
+| ADR-011 | 单规则配置使用独立 QSPI 记录做最小持久化 | 已接受，显式保存、读回校验、非默认配置复位恢复和默认值恢复均已上板验证 |
 
 ## 决策记录摘要
 
@@ -62,3 +63,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-010：最小 ConfigTask 串行化 QSPI 诊断
 
 默认启动的 W25Q128 bring-up 只读 JEDEC ID。既有 `g_w25q128_diagnostic_request` 非零时，50 ms ConfigTask 清除请求、独占执行保留区 `0x00FFF000` 的擦写读回诊断并更新结果与次数；bringup 任务不再直接执行该写路径。本步不定义配置数据、备份地址、文件来源、HTTP、队列或持久化，后续正式配置保存必须另行确定地址和事务边界。
+
+### ADR-011：单规则配置的最小 QSPI 持久化
+
+为直接推进配置备份目标，固定 `0x00FFE000` 为独立 4 KiB 单规则记录扇区，禁止与 `0x00FFF000` 诊断扇区混用。记录仅含 magic、version、四个整数规则参数与 XOR checksum；启动只读加载，`ConfigTask` 收到显式 ST-Link 保存请求后才擦除、写入并读回比较。保存不自动 reload、不增加 HTTP、TF 文件、CRUD、多规则、队列或通用恢复策略；后续扩展必须定义版本迁移和事务边界。

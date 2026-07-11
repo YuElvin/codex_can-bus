@@ -1700,3 +1700,13 @@
 - 已通过 OpenOCD/ST-Link V2 烧录，输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压约 `3.251976 V`。默认运行后 ST-Link 读数：ConfigTask loop=`0x117`、started=`1`，W25 bringup=`0`，diagnostic result/test address 均为 `0xffffffff`，diagnostic count/erase count=`0`，JEDEC=`0x00EF4018`，证明默认启动未擦写且任务运行。
 - 写入一次既有 request=`1` 后实读：ConfigTask loop=`0x238`、started=`1`，diagnostic result=`0`、test address=`0x00FFF000`、mismatch index=`0xffffffff`、erase count=`1`、diagnostic count=`1`、request=`0`、JEDEC=`0x00EF4018`，证明显式诊断由该任务完成擦写读回。回归 `ping -c 2 -S 192.168.1.100 192.168.1.88` 为 `2/2`；`GET /api/status` 返回 `HTTP/1.1 200 OK`，QSPI status=`0`、jedec=`15679512`。每次 OpenOCD 命令均 `shutdown`；最终无驻留调试服务。
 - 已同步 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`。此 ConfigTask 不是配置保存功能；后续必须先明确正式备份地址与数据格式，再扩展队列或持久化。
+
+## 2026-07-12 正式规则配置备份最小闭环（进行中）
+
+- 用户授权依据未完成计划继续全量开发，起始实查基线为 `f8892f4 Serialize QSPI diagnostics in ConfigTask`，`codex/W5500...origin/codex/W5500` 工作区干净。已重新读取治理、计划、ADR、架构和对话记录；不重复默认零擦写、显式诊断或最小 ConfigTask 串行化。
+- 本轮假设：以已实机验收的单规则四个整数配置作为第一份正式备份数据，足以验证“地址、格式、写入、读回、重启加载”的持久化链路；不引入 HTTP/CRUD、多规则、TF 文件来源、队列或自动 reload。正式记录地址暂定 `0x00FFE000`，为独立 4 KiB 扇区，与诊断保留区 `0x00FFF000` 不重叠。
+- 成功标准：启动只读校验该记录；ST-Link 显式保存请求由 ConfigTask 串行擦写/写入/读回；写入非默认有效参数后复位，启动加载同一参数并报告校验成功。待执行代码审查、构建、反汇编、烧录和 ST-Link 实机验收，尚未完成。
+- 实现仅改 QSPI bring-up、ConfigTask 接口和平台声明：`0x00FFE000` 记录含 magic=`0x52434647`、version=1、on/off/delay/timeout 与 XOR checksum。启动在 JEDEC 成功后只读加载；`g_rule_task_config_save_request` 非零时 ConfigTask 清请求、擦除、写入并读回 `memcmp`，不自动 reload。
+- `git diff --check` 和 `./scripts/verify.sh` 通过，host CTest `13/13`。ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH `72224 B / 128 KB = 55.10%`、RAM_D1 `230928 B / 512 KB = 44.05%`。反汇编确认启动在 `w25q128_bringup_run()` 成功后调用读函数并仅在有效记录时写入规则参数；读函数固定访问 `0x00FFE000` 并检查 magic/version/checksum/阈值与时间关系；ConfigTask 清保存请求后才调用保存函数，保存路径含 erase、program、readback 与 `memcmp`。
+- 已通过 OpenOCD/ST-Link V2 烧录 HEX，输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压约 `3.25 V`。首次空扇区启动：配置 load result=`2`（magic/version 不匹配）、erase/save/load count 均为 0，ConfigTask 已启动，证明默认启动没有擦写。写入非默认 `on/off/delay/timeout=42435/42433/1100/1600` 和显式 save request 后：save result=`0`、save count=`1`、erase count=`1`、request 清零；复位后四参数保持该非默认值、load result=`0`、load count=`1`，证明跨复位加载。随后同一路径保存并复位恢复默认 `42434/42432/1000/1500`，load result=`0`；最终无驻留 OpenOCD。网络回归 `ping -S 192.168.1.100 192.168.1.88` 为 `2/2`，`GET /api/status` 为 `HTTP 200` 且 QSPI/W5500/TF/RTOS 状态正常。
+- 本轮最小 QSPI 单规则配置持久化已客观验收；它不是 HTTP/CRUD、文件配置、多规则或通用配置管理。已执行最终 `git diff --check`，提交并推送 `Persist minimal RuleTask config in QSPI`；当前后续工作应从通用配置记录演进或其他未完成阶段中再选新的最小闭环。

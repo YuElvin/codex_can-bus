@@ -114,6 +114,7 @@ volatile uint32_t g_rule_task_config_reload;
 volatile uint32_t g_rule_task_config_result = 0xffffffffu;
 volatile uint32_t g_rule_task_config_load_count;
 volatile uint32_t g_rule_task_config_generation;
+volatile uint32_t g_rule_task_config_save_request;
 
 /* USER CODE END PV */
 
@@ -165,6 +166,11 @@ extern volatile uint32_t g_w25q128_diagnostic_request;
 extern volatile uint32_t g_w25q128_diagnostic_result;
 extern volatile uint32_t g_w25q128_diagnostic_count;
 extern volatile uint32_t g_w25q128_erase_count;
+extern volatile uint32_t g_w25q128_config_addr;
+extern volatile uint32_t g_w25q128_config_load_result;
+extern volatile uint32_t g_w25q128_config_save_result;
+extern volatile uint32_t g_w25q128_config_load_count;
+extern volatile uint32_t g_w25q128_config_save_count;
 extern volatile uint32_t g_can_tx_count;
 extern volatile uint32_t g_can_rx_count;
 extern volatile uint32_t g_can_error_count;
@@ -497,6 +503,14 @@ static void config_task(void *argument)
       ++g_w25q128_diagnostic_count;
       bringup_print_status("w25q128_diag");
     }
+    if (g_rule_task_config_save_request != 0u) {
+      g_rule_task_config_save_request = 0u;
+      (void)w25q128_rule_config_save(g_rule_task_config_on_threshold,
+                                      g_rule_task_config_off_threshold,
+                                      g_rule_task_config_delay_ms,
+                                      g_rule_task_config_timeout_ms);
+      bringup_print_status("rule_config_save");
+    }
     ++g_config_task_loop_count;
     vTaskDelay(pdMS_TO_TICKS(50u));
   }
@@ -509,6 +523,19 @@ static void bringup_default_task(void *argument)
   g_freertos_task_started = 1u;
   bringup_uart_write("\r\n[bringup] task start rtos=freertos\r\n");
   g_w25q128_bringup_status = w25q128_bringup_run();
+  if (g_w25q128_bringup_status == 0) {
+    uint32_t on_threshold;
+    uint32_t off_threshold;
+    uint32_t delay_ms;
+    uint32_t timeout_ms;
+
+    if (w25q128_rule_config_load(&on_threshold, &off_threshold, &delay_ms, &timeout_ms) == 0) {
+      g_rule_task_config_on_threshold = on_threshold;
+      g_rule_task_config_off_threshold = off_threshold;
+      g_rule_task_config_delay_ms = delay_ms;
+      g_rule_task_config_timeout_ms = timeout_ms;
+    }
+  }
   bringup_print_status("w25q128");
   g_can_bringup_status = can_bringup_run();
   bringup_print_status("can");

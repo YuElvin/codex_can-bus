@@ -1,6 +1,7 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include <stdint.h>
+#include <string.h>
 
 #include "platform/stm32h750_bringup.h"
 
@@ -17,6 +18,11 @@ volatile uint32_t g_w25q128_diagnostic_request;
 volatile uint32_t g_w25q128_diagnostic_result = 0xffffffffu;
 volatile uint32_t g_w25q128_diagnostic_count;
 volatile uint32_t g_w25q128_erase_count;
+volatile uint32_t g_w25q128_config_addr = 0x00ffe000u;
+volatile uint32_t g_w25q128_config_load_result = 0xffffffffu;
+volatile uint32_t g_w25q128_config_save_result = 0xffffffffu;
+volatile uint32_t g_w25q128_config_load_count;
+volatile uint32_t g_w25q128_config_save_count;
 
 #define W25Q128_CMD_WRITE_ENABLE       0x06u
 #define W25Q128_CMD_READ_STATUS_REG1   0x05u
@@ -30,8 +36,27 @@ volatile uint32_t g_w25q128_erase_count;
 #define W25Q128_STATUS_WEL             0x02u
 #define W25Q128_TEST_ADDR              0x00fff000u
 #define W25Q128_TEST_LEN               32u
+#define W25Q128_CONFIG_ADDR            0x00ffe000u
+#define W25Q128_CONFIG_MAGIC           0x52434647u
+#define W25Q128_CONFIG_VERSION         1u
 #define W25Q128_QSPI_TIMEOUT_MS        1000u
 #define W25Q128_ERASE_TIMEOUT_MS       5000u
+
+typedef struct {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t on_threshold;
+  uint32_t off_threshold;
+  uint32_t delay_ms;
+  uint32_t timeout_ms;
+  uint32_t checksum;
+} W25Q128RuleConfigRecord;
+
+static uint32_t w25q128_rule_config_checksum(const W25Q128RuleConfigRecord *record)
+{
+  return record->magic ^ record->version ^ record->on_threshold ^ record->off_threshold ^
+         record->delay_ms ^ record->timeout_ms ^ 0xa5c35a3cu;
+}
 
 static HAL_StatusTypeDef w25q128_command(uint32_t instruction,
                                          uint32_t address_mode,
@@ -260,6 +285,78 @@ int w25q128_diagnostic_run(void)
     }
   }
 
+  return 0;
+}
+
+int w25q128_rule_config_load(uint32_t *on_threshold,
+                              uint32_t *off_threshold,
+                              uint32_t *delay_ms,
+                              uint32_t *timeout_ms)
+{
+  W25Q128RuleConfigRecord record = {0};
+
+  g_w25q128_config_addr = W25Q128_CONFIG_ADDR;
+  if (on_threshold == NULL || off_threshold == NULL || delay_ms == NULL || timeout_ms == NULL ||
+      w25q128_read(W25Q128_CONFIG_ADDR, (uint8_t *)&record, sizeof(record)) != 0) {
+    g_w25q128_config_load_result = 1u;
+    return 1;
+  }
+  if (record.magic != W25Q128_CONFIG_MAGIC || record.version != W25Q128_CONFIG_VERSION) {
+    g_w25q128_config_load_result = 2u;
+    return 2;
+  }
+  if (record.checksum != w25q128_rule_config_checksum(&record) ||
+      record.on_threshold <= record.off_threshold || record.delay_ms > record.timeout_ms) {
+    g_w25q128_config_load_result = 3u;
+    return 3;
+  }
+
+  *on_threshold = record.on_threshold;
+  *off_threshold = record.off_threshold;
+  *delay_ms = record.delay_ms;
+  *timeout_ms = record.timeout_ms;
+  g_w25q128_config_load_result = 0u;
+  ++g_w25q128_config_load_count;
+  return 0;
+}
+
+int w25q128_rule_config_save(uint32_t on_threshold,
+                              uint32_t off_threshold,
+                              uint32_t delay_ms,
+                              uint32_t timeout_ms)
+{
+  W25Q128RuleConfigRecord record = {
+    .magic = W25Q128_CONFIG_MAGIC,
+    .version = W25Q128_CONFIG_VERSION,
+    .on_threshold = on_threshold,
+    .off_threshold = off_threshold,
+    .delay_ms = delay_ms,
+    .timeout_ms = timeout_ms,
+  };
+  W25Q128RuleConfigRecord readback = {0};
+
+  g_w25q128_config_addr = W25Q128_CONFIG_ADDR;
+  if (on_threshold <= off_threshold || delay_ms > timeout_ms) {
+    g_w25q128_config_save_result = 1u;
+    return 1;
+  }
+  record.checksum = w25q128_rule_config_checksum(&record);
+  if (w25q128_sector_erase(W25Q128_CONFIG_ADDR) != 0) {
+    g_w25q128_config_save_result = 2u;
+    return 2;
+  }
+  if (w25q128_program(W25Q128_CONFIG_ADDR, (const uint8_t *)&record, sizeof(record)) != 0) {
+    g_w25q128_config_save_result = 3u;
+    return 3;
+  }
+  if (w25q128_read(W25Q128_CONFIG_ADDR, (uint8_t *)&readback, sizeof(readback)) != 0 ||
+      memcmp(&record, &readback, sizeof(record)) != 0) {
+    g_w25q128_config_save_result = 4u;
+    return 4;
+  }
+
+  g_w25q128_config_save_result = 0u;
+  ++g_w25q128_config_save_count;
   return 0;
 }
 
