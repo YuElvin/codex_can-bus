@@ -1611,6 +1611,13 @@
 - 使用 ST-Link GDB 写入 `manual_relay1=0`、`manual_relay2=0`、`manual_enabled=1` 后，实读 manual active=1、Relay1=0、Relay2=0、ODR=0，同时 `safe_active=0`，证明手动 OFF 覆盖优先于仍有效的自动 marker 条件；随后清除 `manual_enabled`，实读 manual active=0、Relay1=1、Relay2=0、ODR=`0x80`、matched=1、safe=0，证明自动高态恢复。该入口默认关闭，只用于 ST-Link 诊断/验收，不是 HTTP、持久化或完整规则配置接口。
 - 已在结束现场读取后终止临时 OpenOCD PID `20527`，1 秒后 `pgrep -af '[o]penocd'` 无输出，ST-Link 已释放。用户要求本阶段提交推送完成后检查两次新会话异常自动关闭/停滞的原因；该检查待提交后执行。
 
+## 2026-07-11 新会话“自动关闭”异常核查
+
+- 阶段提交 `0a8e493 Verify RuleTask manual priority` 已推送后，直接读取两个会话的实际状态与最后 turn。第一个会话 `019f4f5c-9d76-7f60-bad2-63949fecf00c` 当前为 `notLoaded`，其唯一 turn 状态为 `interrupted`、`error=null`、运行约 `216508 ms`；第二个会话 `019f4f60-4fff-7ae0-9d75-261d4c6bc6a5` 同样为 `notLoaded`，唯一 turn 为 `interrupted`、`error=null`、运行约 `81359 ms`。
+- 没有读到 `systemError`、工具调用错误、构建失败或应用自动关闭证据。两个 `interrupted` 与根会话此前主动调用 `set_thread_archived(..., archived=true)` 的时间和目的一致：第一次归档是根会话误以为无新进程即停滞，第二次也是同样判断后归档；因此“自动关闭”不成立，实际是根会话的手动归档造成会话结束。
+- 首个会话在被归档前事实上已完成源码最小实现、构建/12 项主机测试/反汇编/烧录，并已准备 GDB 覆盖验证；第二会话在归档前亦已完成构建和反汇编确认。根会话随后安全接手并完成现场实测、提交推送，故项目功能未丢失。
+- 改进：今后新会话出现长推理、没有短时 shell 进程或暂未显示新输出时，不再据此归档；先以 `read_thread` 的 turn 状态、`error` 字段和实际必要等待为准。只有明确的系统错误、用户要求或确有不可恢复冲突时才归档；共享工作区下不与运行中的新会话并行修改。
+
 ### 接手核对
 
 - 新会话已按要求读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件，并确认实际路径为 `/Users/elvin/Desktop/project/can_bus_W5500`、分支为 `codex/W5500`。
