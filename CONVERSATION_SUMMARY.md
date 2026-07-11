@@ -1594,3 +1594,4 @@
 - 已同步更新 `03_Context.md`、`04_Features_ADR.md` 和 `ARCHITECTURE_DESIGN.md`：最小 RuleTask 标为实机验证完成，明确 TX self-test 与外部消费缓存隔离、RAM_D1 为 `226960 B / 512 KB = 43.29%`；完整规则配置、手动优先级、延时和滞回仍列为后续阶段 11 工作，未被夸大为已完成。
 - 已提交并推送 `58aacb0 Add verified RuleTask relay safety` 到 `origin/codex/W5500`，范围为 RuleTask、外部快照桥、TX self-test 缓存隔离、TF 同步读完成标志修复、主机测试与阶段文档。下一步按用户要求在新会话继续阶段 11 的完整规则配置、手动优先级、延时和滞回最小闭环；开始前重新读取治理文件并基于该提交核验工作区。
 - 随后已将包含上述记录的提交修订为 `8c5a585 Add verified RuleTask relay safety` 并以 `--force-with-lease` 推送到 `origin/codex/W5500`；工作区确认干净。按用户“每次新开对话”的要求，新建本地项目会话 `019f4f5c-9d76-7f60-bad2-63949fecf00c`，交接其从当前阶段 11 的完整规则配置、手动/自动优先级、延时和滞回中选择最小可烧录验收闭环继续。创建会话不修改固件、未编译、未反汇编、未烧录。
+- 用户要求检查并释放 OpenOCD。实际发现本会话遗留临时服务 PID `9944`，命令为 `openocd ... -c gdb_port 3333 ...`，会占用 ST-Link；已发送 `kill 9944`，1 秒后 `pgrep -af '[o]penocd'` 无输出，确认 OpenOCD/GDB 服务已释放。此操作不修改固件，未编译、未反汇编、未烧录。
