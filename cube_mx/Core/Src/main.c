@@ -71,6 +71,8 @@ volatile uint32_t g_can_task_started;
 volatile uint32_t g_can_task_loop_count;
 volatile uint32_t g_w5500_task_started;
 volatile uint32_t g_w5500_task_loop_count;
+volatile uint32_t g_config_task_started;
+volatile uint32_t g_config_task_loop_count;
 volatile uint32_t g_tf_csv_write_count;
 volatile uint32_t g_tf_csv_write_result = 0xffffffffu;
 volatile uint32_t g_tf_csv_write_len;
@@ -123,6 +125,7 @@ static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
+static void config_task(void *argument);
 static void signal_log_task(void *argument);
 static void rule_task(void *argument);
 
@@ -482,6 +485,23 @@ static void w5500_periodic_task(void *argument)
   }
 }
 
+static void config_task(void *argument)
+{
+  (void)argument;
+
+  g_config_task_started = 1u;
+  for (;;) {
+    if (g_w25q128_diagnostic_request != 0u) {
+      g_w25q128_diagnostic_request = 0u;
+      g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
+      ++g_w25q128_diagnostic_count;
+      bringup_print_status("w25q128_diag");
+    }
+    ++g_config_task_loop_count;
+    vTaskDelay(pdMS_TO_TICKS(50u));
+  }
+}
+
 static void bringup_default_task(void *argument)
 {
   (void)argument;
@@ -521,6 +541,15 @@ static void bringup_default_task(void *argument)
     g_w5500_task_started = 0xffffffffu;
     Error_Handler();
   }
+  if (xTaskCreate(config_task,
+                  "config",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 1u,
+                  NULL) != pdPASS) {
+    g_config_task_started = 0xffffffffu;
+    Error_Handler();
+  }
   if (xTaskCreate(signal_log_task,
                   "log",
                   1024u,
@@ -541,12 +570,6 @@ static void bringup_default_task(void *argument)
   }
 
   for (;;) {
-    if (g_w25q128_diagnostic_request != 0u) {
-      g_w25q128_diagnostic_request = 0u;
-      g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
-      ++g_w25q128_diagnostic_count;
-      bringup_print_status("w25q128_diag");
-    }
     vTaskDelay(pdMS_TO_TICKS(1000u));
     g_freertos_loop_count++;
     bringup_print_status("run");

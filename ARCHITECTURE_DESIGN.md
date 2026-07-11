@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。50 ms 最小 ConfigTask 现在是既有 W25Q128 显式诊断写路径的唯一运行态执行者：默认启动只读 JEDEC，收到 ST-Link 请求后才串行执行 `0x00FFF000` 擦写读回；它不包含配置格式、备份地址、队列或持久化。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
 
 ### 4.2 目标任务拆分
 
@@ -91,7 +91,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | `LogTask` | 中 | 1024 words | 100ms 调度、1s 采样 + 512B/5s flush | 最多两项 CSV 行缓冲，单批写 TF 卡 | FatFs mutex、768B 日志 buffer |
 | `NetTask` | 中 | 3072-4096 words | W5500 socket 事件/轮询 | W5500 socket 服务、连接维护 | W5500 mutex/socket 状态 |
 | `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | REST、静态文件、上传下载 | FatFs mutex、配置 mutex、命令队列 |
-| `ConfigTask` | 低 | 2048 words | 命令队列 | 配置校验、保存、备份到 W25Q128 | `cfg_cmd_q`、FatFs mutex、QSPI mutex |
+| `ConfigTask` | 低 | 1024 words | 50 ms 轮询 | 当前仅执行显式 W25Q128 诊断请求；后续才配置校验、保存和备份 | 当前无队列，后续 `cfg_cmd_q`、FatFs mutex、QSPI mutex |
 | `MonitorTask` | 低 | 1024 words | 500ms/1s | LED 心跳、状态统计、看门狗、诊断打印 | 系统状态 |
 
 优先级原则：CAN 收发和解码不被 Web、TF 卡和 W5500 长操作阻塞；FatFs 和 W25Q128 写操作串行化；Web 读取快照，不长时间持锁。
