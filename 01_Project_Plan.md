@@ -22,7 +22,7 @@
 | 2 | TF 卡 SDMMC + FatFs | [客观已验证] | smoke test 写读通过 |
 | 3 | W5500 SPI bring-up | [客观已验证] | `VERSIONR=0x04`、网络参数回读、主机 ping `192.168.1.88` 通过 |
 | 4 | FDCAN2 外部 CAN 收发 | [客观已验证] | Windows CANtest 可收开发板帧，开发板可收 Windows 发帧 |
-| 5 | W25Q128 QSPI | [客观已验证] | JEDEC ID、擦除、写入、读回匹配 |
+| 5 | W25Q128 QSPI | [客观已验证] | 默认启动只读 JEDEC ID；`0x00FFF000` 保留诊断区仅显式触发擦除、写入、读回匹配 |
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务独立运行并可 ST-Link 读取；完整队列/mutex 拆分待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
@@ -46,4 +46,4 @@
 | DBC 上传过大或半包 | 当前仅支持 1024 字节以内、单连接完整请求体；body 未收全时等待下一轮轮询，不作为完整上传系统；候选文件替换采用 `/dbc/upload.write.tmp` -> `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc` |
 | DBC 解码验证边界 | 当前 active DBC 已接入 CAN2 解码和 `SignalCache`；TX self-test 与外部 CANtest `0x321` RX 均已验证，诊断继续保留来源计数，不能混写两类证据 |
 | DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、单个 128 项 `SignalCache` 和 768 B 日志缓冲，RAM_D1 为 38.83%；扩大 parser 上限、缓存或日志前必须复查内存 |
-| QSPI 自检擦写正式数据 | 正式存储前移除或改成按需触发 |
+| QSPI 诊断擦写配置数据 | `0x00FFF000` 已保留为诊断区；默认启动不擦写，显式 ST-Link 请求才允许擦写，ConfigTask/正式备份不得使用该扇区 |

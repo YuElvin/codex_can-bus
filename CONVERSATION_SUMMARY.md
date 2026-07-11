@@ -1672,3 +1672,22 @@
 - 再写回默认 on=42434/off=42432/reload=1；约 300 ms 读取 result=0、generation/load_count=`3/3`、latch=1、delay_pending=1、condition_since 非零、safe=0、ODR=0、Relay1/Relay2=0；约 1.1 s 后 delay_pending=0、latch=1、safe=0、matched=1、ODR=`0x80`、Relay1=1、Relay2=0，证明恢复配置经既有 1000 ms 延时才驱动高态。
 - 最后写入非法 on=42432/off=42434/reload=1：result=1，generation/load_count 保持 `3/3`，而当前 engine 仍为 latch=1、delay_pending=0、safe=0、matched=1、ODR=`0x80`、Relay1=1、Relay2=0，证明非法候选未替换旧有效配置。已把配置槽数值恢复默认但不 reload（当前 engine 已是默认）；OpenOCD 全部 `shutdown`，延迟复查无残留进程。最小 ST-Link 单规则配置加载闭环完成；尚无规则文件、HTTP、持久化或多规则。
 - 已执行最终 `git -c core.whitespace=cr-at-eol diff --check`，通过；提交并推送最小配置 loader、主机测试、RuleTask 候选替换与同步记录。当前基线已更新，后续不应把 ST-Link 验收槽夸大为文件化、持久化或 HTTP 规则配置。
+
+## 2026-07-12 阶段 11 下一步范围核对
+
+- 用户委托从已推送基线 `3846747 Verify RuleTask config reload` 继续，明确不得回退或重复单规则 reload、固定延时、高滞回、手动优先级和超时安全低的既有验收，也不得未经授权扩大范围。
+- 已实查：实际工作目录为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支 `codex/W5500...origin/codex/W5500`，工作树干净，HEAD 为 `3846747`。已按治理要求读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本记录，并核对最近提交的源码与测试范围。
+- 当前 Stage 11 已完成的最小规则闭环为：外部 RX 快照、单规则、1000 ms 延时、1500 ms 无输入安全低、`42434/42432` 高滞回、默认关闭的 ST-Link 手动优先级和只读 ST-Link 单规则候选 reload。现有计划/ADR 同时明确规则文件、持久化、HTTP 控制、CRUD、多规则和 ConfigTask 尚未实现，且不应把诊断入口扩展为这些功能。
+- 范围结论：在“不重复既有 RuleTask 验收”和“不新增 HTTP、文件保存/持久化、多规则或 ConfigTask”的共同约束下，仓库没有剩余可直接推动规则完整目标且可形成新实机闭环的最小源码项。唯一已列出的可实机闭环未完成项是 LogTask recovery 路径，但治理文档明确禁止人为破坏默认日志文件触发它；当前没有真实异常条件，不能伪造验收。
+- 本轮截至该核对仅更新本对话记录；未修改固件源码，未执行 `./scripts/verify.sh`、ELF 反汇编、烧录或硬件验证。未启动 OpenOCD，未占用 ST-Link。后续必须由用户在“最小规则文件/持久化来源”“只读 HTTP 状态接口”“ConfigTask 串行化”或实际 LogTask 默认路径错误中明确选择其一，才能在不擅自扩展的前提下继续。
+
+## 2026-07-12 W25Q128 启动擦写风险收敛（进行中）
+
+- 根会话已明确一期全量开发目标授权计划内未完成项；本轮改选 `01_Project_Plan.md` 已列出的 W25Q128 风险收敛，不再停留在规则功能范围判断。
+- 实际源码核对：`firmware/bringup/w25q128_bringup.c` 的 `w25q128_bringup_run()` 当前无条件对 `0x00FFF000` 执行 sector erase、32 B page program 和 readback；`cube_mx/Core/Src/main.c` 在默认 bringup 任务启动时直接调用它。因此每次启动会改写当前“最后 4KB 测试扇区”，不能作为后续配置备份候选区。
+- 本轮假设与最小方案：保留现有 W25Q128 唤醒、ready 和 JEDEC ID 检查作为启动只读验证；把现有擦写读回流程改为默认关闭、仅由 ST-Link 请求变量触发的诊断函数。新增诊断请求/结果/次数和实际擦除次数，以便在目标板分别证明“默认启动未发擦除”和“显式诊断仍擦写匹配”。不引入 ConfigTask、QSPI mutex、配置格式、文件或 HTTP 接口。
+- 成功标准与验证：新固件默认启动后应为 bringup 成功、JEDEC `EF4018`、diagnostic count 与 erase count 均为 0；写入一次显式请求后应为 diagnostic count=1、erase count=1、result=0、mismatch index 仍为 `0xffffffff`，并保留原读写匹配证据。后续必须执行 `git diff --check`、`./scripts/verify.sh`、ELF 定向反汇编、OpenOCD/ST-Link 烧录与两段真实读数；成功后再同步状态文档、提交推送并创建后续会话。
+- 实现：`w25q128_bringup_run()` 现只执行 release power-down、ready 等待和 JEDEC ID 检查；新增 `w25q128_diagnostic_run()` 保留原 `0x00FFF000` erase/program/readback 流程。`g_w25q128_diagnostic_request` 默认 0，由 bringup 任务每秒检查；请求非零时先清零、运行诊断并记录 result/count。`g_w25q128_erase_count` 仅在实际 sector erase 命令成功下发后递增；默认测试地址为 `0xffffffff`，避免把未执行诊断误写为已触碰保留区。
+- `git diff --check` 与 `./scripts/verify.sh` 通过：host CTest `13/13`；STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf` 重新链接，FLASH `71588 B / 128 KB = 54.62%`、RAM_D1 `230888 B / 512 KB = 44.04%`。ELF 符号包含 `w25q128_bringup_run`、`w25q128_diagnostic_run` 和四个新增诊断全局。反汇编确认启动函数只有 `0xAB` release、ready 与 `0x9F` JEDEC 路径，不含 `0x20` erase 或 `0x02` program；`0x20/0x02` 与 erase count 递增只在诊断函数中，bringup 任务只有 request 非零才调用诊断函数。
+- 已通过 OpenOCD/ST-Link V2 烧录 HEX，输出 `Programming Finished`、`Verified OK`，目标电压约 `3.251976 V`。默认启动后按 ELF 精确地址读取：bringup status=`0`、JEDEC=`0x00EF4018`、diagnostic result=`0xffffffff`、test address=`0xffffffff`、erase count=`0`、diagnostic count=`0`、request=`0`，证明默认启动没有进入擦写诊断。
+- 随后通过 ST-Link 写入 request=`1`，等待任务处理后读取：bringup status=`0`、diagnostic result=`0`、test address=`0x00FFF000`、expected/mismatch index 均为 `0xffffffff`、JEDEC=`0x00EF4018`、erase count=`1`、diagnostic count=`1`、request=`0`，证明显式诊断仍完成保留区擦写读回且无失配。回归 `ping -c 2 -S 192.168.1.100 192.168.1.88` 为 `2/2`；`GET /api/status` 为 `HTTP 200` 且 qspi status=`0`、jedec=`15679512`。已终止临时 OpenOCD PID `17698`，延迟检查无残留进程，ST-Link 已释放。

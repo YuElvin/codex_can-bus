@@ -14,7 +14,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | CAN 收发器 | FDCAN2: PB5 RX，PB6 TX，经 MCP2562FD 到 USBCAN-2E-U | 已验证 | Windows CANtest 可接收开发板周期帧，也可发送帧被开发板收到 |
 | FDCAN1 | PD0 RX，PD1 TX | 诊断/保留 | 当前用于 internal/external loopback 诊断，不作为已验证外部主通道 |
 | TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过；默认 `/www/index.html` 可通过 HTTP 读取 |
-| W25Q128 | QUADSPI | 已验证 | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
+| W25Q128 | QUADSPI | 已验证 | 默认启动只读 JEDEC ID `EF4018`；`0x00FFF000` 保留诊断区的显式擦写读回通过 |
 | USART2 | PD5/PD6，115200 8N1 | 可用 | Windows 侧读取正常；macOS 侧曾出现乱码，必要时以 ST-Link 变量为准 |
 | FreeRTOS | SysTick/SVC/PendSV | 基础多任务已上板验证 | 单 `bringup` 任务已验证通过；CAN2 周期任务、W5500 轮询任务和状态打印任务已拆出 |
 
@@ -55,7 +55,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | AXI SRAM / RAM_D1 | FreeRTOS heap、DBC 数据库、信号缓存、HTTP 临时缓冲、日志缓冲 | 大块数据优先放此处；当前 FreeRTOS heap 先放 RAM_D1 |
 | D2 SRAM | 后续 DMA buffer 预留 | 当前 W5500 SPI、保守 SDMMC 路径不依赖 ETH DMA |
 | TF 卡 | `/www/`、`/dbc/`、`/log/`、`/config/` | 一期主要资源存储介质 |
-| QSPI W25Q128 | 配置备份、最小 Web/恢复信息、版本信息 | 当前只做读写验证；正式使用前移除上电擦写测试扇区 |
+| QSPI W25Q128 | 配置备份、最小 Web/恢复信息、版本信息 | 默认启动只做只读识别；`0x00FFF000` 固定为诊断保留区，正式备份必须另选地址 |
 
 当前 DBC 候选读回 + 最小 active 激活 + 运行态双槽快照源码编译基线：FLASH 约 49.27%，RAM_D1 约 34.91%。后续每次引入网络服务、HTTP、DBC、信号缓存或日志，都要复查 Flash/RAM 水位。
 
@@ -248,7 +248,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
 | TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；曾读到 CSV `FR_DISK_ERR=1`，最终默认路径运行已恢复成功；不自动修复，保留一次性 recovery 选择和失败/丢弃诊断 |
-| W25Q128 上电自检擦写正式数据 | 正式配置备份前移除或改成按需触发最后扇区测试 |
+| W25Q128 诊断擦写正式数据 | 默认启动已不擦写；`0x00FFF000` 固定诊断保留区，ConfigTask/正式备份必须另选地址并串行化 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |
 | CAN-FD timing 复杂 | 一期外部通道先用 FDCAN2 classic CAN 500 kbit/s；FDCAN1 FD 保留诊断 |

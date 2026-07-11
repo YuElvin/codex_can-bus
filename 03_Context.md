@@ -24,7 +24,7 @@
 | DBC 活动文件激活 | [客观已验证] | `POST /api/dbc/active` 无请求体最小命令已烧录验证：读回候选、portable parser 确认为 `errors=0` 后写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；有效候选返回 `activated=true`，无效候选返回 `HTTP 400 candidate_invalid` |
 | DBC 运行态快照 | [客观已验证] | 当前 active `0x321`/2 信号 DBC 的 `GET /api/dbc/runtime` 返回 `loaded=true/generation=1/bytes=151/messages=1/signals=2/errors=0` |
 | 最小 DBC 解码到 SignalCache | [客观已验证] | active DBC 已接入 CAN2 TX self-test 和外部 RX；TX self-test 使用独立缓存，HTTP/Log/RuleTask 只读外部 RX 缓存，外部持续 CANtest 下 RX、matched/updates 同步增长、cache=2、errors=0 |
-| W25Q128 | [客观已验证] | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
+| W25Q128 | [客观已验证] | 默认启动只读 JEDEC ID `EF4018`，未触发擦除；保留诊断区 `0x00FFF000` 的显式 ST-Link 擦写读回匹配 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
 | FreeRTOS 基础多任务拆分 | [客观已验证] | CAN2 周期任务、W5500 轮询任务和状态打印任务已编译/反汇编/烧录复核；任务启动标志为 1，loop 均递增 |
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；最小 ST-Link 单规则配置 reload 已实测失配生效、恢复默认延时高态与非法候选保留旧有效规则 |
@@ -33,7 +33,7 @@
 
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
 - FreeRTOS 完整多任务架构仍未完成：TF/FatFs、QSPI、HTTP、配置保存和 DBC 任务尚未拆分，也未引入队列。
-- W25Q128 当前 bring-up 自检会擦写 `0x00FFF000` 最后 4KB 扇区，正式配置存储前必须改为按需触发或换成保留测试区。
+- W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区；默认 bring-up 不擦写。ConfigTask/正式配置备份尚未实现，且不得使用该扇区，后续仍需确定独立地址范围与串行化机制。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级和单规则 reload 已现场验证；完整规则文件、持久化/HTTP 控制仍未实现，不得将该诊断入口表述为完整规则管理功能。
 
 ## 当前风险

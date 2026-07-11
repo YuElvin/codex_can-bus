@@ -8,11 +8,15 @@ extern QSPI_HandleTypeDef hqspi;
 
 volatile uint32_t g_w25q128_jedec_id = 0xffffffffu;
 volatile uint32_t g_w25q128_status_reg1 = 0xffffffffu;
-volatile uint32_t g_w25q128_test_addr = 0x00fff000u;
+volatile uint32_t g_w25q128_test_addr = 0xffffffffu;
 volatile uint32_t g_w25q128_mismatch_index = 0xffffffffu;
 volatile uint32_t g_w25q128_expected = 0xffffffffu;
 volatile uint32_t g_w25q128_actual = 0xffffffffu;
 volatile uint32_t g_w25q128_last_hal_status = 0xffffffffu;
+volatile uint32_t g_w25q128_diagnostic_request;
+volatile uint32_t g_w25q128_diagnostic_result = 0xffffffffu;
+volatile uint32_t g_w25q128_diagnostic_count;
+volatile uint32_t g_w25q128_erase_count;
 
 #define W25Q128_CMD_WRITE_ENABLE       0x06u
 #define W25Q128_CMD_READ_STATUS_REG1   0x05u
@@ -143,6 +147,7 @@ static int w25q128_sector_erase(uint32_t address)
     return 1;
   }
 
+  ++g_w25q128_erase_count;
   return w25q128_wait_ready(W25Q128_ERASE_TIMEOUT_MS);
 }
 
@@ -191,19 +196,7 @@ static int w25q128_read_jedec_id(uint8_t id[3])
 
 int w25q128_bringup_run(void)
 {
-  static const uint8_t pattern[W25Q128_TEST_LEN] = {
-    0x57u, 0x32u, 0x35u, 0x51u, 0x31u, 0x32u, 0x38u, 0x00u,
-    0xa5u, 0x5au, 0x00u, 0xffu, 0x13u, 0x57u, 0x9bu, 0xdfu,
-    0x10u, 0x32u, 0x54u, 0x76u, 0x98u, 0xbau, 0xdcu, 0xfeu,
-    0x01u, 0x23u, 0x45u, 0x67u, 0x89u, 0xabu, 0xcdu, 0xefu,
-  };
   uint8_t id[3] = {0};
-  uint8_t readback[W25Q128_TEST_LEN] = {0};
-
-  g_w25q128_test_addr = W25Q128_TEST_ADDR;
-  g_w25q128_mismatch_index = 0xffffffffu;
-  g_w25q128_expected = 0xffffffffu;
-  g_w25q128_actual = 0xffffffffu;
 
   (void)w25q128_command(W25Q128_CMD_RELEASE_POWER_DOWN,
                         QSPI_ADDRESS_NONE,
@@ -222,6 +215,28 @@ int w25q128_bringup_run(void)
 
   if (id[0] != 0xefu || id[2] != 0x18u) {
     return 2;
+  }
+
+  return 0;
+}
+
+int w25q128_diagnostic_run(void)
+{
+  static const uint8_t pattern[W25Q128_TEST_LEN] = {
+    0x57u, 0x32u, 0x35u, 0x51u, 0x31u, 0x32u, 0x38u, 0x00u,
+    0xa5u, 0x5au, 0x00u, 0xffu, 0x13u, 0x57u, 0x9bu, 0xdfu,
+    0x10u, 0x32u, 0x54u, 0x76u, 0x98u, 0xbau, 0xdcu, 0xfeu,
+    0x01u, 0x23u, 0x45u, 0x67u, 0x89u, 0xabu, 0xcdu, 0xefu,
+  };
+  uint8_t readback[W25Q128_TEST_LEN] = {0};
+
+  g_w25q128_test_addr = W25Q128_TEST_ADDR;
+  g_w25q128_mismatch_index = 0xffffffffu;
+  g_w25q128_expected = 0xffffffffu;
+  g_w25q128_actual = 0xffffffffu;
+
+  if (w25q128_bringup_run() != 0) {
+    return 1;
   }
 
   if (w25q128_sector_erase(W25Q128_TEST_ADDR) != 0) {

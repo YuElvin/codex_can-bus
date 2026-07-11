@@ -158,6 +158,10 @@ extern volatile uint32_t g_w25q128_mismatch_index;
 extern volatile uint32_t g_w25q128_expected;
 extern volatile uint32_t g_w25q128_actual;
 extern volatile uint32_t g_w25q128_last_hal_status;
+extern volatile uint32_t g_w25q128_diagnostic_request;
+extern volatile uint32_t g_w25q128_diagnostic_result;
+extern volatile uint32_t g_w25q128_diagnostic_count;
+extern volatile uint32_t g_w25q128_erase_count;
 extern volatile uint32_t g_can_tx_count;
 extern volatile uint32_t g_can_rx_count;
 extern volatile uint32_t g_can_error_count;
@@ -537,6 +541,12 @@ static void bringup_default_task(void *argument)
   }
 
   for (;;) {
+    if (g_w25q128_diagnostic_request != 0u) {
+      g_w25q128_diagnostic_request = 0u;
+      g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
+      ++g_w25q128_diagnostic_count;
+      bringup_print_status("w25q128_diag");
+    }
     vTaskDelay(pdMS_TO_TICKS(1000u));
     g_freertos_loop_count++;
     bringup_print_status("run");
