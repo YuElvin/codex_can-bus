@@ -13,7 +13,7 @@
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；`0x321` TX self-test 和外部 CANtest RX 均无解码错误，且 self-test 缓存已与外部消费缓存隔离。配置生效仍待实现 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；规则和配置仍待实现 |
-| F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；目标帧下 PE7 高/PE8 低，ST-Link 两路 OFF 手动覆盖压低两路、释放后自动高态恢复，停帧后两路安全回低 |
+| F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定 1000 ms 延时已实测等待低态到 PE7 高态，停帧超过 1500 ms 后两路安全回低；既有 ST-Link 手动优先级也已验证 |
 
 ## ADR 索引
 
@@ -56,4 +56,4 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
-不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固化 `Can2Data.marker == 42434`：Relay1 高、Relay2 固定低、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的两路手动覆盖输入；它复用已有 manual 语义而非 HTTP/API 或持久化配置。实机已验证目标帧高态、手动 OFF 覆盖优先及释放恢复自动高态，不增加 CRUD、配置、手动 API、多规则、队列或持久化。
+不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固化 `Can2Data.marker == 42434`：Relay1 高、Relay2 固定低、1000 ms 连续匹配延时、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的两路手动覆盖输入；它复用已有 manual 语义而非 HTTP/API 或持久化配置。实机已验证首次及约 300 ms 等待低态、约 1.3 s 自动高态、停帧安全低以及手动 OFF 覆盖优先和释放恢复自动高态，不增加 CRUD、配置、手动 API、多规则、队列或持久化。

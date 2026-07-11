@@ -1623,3 +1623,15 @@
 - 新会话已按要求读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本文件，并确认实际路径为 `/Users/elvin/Desktop/project/can_bus_W5500`、分支为 `codex/W5500`。
 - `git status --short` 只显示本轮遗留的 `cube_mx/Core/Src/main.c` 与本记录；`git diff --check` 通过。源码差异仅新增四个零初始化的 volatile ST-Link 诊断/输入变量，并在 RuleTask 的 50 ms 循环内把两路输入转换为既有 `RelayState` 后调用 `rule_engine_set_manual()`；不新增 HTTP、持久化、配置、规则条件、多规则、延时或滞回。
 - 已复核 portable `rule_engine`：`rule_engine_evaluate()` 在 `manual.enabled` 时先复制手动继电器状态并返回，主机测试 `test_manual_override_has_priority` 已覆盖该优先级。因此遗留改动符合“复用既有手动优先级语义”的最小目标；尚未编译、反汇编、烧录或读取新变量，以下继续执行完整验证。
+
+## 2026-07-11 阶段 11 最小规则延时闭环（进行中）
+
+- 已按要求重新读取 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md` 和本记录，并实查工作区为 `/Users/elvin/Desktop/project/can_bus_W5500`、分支 `codex/W5500`、干净基线 `06b7137`。
+- 选择“规则延时”而不是配置加载或滞回：portable `rule_engine` 已有延时行为及 `test_delay_requires_continuous_match`，RuleTask 缺少的只是最小目标侧参数和可读诊断；不新增配置文件、HTTP/CRUD、持久化、多规则或队列。
+- 假设：持续外部 `0x321:C2 A5 34 12 02 03 04 05` 会持续刷新 `Can2Data.marker=42434`，1000 ms 小于既有 1500 ms 信号超时，因此可在同一真实输入条件下完成延时闭环。成功标准：解除既有 ST-Link 手动 OFF 覆盖后，先读到 PE7=0 且延时等待标志=1，再在连续匹配满 1000 ms 后读到 PE7=1/PE8=0；随后停止输入超过 1500 ms 仍两路安全低。验证将依次执行空白检查、`./scripts/verify.sh`、ELF 反汇编、OpenOCD/ST-Link 烧录和实板读数。
+- 已开始最小源码修改：内置 marker Rule 增加 `delay_ms=1000`，并只增加 `condition_since_ms`/`delay_pending` 两项 ST-Link 诊断以区分等待期和到期输出；结果尚未构建、反汇编、烧录或验证，不能视为完成。
+- `git -c core.whitespace=cr-at-eol diff --check` 与 `./scripts/verify.sh` 均通过，host CTest `12/12`。STM32 固件重新链接：`build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH `71252 B / 128 KB = 54.36%`，RAM_D1 `226984 B / 512 KB = 43.29%`。反汇编确认 `rule_task()` 同时装载 `1000` 与 `1500`，构造 Rule 的 `.delay_ms=1000/.timeout_ms=1500`，调用既有 `rule_engine_evaluate()` 后写入 `g_rule_task_condition_since_ms` 和 `g_rule_task_delay_pending`；`rule_engine_evaluate()` 保留连续匹配起始时刻与到期比较路径。
+- 已通过 OpenOCD/ST-Link V2 烧录 HEX：目标电压 `3.250368 V`，输出 `Programming Finished`、`Verified OK`、`Resetting Target`。烧录后 ping `192.168.1.88` 为 `2/2`，`GET /api/signals` 返回持续外部 `Can2Data.marker=42434`，`GET /api/can/status` 为 `rx=13/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。
+- 首先按复位后绝对时间直接读取，但 RuleTask 尚未创建时得到全零，且一次 `reset run` 导致 GDB 连接重建；该读数不作为延时证据。随后以同一烧录固件的首次 `rule_task()` 评估为时间零点读取：首次为 `started=1`、`delay_pending=1`、`condition_since_ms=0x201`、Relay1/PE7=0、Relay2/PE8=0、`safe_active=0`；约 300 ms 后数值仍相同，证明尚未到期；约 1.3 s 后为 `delay_pending=0`、`condition_since_ms=0x201`、Relay1/PE7=1、Relay2/PE8=0、`safe_active=0`。这是持续真实外部 marker 条件下的 1000 ms 延时闭环客观证据。
+- 用户确认 CANtest 停止发送后等待 2 s，再以 ST-Link 读取当前烧录版本：`started=1`、`delay_pending=0`、`condition_since_ms=0`、`input_count=2`、Relay1/PE7=0、Relay2/PE8=0、GPIOE ODR=0、`rule_matched=0`、`safe_active=1`。这在同一固定 1000 ms 延时固件上证明停止真实目标帧超过既有 1500 ms 后安全回低；`GET /api/can/status` 仍为 `errors=0/busOff=0/tec=0/rec=0/sendResult=0`，`/api/signals` 保留的 marker=42434 是最后缓存快照，未被错误当作新输入。
+- 已同步 `03_Context.md`、`04_Features_ADR.md` 与 `ARCHITECTURE_DESIGN.md`：最小 RuleTask 的固定 1000 ms 延时闭环标为客观已验证，完整配置加载和滞回仍未实现。下一步仅在本轮提交推送完成后，从配置加载或滞回中选择新的最小闭环。

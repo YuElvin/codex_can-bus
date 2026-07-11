@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-11（TF/active DBC 已恢复；最小 RuleTask/继电器动作已完成实机验收）
+更新时间：2026-07-11（TF/active DBC 已恢复；最小 RuleTask/继电器含 1000 ms 延时已完成实机验收）
 
 ## 当前仓库
 
@@ -27,14 +27,14 @@
 | W25Q128 | [客观已验证] | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
 | FreeRTOS 基础多任务拆分 | [客观已验证] | CAN2 周期任务、W5500 轮询任务和状态打印任务已编译/反汇编/烧录复核；任务启动标志为 1，loop 均递增 |
-| 最小 RuleTask/继电器 | [客观已验证] | 已烧录 `Can2Data.marker==42434` 内置规则和 50 ms RuleTask；目标帧下 PE7=1/PE8=0；ST-Link 手动两路 OFF 覆盖可压低两路，清除后自动 PE7 高态恢复；停帧超过 1500 ms 后两路安全回低 |
+| 最小 RuleTask/继电器 | [客观已验证] | 已烧录 `Can2Data.marker==42434`、`delay_ms=1000` 的 50 ms RuleTask；首次及约 300 ms 持续匹配时 PE7=0/等待中，约 1.3 s 后 PE7=1/PE8=0；停帧超过 1500 ms 后两路安全回低。既有 ST-Link 两路 OFF 覆盖和释放后的自动高态恢复也已验证 |
 
 ## 当前阻断项
 
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
 - FreeRTOS 完整多任务架构仍未完成：TF/FatFs、QSPI、HTTP、配置保存和 DBC 任务尚未拆分，也未引入队列。
 - W25Q128 当前 bring-up 自检会擦写 `0x00FFF000` 最后 4KB 扇区，正式配置存储前必须改为按需触发或换成保留测试区。
-- 当前最小 RuleTask 与仅供 ST-Link 验收的手动优先级已现场验证；完整规则配置、持久化/HTTP 控制、延时和滞回的端到端接口仍未实现，不得将该诊断入口表述为完整规则管理功能。
+- 当前最小 RuleTask、固定 1000 ms 延时和仅供 ST-Link 验收的手动优先级已现场验证；完整规则配置、持久化/HTTP 控制和滞回的端到端接口仍未实现，不得将该诊断入口表述为完整规则管理功能。
 
 ## 当前风险
 
@@ -42,7 +42,7 @@
 - 当前 HTTP 服务仍是 socket0 单连接最小实现，不支持并发连接、目录映射、HTTP Range、分块传输编码或通用上传；当前只把 `/` 和 `/index.html` 映射到 `/www/index.html`，只支持 `POST /api/dbc/upload` 的 1024 字节以内单请求体 DBC 上传。
 - DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 轮询、`SignalCache`、最多两项的只读实时信号 API、LogTask 和最小内置 RuleTask；RuleTask 额外保留默认关闭的 ST-Link 手动覆盖验收入口，ConfigTask 仍未实现。
 - 当前最小解码器在成功发送的 `0x321` 周期诊断帧上执行 TX self-test，也在外部 RX while-loop 上执行同一函数；两条路径使用独立 `SignalCache`，HTTP/Log/RuleTask 只消费外部 RX 缓存，且仍必须用独立来源计数区分验证。
-- 当前固件保留候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、外部 RX 与 TX self-test 两个固定 `SignalCache`、768 B 日志缓冲和 LogTask 栈；本轮构建 RAM_D1 为 `226960 B / 512 KB = 43.29%`。后续扩大缓存或引入并发读者前必须继续复查内存并补齐同步边界。
+- 当前固件保留候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、外部 RX 与 TX self-test 两个固定 `SignalCache`、768 B 日志缓冲和 LogTask 栈；本轮构建 RAM_D1 为 `226984 B / 512 KB = 43.29%`。后续扩大缓存或引入并发读者前必须继续复查内存并补齐同步边界。
 - LogTask 不再由 bring-up 监控循环直接写 CSV：它每 100 ms 调度、每 1 秒复制最多两项、缓冲达到 512 B 或 5 秒才在 `fs_mutex` 下单批 `f_open/f_lseek/f_write/f_close`。初始化只读一次默认文件：成功或 `FR_NO_FILE` 选 `/log/signal.csv`，其他失败选 `/log/signal-recovery.csv` 并记录 path mode/switch count/active size；随后不再切换。写失败后清空本批、累计失败和丢弃，不做重试、轮换、下载 API、HTTP 配置或通用队列。临时 probe 代码已移除。
 - 2026-07-08 22:34 当前复查中 `/api/can/status` 可访问，但现场读数为 `rx=0/errors=487/tec=128/sendResult=1`；2026-07-08 22:46 用户打开 CAN 分析仪收发后复查恢复为 `sendResult=0`、`rx_count=508`、`tx_count=728`、`tec=0`、`bus_off=0`。
 - `CONVERSATION_SUMMARY.md` 已经较长，但仍按用户要求保留为完整对话摘要；当前快照以本文件为准。
@@ -53,4 +53,4 @@
 1. 保持默认文件不被人为破坏；仅在未来实际大小读取失败时，复核 `mode=1/switch_count=1`、recovery 大小和成功写入增长。
 2. recovery 分支未上板覆盖前，不加入文件轮换、下载、HTTP 配置、重试或队列；未来发生真实默认路径读取失败时再复验该分支。
 3. 后续扩展静态文件服务时再处理目录映射、Content-Type 映射和并发连接，不要把当前 socket0 实现当作完整 Web 服务。
-4. 规则阶段下一步应先定义并验证配置加载、延时和滞回的最小闭环；不把本轮内置 marker 规则和 ST-Link 验收入口直接扩展为未验证的完整 CRUD/API。
+4. 后续规则阶段从配置加载和滞回中选择最小闭环；不把内置 marker 规则和 ST-Link 验收入口直接扩展为未验证的完整 CRUD/API。

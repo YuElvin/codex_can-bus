@@ -100,6 +100,8 @@ volatile uint32_t g_rule_task_manual_enabled;
 volatile uint32_t g_rule_task_manual_relay1;
 volatile uint32_t g_rule_task_manual_relay2;
 volatile uint32_t g_rule_task_manual_active;
+volatile uint32_t g_rule_task_condition_since_ms;
+volatile uint32_t g_rule_task_delay_pending;
 
 /* USER CODE END PV */
 
@@ -278,6 +280,7 @@ static void rule_task(void *argument)
 {
   enum {
     RULE_MARKER_VALUE = 42434u,
+    RULE_DELAY_MS = 1000u,
     RULE_TIMEOUT_MS = 1500u,
   };
   static RuleEngine engine;
@@ -289,6 +292,7 @@ static void rule_task(void *argument)
     .threshold = (double)RULE_MARKER_VALUE,
     .relay = 0u,
     .action_state = RELAY_STATE_ON,
+    .delay_ms = RULE_DELAY_MS,
     .timeout_ms = RULE_TIMEOUT_MS,
     .safe_state = RELAY_STATE_OFF,
     .default_state = RELAY_STATE_OFF,
@@ -326,6 +330,9 @@ static void rule_task(void *argument)
     rule_engine_evaluate(&engine, signals, count, now_ms, relays);
     rule_apply_relays(relays);
     g_rule_task_rule_matched = g_rule_task_relay1_output == (uint32_t)RELAY_STATE_ON ? 1u : 0u;
+    g_rule_task_condition_since_ms = engine.rules[0].condition_since_ms;
+    g_rule_task_delay_pending = engine.rules[0].condition_since_ms != 0u &&
+                                  g_rule_task_relay1_output == (uint32_t)RELAY_STATE_OFF ? 1u : 0u;
     g_rule_task_safe_active = marker_safe ? 1u : 0u;
     g_rule_task_manual_active = manual_enabled ? 1u : 0u;
     ++g_rule_task_evaluation_count;
