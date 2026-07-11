@@ -1,5 +1,12 @@
 # 对话摘要
 
+## 2026-07-12
+
+- 用户反馈 Codex/ChatGPT 桌面软件出现 “reconnecting”，要求检查本机代理端口并写入合适配置。实际检查确认 Shadowrocket 的 `MacPacketTunnel` 正监听 `127.0.0.1:1082`（IPv4/IPv6）；`scutil --proxy` 显示 macOS HTTP/HTTPS 系统代理均已启用并指向同一地址。
+- 使用 `curl --proxy http://127.0.0.1:1082 https://chatgpt.com/` 收到 `HTTP/1.1 200 Connection established`，证明本地 HTTP CONNECT 隧道可用；后续 `HTTP/2 403` 来自未带浏览器验证上下文的 Cloudflare，而不是代理连接失败。直连和经代理均可建立 TCP/TLS，本轮无法仅凭命令行复现桌面端 reconnect。
+- 已在用户级 `/Users/elvin/.codex/config.toml` 增加 `[network] proxy_url = "http://127.0.0.1:1082"`，使 Codex 运行时明确使用已验证的本机 HTTP 代理；未修改 Shadowrocket、系统网络设置或项目固件源码。本次未编译，因此未执行固件反汇编检查，原因是仅修改本机 Codex 配置和对话记录。
+- 进一步读取本机 Codex/ChatGPT Sentry 记录，存在多条 `net::ERR_TUNNEL_CONNECTION_FAILED`（访问 `chatgpt.com` 时），与用户看到的 reconnect 现象一致，说明此前确有系统代理隧道不可用或短暂中断。最新记录已经出现 `electron.net` 对 `chatgpt.com/backend-api/wham/usage` 的 HTTP 200，且当前端口复测正常；因此当前可确认的修复是显式 Codex 代理配置加上重启应用使其重新建连，不能将历史间歇性 Shadowrocket 上游故障表述为已永久消除。
+
 ## 2026-07-02
 
 - 用户要求在当前 `main` 主干创建分支，基于当前 CubeMX 生成代码框架，实现 TF 卡加载与读写验证，以及 LAN8720 通讯验证，目标是 LAN8720 能稳定 ping 通。
@@ -1651,3 +1658,17 @@
 - 根会话已完成第 3 段 `0x321:C0 A5 34 12 02 03 04 05` 的新鲜输入实测：HTTP marker=42432 且 CAN RX 增长；ST-Link 为 hysteresis_latched=0、PE7/Relay1=0、PE8/Relay2=0、GPIOE ODR=0、manual=0、safe=0。结合第 1 段 42434 的锁存高态与第 2 段 42433 的保持高态，固定高滞回 `on=42434/off=42432` 已在实际 CANtest/继电器闭环完成验收；没有将此前输入超时的安全低读数冒充为本项证据。
 - 本轮阶段状态已同步到 `03_Context.md`、`04_Features_ADR.md` 和 `ARCHITECTURE_DESIGN.md`；完整配置加载、持久化、HTTP 控制和多规则仍未实现。待复核差异、确认 OpenOCD 已释放后提交推送；下一步只从配置加载选择最小闭环。
 - 已执行 `git -c core.whitespace=cr-at-eol diff --check`，通过；确认 `pgrep -af '[o]penocd'` 无输出，临时调试服务已释放。已提交并推送本轮固定高滞回源码、阶段文档与本记录；后续仅从配置加载选择最小闭环。
+
+## 2026-07-12 阶段 11 最小规则配置加载（进行中）
+
+- 已实查干净基线 `c255015 Verify RuleTask hysteresis closure`。现有 TF/FatFs 有通用锁保护读写能力，但没有规则文件的上传/保存来源；为避免扩大为 HTTP、CRUD、文件创建或持久化，本轮配置来源限定为默认只读的 ST-Link 单规则配置槽与显式 reload 请求。
+- 最小实现新增 portable `RuleTaskConfig` 加载器：只校验 `on_threshold > off_threshold` 与 `delay_ms <= timeout_ms`，然后生成唯一的 `Can2Data.marker` 高滞回规则。RuleTask 启动和 ST-Link reload 都先加载到候选 `RuleEngine`，仅成功后替换当前 engine；失败保留旧有效配置。默认配置仍为 on=42434/off=42432/delay=1000/timeout=1500，不增加 HTTP、文件保存或多规则。
+- 新增可读写诊断/配置变量 `g_rule_task_config_{on_threshold,off_threshold,delay_ms,timeout_ms,reload,result,load_count,generation}`；待执行构建、反汇编、烧录和实机：在持续 marker=42434 输入下经 ST-Link 改为 on=42435/off=42433 并 reload，应在 safe=0 时令 PE7 回低；再恢复默认值 reload，应经 1000 ms 延时恢复 PE7 高。当前尚未验证。
+- 初次构建后 `git -c core.whitespace=cr-at-eol diff --check` 与 `./scripts/verify.sh` 通过，host CTest `13/13`，固件为 FLASH `71480 B / 128 KB = 54.53%`、RAM_D1 `227024 B / 512 KB = 43.30%`。反汇编确认启动与 reload 分支均调用 `rule_task_load_config()`，reload 请求先清零再调用；候选 loader 的阈值/延时校验路径存在。烧录输出 `Programming Finished`、`Verified OK`，但首次 HTTP 请求超时，随后按 `reset run` 等待后暂停发现目标在 HardFault；配置变量已显示 result=0/load_count=1/generation=1，根因是 `rule_task_load_config()` 的局部 `RuleEngine candidate`（约 3.8 KB）压入 1024-word RuleTask 栈。已将 candidate 改为静态存储；本次 HardFault 不构成配置加载验收，待重新构建烧录。
+- 修复后再次执行 `git -c core.whitespace=cr-at-eol diff --check` 与 `./scripts/verify.sh`，host CTest `13/13` 通过；固件为 FLASH `71480 B / 128 KB = 54.53%`、RAM_D1 `230880 B / 512 KB = 44.04%`，静态 candidate 位于 BSS `0x24000550`、大小 `0xF10`。反汇编确认 RuleTask 栈帧仅 `0x94`，启动/reload 都调用 loader，且 reload 标志清零后才加载。重新烧录输出 `Programming Finished`、`Verified OK`，7 秒后 ping 2/2 与 `GET /api/status` 均正常；ST-Link 读到默认 config result=0、timeout=1500、delay=1000、off=42432、on=42434、generation=1、load_count=1。当前 CAN HTTP 为 rx=0、`/api/signals` 空，故尚不能验证 reload 对继电器的实际影响；已请求持续外部 marker=42434 输入后继续，不以 TX self-test 替代。
+- 本轮只读复查：两次 `GET /api/signals` 均为空，`GET /api/can/status` 的 RX 均为 0（TX/poll 从 94/93 增至 97/96），没有外部 `0x321` 新鲜输入，故不执行 reload 写入、不改源码、不提交。OpenOCD 暂停后按当前 ELF 精确地址读到默认 config result=0、timeout=1500、delay=1000、off=42432、on=42434、generation=1、load_count=1、reload=0、started=1；RuleTask 的既有输入/锁存输出诊断仍非零，但在 HTTP RX=0/信号空的前提下不当作新的外部输入证据。命令已 `shutdown`，随后 `ps` 与 `pgrep -af '[o]penocd'` 均无实际 OpenOCD 进程，ST-Link 已释放。
+- 用户确认恢复外部持续 `0x321:C2 A5 34 12 02 03 04 05`。先后 HTTP 实读 marker=42434，`updated_ms=157512→161512`，CAN RX=`449→481`、errors/busOff/tec/rec=0，证明新鲜外部输入。默认规则 ST-Link 为 result=0、on=42434/off=42432/delay=1000/timeout=1500、generation/load_count=1/1、latch=1、delay_pending=0、manual=0、safe=0、matched=1、GPIOE ODR=`0x80`、Relay1=1、Relay2=0、input_count=2。
+- 通过 ST-Link 写入 on=42435/off=42433/reload=1 后持续输入仍为 42434，实读 result=0、generation/load_count=`2/2`、latch=0、delay_pending=0、safe=0、matched=0、ODR=0、Relay1/Relay2=0、input_count=2，证明失配候选已实际加载而非安全超时。
+- 再写回默认 on=42434/off=42432/reload=1；约 300 ms 读取 result=0、generation/load_count=`3/3`、latch=1、delay_pending=1、condition_since 非零、safe=0、ODR=0、Relay1/Relay2=0；约 1.1 s 后 delay_pending=0、latch=1、safe=0、matched=1、ODR=`0x80`、Relay1=1、Relay2=0，证明恢复配置经既有 1000 ms 延时才驱动高态。
+- 最后写入非法 on=42432/off=42434/reload=1：result=1，generation/load_count 保持 `3/3`，而当前 engine 仍为 latch=1、delay_pending=0、safe=0、matched=1、ODR=`0x80`、Relay1=1、Relay2=0，证明非法候选未替换旧有效配置。已把配置槽数值恢复默认但不 reload（当前 engine 已是默认）；OpenOCD 全部 `shutdown`，延迟复查无残留进程。最小 ST-Link 单规则配置加载闭环完成；尚无规则文件、HTTP、持久化或多规则。
+- 已执行最终 `git -c core.whitespace=cr-at-eol diff --check`，通过；提交并推送最小配置 loader、主机测试、RuleTask 候选替换与同步记录。当前基线已更新，后续不应把 ST-Link 验收槽夸大为文件化、持久化或 HTTP 规则配置。

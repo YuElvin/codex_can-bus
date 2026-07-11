@@ -33,6 +33,7 @@
 
 #include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
+#include "rule_config.h"
 #include "rule_engine.h"
 #include "signal_log_buffer.h"
 #include "task.h"
@@ -103,6 +104,14 @@ volatile uint32_t g_rule_task_manual_active;
 volatile uint32_t g_rule_task_condition_since_ms;
 volatile uint32_t g_rule_task_delay_pending;
 volatile uint32_t g_rule_task_hysteresis_latched;
+volatile uint32_t g_rule_task_config_on_threshold = 42434u;
+volatile uint32_t g_rule_task_config_off_threshold = 42432u;
+volatile uint32_t g_rule_task_config_delay_ms = 1000u;
+volatile uint32_t g_rule_task_config_timeout_ms = 1500u;
+volatile uint32_t g_rule_task_config_reload;
+volatile uint32_t g_rule_task_config_result = 0xffffffffu;
+volatile uint32_t g_rule_task_config_load_count;
+volatile uint32_t g_rule_task_config_generation;
 
 /* USER CODE END PV */
 
@@ -277,34 +286,34 @@ static void rule_apply_relays(const RelayState relays[RULE_RELAY_COUNT])
   g_rule_task_gpioe_odr = GPIOE->ODR;
 }
 
+static bool rule_task_load_config(RuleEngine *engine)
+{
+  static RuleEngine candidate;
+  const RuleTaskConfig config = {
+    .on_threshold = (double)g_rule_task_config_on_threshold,
+    .off_threshold = (double)g_rule_task_config_off_threshold,
+    .delay_ms = g_rule_task_config_delay_ms,
+    .timeout_ms = g_rule_task_config_timeout_ms,
+  };
+  if (!rule_task_config_load(&candidate, &config)) {
+    g_rule_task_config_result = 1u;
+    return false;
+  }
+
+  *engine = candidate;
+  g_rule_task_config_result = 0u;
+  ++g_rule_task_config_load_count;
+  ++g_rule_task_config_generation;
+  return true;
+}
+
 static void rule_task(void *argument)
 {
-  enum {
-    RULE_MARKER_ON_VALUE = 42434u,
-    RULE_MARKER_OFF_VALUE = 42432u,
-    RULE_DELAY_MS = 1000u,
-    RULE_TIMEOUT_MS = 1500u,
-  };
   static RuleEngine engine;
-  const Rule marker_rule = {
-    .id = "can2_marker",
-    .enabled = true,
-    .signal_key = "Can2Data.marker",
-    .op = RULE_OP_HYSTERESIS_HIGH,
-    .on_threshold = (double)RULE_MARKER_ON_VALUE,
-    .off_threshold = (double)RULE_MARKER_OFF_VALUE,
-    .relay = 0u,
-    .action_state = RELAY_STATE_ON,
-    .delay_ms = RULE_DELAY_MS,
-    .timeout_ms = RULE_TIMEOUT_MS,
-    .safe_state = RELAY_STATE_OFF,
-    .default_state = RELAY_STATE_OFF,
-  };
   RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
 
   (void)argument;
-  rule_engine_init(&engine);
-  if (!rule_engine_add_rule(&engine, &marker_rule)) {
+  if (!rule_task_load_config(&engine)) {
     g_rule_task_started = 0xffffffffu;
     Error_Handler();
   }
@@ -322,9 +331,14 @@ static void rule_task(void *argument)
     const size_t count = can2_signal_cache_export_rule_snapshots(signals, 2u);
     bool marker_safe = true;
 
+    if (g_rule_task_config_reload != 0u) {
+      g_rule_task_config_reload = 0u;
+      (void)rule_task_load_config(&engine);
+    }
+
     for (size_t i = 0u; i < count; ++i) {
-      if (strcmp(signals[i].key, marker_rule.signal_key) == 0) {
-        marker_safe = !signals[i].valid || now_ms - signals[i].updated_ms > RULE_TIMEOUT_MS;
+      if (strcmp(signals[i].key, engine.rules[0].signal_key) == 0) {
+        marker_safe = !signals[i].valid || now_ms - signals[i].updated_ms > engine.rules[0].timeout_ms;
         break;
       }
     }

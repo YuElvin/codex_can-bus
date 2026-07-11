@@ -13,6 +13,7 @@ add_library(can_bus_core
   src/core/dbc_decoder.c
   src/core/dbc_parser.c
   src/core/rule_engine.c
+  src/core/rule_config.c
   src/core/signal_api.c
   src/core/signal_cache.c
   src/core/signal_csv.c
@@ -89,6 +90,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/core/dbc_decoder.c
     src/core/dbc_parser.c
     src/core/rule_engine.c
+    src/core/rule_config.c
     src/core/signal_api.c
     src/core/signal_cache.c
     src/core/signal_csv.c
@@ -186,6 +188,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_rule_engine tests/test_rule_engine.c)
   target_link_libraries(test_rule_engine PRIVATE can_bus_core)
   add_test(NAME rule_engine COMMAND test_rule_engine)
+
+  add_executable(test_rule_config tests/test_rule_config.c)
+  target_link_libraries(test_rule_config PRIVATE can_bus_core)
+  add_test(NAME rule_config COMMAND test_rule_config)
 
   add_executable(test_signal_cache tests/test_signal_cache.c)
   target_link_libraries(test_signal_cache PRIVATE can_bus_core)
