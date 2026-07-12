@@ -1897,7 +1897,7 @@
 - `./scripts/verify.sh` 通过；STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf` 已重新链接，FLASH=`77868 B / 128 KB = 59.41%`，RAM_D1=`231144 B / 512 KB = 44.09%`。
 - 定向 `nm/objdump` 已确认：`rule_file_parse_v1` 存在 256 字节上限和完整字段校验；`rule_file_load_from_tf` 先 `stm32h750_tf_file_size_locked`，缺失走 `stm32h750_tf_ensure_default_rule_file`，超限拒绝，读取后调用纯解析，成功后写入四参数并置位 reload，最多等待 250 次 1 ms；`stm32h750_tf_ensure_default_rule_file` 反汇编确认调用 `f_mkdir`、`f_open(FA_READ/FA_CREATE_NEW)`、`f_write`、`f_close` 和 unlock。
 
-### 当前未完成与下一步
+### 烧录前验证计划（历史记录）
 
 - 本轮尚未烧录，因此 TF 文件实际状态、RuleFile 有效覆盖 QSPI、无效文件保持参数、RuleTask generation/reload、继电器 GPIO 以及顺序 `ping`/`/api/status`/`/api/can/status`/`/api/signals` 现场证据均为“待验证”。烧录后每次 GDB halt 读取必须显式 `monitor resume`。
 
@@ -1911,3 +1911,9 @@
 - 每次 GDB halt 读取后均执行了 `monitor resume`，再进行 HTTP；读取结束后 OpenOCD 服务已关闭。一次复位命令中对已运行目标重复发送 `monitor resume` 曾出现 `not halted/context restore failed`，未用于读数结论；后续按 `monitor reset run` 后 detach、等待，再单独 halt/read/resume 完成验证。
 - 无效文件未通过真实 TF 输入注入：没有新增 HTTP 写接口，也没有篡改 TF。`rule_file` 主机 CTest 已覆盖有效文件、缺失字段、非法阈值、非法时序及候选不变；板端无效 RuleFile 行为记录为“未注入/未验证”，不宣称现场通过。
 - 阶段 A 完成边界：有效 RuleFile v1、缺失文件安全创建、有效覆盖 QSPI、RuleTask reload/GPIO、OpenOCD、反汇编、主机测试和顺序 HTTP/CAN 回归均已完成；多规则及其他阶段目标不在本轮。
+
+## 2026-07-13 阶段 A 提交后主会话复核（完成）
+
+- 主会话独立核对 `2c97b73 Add TF RuleFile v1 startup loading`：本地 `HEAD` 与 `origin/codex/W5500` 均为 `2c97b736a91a69a1948ead3b5e1e001bab12d4de`，工作树干净，`git show --check` 无空白错误。
+- 修正 `03_Context.md` 中沿用旧轮次的 RAM_D1 数值为阶段 A 最终 `231144 B / 512 KB = 44.09%`；本次仅修正文档，未改固件源码、未编译，因此未执行新的反汇编或烧录。
+- 下一派送阶段固定为 B：RuleFile v2 的两条有界规则运行模型、明确优先级和 PE7/PE8 外部 CAN/GPIO 验收；具体格式、非目标和验证门槛由主会话在派送指令中固定，派送会话不得自行改选目标。
