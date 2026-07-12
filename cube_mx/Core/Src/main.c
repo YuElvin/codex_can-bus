@@ -47,7 +47,8 @@
 /* USER CODE BEGIN PTD */
 typedef enum {
   CONFIG_COMMAND_DIAGNOSTIC = 1u,
-  CONFIG_COMMAND_RULE_SAVE = 2u
+  CONFIG_COMMAND_RULE_SAVE = 2u,
+  CONFIG_COMMAND_RULE_FILE_V3_SAVE = 3u
 } ConfigCommandType;
 
 typedef struct {
@@ -56,6 +57,7 @@ typedef struct {
   uint32_t off_threshold;
   uint32_t delay_ms;
   uint32_t timeout_ms;
+  RuleFileV3 rule_file_v3;
 } ConfigCommand;
 
 /* USER CODE END PTD */
@@ -179,9 +181,19 @@ volatile uint32_t g_rule_file_v2_created;
 volatile uint32_t g_rule_file_v2_size;
 volatile uint32_t g_rule_file_v2_read_len;
 volatile uint32_t g_rule_file_v2_rule_count;
+volatile uint32_t g_rule_file_v3_load_result = 0xffffffffu;
+volatile uint32_t g_rule_file_v3_size;
+volatile uint32_t g_rule_file_v3_read_len;
+volatile uint32_t g_rule_file_v3_rule_count;
+volatile uint32_t g_rule_file_v3_save_request;
+volatile uint32_t g_rule_file_v3_save_result = 0xffffffffu;
+RuleFileV3 g_rule_file_v3_current;
+RuleFileV3 g_rule_file_v3_pending;
 volatile uint32_t g_rule_task_engine_reload;
 static RuleEngine g_rule_task_pending_engine;
 static QueueHandle_t g_config_command_queue;
+static char g_rule_file_v3_text[RULE_FILE_V3_MAX_BYTES + 1u];
+static RuleEngine g_rule_file_v3_candidate_engine;
 
 /* USER CODE END PV */
 
@@ -478,6 +490,19 @@ static bool rule_file_v2_load_from_tf(void)
   }
 
   const uint32_t previous_generation = g_rule_task_config_generation;
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const Rule *rule = &candidate.rules[slot];
+    RuleFileV3Slot *target = &g_rule_file_v3_current.slots[slot];
+    target->enabled = rule->enabled;
+    target->relay = rule->relay;
+    target->threshold = (uint32_t)rule->threshold;
+    target->action_state = rule->action_state;
+    target->delay_ms = rule->delay_ms;
+    target->timeout_ms = rule->timeout_ms;
+    target->safe_state = rule->safe_state;
+    target->priority = rule->priority;
+  }
+  g_rule_file_v3_pending = g_rule_file_v3_current;
   g_rule_file_v2_rule_count = (uint32_t)candidate.rule_count;
   rule_task_request_engine_reload(&candidate);
   for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
@@ -492,6 +517,55 @@ static bool rule_file_v2_load_from_tf(void)
   return true;
 }
 
+static bool rule_file_v3_load_from_tf(void)
+{
+  size_t file_size = 0u;
+  uint8_t file_data[RULE_FILE_V3_MAX_BYTES];
+  size_t read_len = 0u;
+  RuleFileV3 rules;
+  RuleEngine candidate;
+  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_V3_PATH, &file_size);
+
+  g_rule_file_v3_size = (uint32_t)file_size;
+  g_rule_file_v3_read_len = 0u;
+  g_rule_file_v3_rule_count = 0u;
+  if (g_tf_card_bringup_status != 0) {
+    g_rule_file_v3_load_result = 5u;
+    return false;
+  }
+  if (size_result == FR_NO_FILE) {
+    g_rule_file_v3_load_result = 1u;
+    return false;
+  }
+  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V3_MAX_BYTES ||
+      stm32h750_tf_read_file_locked(RULE_FILE_V3_PATH, file_data, file_size, &read_len) != 0 ||
+      read_len != file_size) {
+    g_rule_file_v3_read_len = (uint32_t)read_len;
+    g_rule_file_v3_load_result = size_result == 0 && file_size > RULE_FILE_V3_MAX_BYTES ? 3u : 2u;
+    return false;
+  }
+  g_rule_file_v3_read_len = (uint32_t)read_len;
+  if (!rule_file_parse_v3(file_data, read_len, &rules) || !rule_file_v3_build_engine(&rules, &candidate)) {
+    g_rule_file_v3_load_result = 4u;
+    return false;
+  }
+  const uint32_t previous_generation = g_rule_task_config_generation;
+  g_rule_file_v3_current = rules;
+  g_rule_file_v3_pending = rules;
+  g_rule_file_v3_rule_count = (uint32_t)candidate.rule_count;
+  rule_task_request_engine_reload(&candidate);
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_generation != previous_generation &&
+        g_rule_task_engine_reload == 0u && g_rule_task_config_result == 0u) {
+      g_rule_file_v3_load_result = 0u;
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  g_rule_file_v3_load_result = 6u;
+  return false;
+}
+
 static void rule_file_load_from_tf(void)
 {
   size_t file_size = 0u;
@@ -499,6 +573,9 @@ static void rule_file_load_from_tf(void)
   size_t read_len = 0u;
   RuleTaskConfig candidate;
 
+  if (rule_file_v3_load_from_tf()) {
+    return;
+  }
   if (rule_file_v2_load_from_tf()) {
     if (g_rule_file_v2_load_result == 0u) {
       return;
@@ -877,6 +954,17 @@ static int config_queue_enqueue_pending(void)
     ++g_config_queue_enqueue_count;
   }
 
+  if (g_rule_file_v3_save_request != 0u) {
+    command.type = CONFIG_COMMAND_RULE_FILE_V3_SAVE;
+    command.rule_file_v3 = g_rule_file_v3_pending;
+    if (xQueueSend(g_config_command_queue, &command, 0u) != pdPASS) {
+      ++g_config_queue_drop_count;
+      return 1;
+    }
+    ++g_config_queue_enqueue_count;
+    g_rule_file_v3_save_request = 0u;
+  }
+
   return 0;
 }
 
@@ -910,6 +998,28 @@ static void config_task(void *argument)
           g_rule_task_config_reload = 1u;
         }
         bringup_print_status("rule_config_save");
+      } else if (command.type == CONFIG_COMMAND_RULE_FILE_V3_SAVE) {
+        const size_t text_len = rule_file_format_v3(&command.rule_file_v3,
+                                                     g_rule_file_v3_text,
+                                                     sizeof(g_rule_file_v3_text));
+        if (text_len == 0u || !rule_file_v3_build_engine(&command.rule_file_v3,
+                                                          &g_rule_file_v3_candidate_engine)) {
+          g_rule_file_v3_save_result = 1u;
+        } else {
+          g_rule_file_v3_save_result = (uint32_t)stm32h750_tf_replace_file_with_backup_locked(
+            "/config/rules-v3.tmp", RULE_FILE_V3_PATH, "/config/rules-v3.prev",
+            (const uint8_t *)g_rule_file_v3_text, text_len);
+          if (g_rule_file_v3_save_result == 0u) {
+            g_rule_file_v3_current = command.rule_file_v3;
+            g_rule_file_v3_pending = command.rule_file_v3;
+            g_rule_file_v3_load_result = 0u;
+            g_rule_file_v3_size = (uint32_t)text_len;
+            g_rule_file_v3_read_len = (uint32_t)text_len;
+            g_rule_file_v3_rule_count = (uint32_t)g_rule_file_v3_candidate_engine.rule_count;
+            rule_task_request_engine_reload(&g_rule_file_v3_candidate_engine);
+          }
+        }
+        bringup_print_status("rule_file_v3_save");
       }
     }
     ++g_config_task_loop_count;

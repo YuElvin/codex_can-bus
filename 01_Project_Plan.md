@@ -30,6 +30,12 @@
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；LogTask recovery 仍未触发；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
 | 12 | 稳定性基线 | [部分客观已验证] | 本轮规则 HTTP 改动重新烧录后，ping、`/api/status`、规则 GET/POST/GET、`/api/can/status` 串行回归通过；CAN status errors/bus-off/TEC/REC 为 0；LogTask recovery 仍待真实错误触发 |
 
+## 阶段 C 当前状态
+
+阶段 C 的范围固定为两槽 RuleFile v3 与受限 HTTP CRUD，现已客观验收完成：`GET /api/rules`、`GET /api/rules/0|1`、`POST /api/rules`（只创建 disabled 槽）、`PUT /api/rules/0|1`（完整替换）和 `DELETE /api/rules/0|1`（禁用）均存在。写入只更新候选并经 ConfigTask 深度 2 队列单消费者保存 `/config/rules-v3.tmp -> /config/rules-v3.conf`、备份 `.prev`，成功后才请求 RuleTask engine reload；不写 QSPI，不改变 v1/v2。
+
+验收包含 DELETE 后 rule_count=`1`/generation 变化、POST 后 rule_count=`2`、PUT 非默认值跨复位持久化、恢复阶段 B 默认、非法 PUT HTTP 400 且 generation/current 不变，以及网络只读回归。开发中发现并修复 `rule_file_v3_build_engine()` 3856 B 自动对象覆盖 ConfigTask TCB 的真实 HardFault；最终反汇编栈帧为 120 B。阶段 C 完成后停止，下一会话只按最终验收路线进入阶段 D。
+
 ## 非目标
 
 - 当前不再把 LAN8720/RMII/lwIP 作为活动软件路线。

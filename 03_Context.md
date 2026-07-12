@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（阶段 B 已客观验证 v2 两规则解析、原子 RuleTask reload、priority/manual/timeout 和外部 CAN/GPIO 现场语义；首次 v2 缺失创建板端未观察；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
+更新时间：2026-07-13（阶段 C 已客观验证受限双槽 RuleFile v3 HTTP CRUD、TF 原子保存、RuleTask reload 与跨复位持久化；阶段 B 的首次 v2 缺失创建仍未观察；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
 
 ## 当前仓库
 
@@ -30,13 +30,14 @@
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测；新增 HTTP GET/POST 单规则配置闭环并跨复位验证 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载、无效请求拒绝及候选/运行态隔离均已 ST-Link 实测 |
 | TF RuleFile v1 | [客观已验证；非法板端输入未注入] | 首次启动 TF `status=0` 时缺失文件 `load_result=1/created=1`；复位后读取 `75` 字节有效文件，`load_result=0/read_len=75`，RuleTask `generation=2/reload=0`，有效文件把此前 HTTP 写入的 QSPI `42435/42433/1100/1600` 覆盖回 `42434/42432/1000/1500`；纯解析主机测试覆盖缺字段、非法阈值和非法时序且候选不变 |
+| TF RuleFile v3 / 受限规则 CRUD | [客观已验证] | `/config/rules-v3.conf` 固定两槽、640 B 严格文本格式；顺序 HTTP `GET`、DELETE 禁用、POST 恢复、PUT、非法 PUT、重启持久化和默认恢复均已烧录验证。写入经 ConfigTask TF tmp/prev 原子替换，成功后 RuleTask 原子 reload；v3 构造函数已消除 3.8 KiB 栈对象导致的实测 HardFault。 |
 
 ## 当前阻断项
 
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
-- 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。HTTP POST 通过 ConfigTask 队列保存并跨复位加载，随后已恢复默认 `42434/42432/1000/1500`。完整规则文件、多规则和 CRUD 仍未实现，不得将该单规则接口表述为完整规则管理功能。
+- 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
 - 阶段 A RuleFile v1 已完成板端有效/缺失路径：首次缺失创建不阻断启动，复位后有效文件通过既有 RuleTask reload 覆盖非默认 QSPI 参数；RuleTask 读数为 `generation=2/reload=0`，外部 CAN marker=42434 时 PE7=`1`、PE8=`0`、GPIOE ODR=`0x80`。非法文件未通过真实 TF 输入注入，结论限于主机纯解析测试，禁止写成板端非法文件实测。
 - 阶段 12 稳定性基线已完成：当前固件重新烧录 Verify 通过，两次任务计数增长，关键模块状态为 0，ping 与三个只读 API 串行返回 HTTP 200；本轮外部 CAN RX 为 0，不能作为外部 RX 验证。
 - CANtest 现场状态已补充：开始发送前曾未观察到开发板数据；开始发送后连续 HTTP 读数为 `tx=53→68`、`rx=240→397`、`errors=0`、`tec=0`、`rec=0`、`busOff=0`、`sendResult=0`、`poll=52→67`。该结果作为当前外部 CAN RX 与周期 TX/ACK 证据，不表述为代码修复；本轮无源码修改。
@@ -59,7 +60,13 @@
 
 ## 下一步建议
 
-阶段 B 已完成并停止；按派送要求不选择或推进阶段 C。
+阶段 C 已完成并停止；下一新会话应只执行 `PROJECT_FINAL_ACCEPTANCE.md` 指定的阶段 D，先读取该文件及本上下文，不得扩大为前端、鉴权、第三槽或并发 HTTP。
+
+## 阶段 C 实际快照
+
+- 最终构建 `./scripts/verify.sh`、CTest=`14/14`、`git diff --check` 均通过；ELF 为 `build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`85496 B / 128 KB = 65.23%`，RAM_D1=`239664 B / 512 KB = 45.71%`。反汇编确认 v3 parser 的严格校验，ConfigTask type=3 的 TF 原子替换和 RuleTask 3856 B engine 临界复制；修复后 `rule_file_v3_build_engine()` 栈帧仅 120 B，POST 表单 `slot=2` 的 404 分支也已反汇编及实板验证。
+- OpenOCD/ST-Link V2 修复版烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压 `3.250368 V`。首次版本 DELETE 成功后发现 `rule_file_v3_build_engine()` 的 3856 B 自动对象覆盖 ConfigTask 相邻 TCB，CFSR=`0x8200`、BFAR=`0xc4108948`、PC 位于 `xTaskIncrementTick`；该真实失败已修复并重新烧录，不作为验收成功证据。
+- 修复版真实 HTTP：初始 v2 两槽 GET 200；DELETE slot1 后 GET source=v3/slot1 disabled，GDB `generation=4/rule_count=1`；POST slot1 恢复为 201，GDB `generation=5/rule_count=2`；PUT slot0 为 `42436/1100/1600` 后复位仍为相同 v3 数据；PUT 恢复默认 `42434/1000/1500`；非法 `delayMs=1601/timeoutMs=1600` 返回 400，generation 保持 `3`、current 未变。最终 GET 两槽均 enabled 且参数为阶段 B 默认；ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 200，CAN 状态 errors/busOff/TEC/REC/sendResult 均为 0。本轮无 CANtest 输入，signals 空且不作为 CAN RX 验收。
 
 ## 阶段 B 实际快照
 

@@ -365,3 +365,179 @@ bool rule_file_parse_v2(const uint8_t *data, size_t len, RuleEngine *out_engine)
   *out_engine = parsed_engine;
   return true;
 }
+
+enum {
+  RULE_FILE_V3_FIELD_VERSION = 1u << 0,
+  RULE_FILE_V3_FIELD_COUNT = 1u << 1,
+  RULE_FILE_V3_SLOT_FIELD_ENABLED = 1u << 0,
+  RULE_FILE_V3_SLOT_FIELD_RELAY = 1u << 1,
+  RULE_FILE_V3_SLOT_FIELD_THRESHOLD = 1u << 2,
+  RULE_FILE_V3_SLOT_FIELD_ACTION = 1u << 3,
+  RULE_FILE_V3_SLOT_FIELD_DELAY = 1u << 4,
+  RULE_FILE_V3_SLOT_FIELD_TIMEOUT = 1u << 5,
+  RULE_FILE_V3_SLOT_FIELD_SAFE_STATE = 1u << 6,
+  RULE_FILE_V3_SLOT_FIELD_PRIORITY = 1u << 7,
+  RULE_FILE_V3_SLOT_FIELD_ALL = RULE_FILE_V3_SLOT_FIELD_ENABLED |
+                                RULE_FILE_V3_SLOT_FIELD_RELAY |
+                                RULE_FILE_V3_SLOT_FIELD_THRESHOLD |
+                                RULE_FILE_V3_SLOT_FIELD_ACTION |
+                                RULE_FILE_V3_SLOT_FIELD_DELAY |
+                                RULE_FILE_V3_SLOT_FIELD_TIMEOUT |
+                                RULE_FILE_V3_SLOT_FIELD_SAFE_STATE |
+                                RULE_FILE_V3_SLOT_FIELD_PRIORITY,
+};
+
+bool rule_file_parse_v3(const uint8_t *data, size_t len, RuleFileV3 *out_rules) {
+  RuleFileV3 parsed = {0};
+  uint32_t global_fields = 0u;
+  uint32_t slot_fields[RULE_FILE_V2_RULE_COUNT] = {0u};
+  uint32_t version = 0u;
+  uint32_t count = 0u;
+  size_t offset = 0u;
+
+  if (data == NULL || out_rules == NULL || len == 0u || len > RULE_FILE_V3_MAX_BYTES) {
+    return false;
+  }
+  while (offset < len) {
+    const size_t line_start = offset;
+    size_t line_len;
+    size_t equals = 0u;
+    bool has_equals = false;
+    while (offset < len && data[offset] != (uint8_t)'\n') {
+      ++offset;
+    }
+    line_len = offset - line_start;
+    if (offset < len) {
+      ++offset;
+    }
+    if (line_len > 0u && data[line_start + line_len - 1u] == (uint8_t)'\r') {
+      --line_len;
+    }
+    if (line_len == 0u) {
+      continue;
+    }
+    for (size_t i = 0u; i < line_len; ++i) {
+      if (data[line_start + i] == (uint8_t)'=') {
+        if (has_equals) {
+          return false;
+        }
+        equals = i;
+        has_equals = true;
+      }
+    }
+    if (!has_equals || equals == 0u || equals + 1u >= line_len) {
+      return false;
+    }
+    const uint8_t *key = data + line_start;
+    const uint8_t *value_text = key + equals + 1u;
+    const size_t value_len = line_len - equals - 1u;
+    uint32_t value = 0u;
+    if (rule_file_key_is(key, equals, "version")) {
+      if ((global_fields & RULE_FILE_V3_FIELD_VERSION) != 0u ||
+          !rule_file_parse_u32(value_text, value_len, &version)) return false;
+      global_fields |= RULE_FILE_V3_FIELD_VERSION;
+      continue;
+    }
+    if (rule_file_key_is(key, equals, "ruleCount")) {
+      if ((global_fields & RULE_FILE_V3_FIELD_COUNT) != 0u ||
+          !rule_file_parse_u32(value_text, value_len, &count)) return false;
+      global_fields |= RULE_FILE_V3_FIELD_COUNT;
+      continue;
+    }
+    bool recognized = false;
+    for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+      uint32_t field = 0u;
+      if (rule_file_v2_key_is(key, equals, slot, "enabled")) field = RULE_FILE_V3_SLOT_FIELD_ENABLED;
+      else if (rule_file_v2_key_is(key, equals, slot, "relay")) field = RULE_FILE_V3_SLOT_FIELD_RELAY;
+      else if (rule_file_v2_key_is(key, equals, slot, "threshold")) field = RULE_FILE_V3_SLOT_FIELD_THRESHOLD;
+      else if (rule_file_v2_key_is(key, equals, slot, "action")) field = RULE_FILE_V3_SLOT_FIELD_ACTION;
+      else if (rule_file_v2_key_is(key, equals, slot, "delayMs")) field = RULE_FILE_V3_SLOT_FIELD_DELAY;
+      else if (rule_file_v2_key_is(key, equals, slot, "timeoutMs")) field = RULE_FILE_V3_SLOT_FIELD_TIMEOUT;
+      else if (rule_file_v2_key_is(key, equals, slot, "safeState")) field = RULE_FILE_V3_SLOT_FIELD_SAFE_STATE;
+      else if (rule_file_v2_key_is(key, equals, slot, "priority")) field = RULE_FILE_V3_SLOT_FIELD_PRIORITY;
+      if (field == 0u) continue;
+      if ((slot_fields[slot] & field) != 0u) return false;
+      if (field == RULE_FILE_V3_SLOT_FIELD_ACTION || field == RULE_FILE_V3_SLOT_FIELD_SAFE_STATE) {
+        RelayState *state = field == RULE_FILE_V3_SLOT_FIELD_ACTION ?
+          &parsed.slots[slot].action_state : &parsed.slots[slot].safe_state;
+        if (!rule_file_v2_parse_state(value_text, value_len, state)) return false;
+      } else if (!rule_file_parse_u32(value_text, value_len, &value)) return false;
+      if (field == RULE_FILE_V3_SLOT_FIELD_ENABLED) {
+        if (value > 1u) return false;
+        parsed.slots[slot].enabled = value != 0u;
+      } else if (field == RULE_FILE_V3_SLOT_FIELD_RELAY) {
+        if (value >= RULE_RELAY_COUNT) return false;
+        parsed.slots[slot].relay = (uint8_t)value;
+      } else if (field == RULE_FILE_V3_SLOT_FIELD_THRESHOLD) parsed.slots[slot].threshold = value;
+      else if (field == RULE_FILE_V3_SLOT_FIELD_DELAY) parsed.slots[slot].delay_ms = value;
+      else if (field == RULE_FILE_V3_SLOT_FIELD_TIMEOUT) parsed.slots[slot].timeout_ms = value;
+      else if (field == RULE_FILE_V3_SLOT_FIELD_PRIORITY) {
+        if (value > UINT8_MAX) return false;
+        parsed.slots[slot].priority = (uint8_t)value;
+      }
+      slot_fields[slot] |= field;
+      recognized = true;
+      break;
+    }
+    if (!recognized) return false;
+  }
+  if (global_fields != (RULE_FILE_V3_FIELD_VERSION | RULE_FILE_V3_FIELD_COUNT) || version != 3u ||
+      count != RULE_FILE_V2_RULE_COUNT || parsed.slots[0].priority == parsed.slots[1].priority) return false;
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    if (slot_fields[slot] != RULE_FILE_V3_SLOT_FIELD_ALL ||
+        parsed.slots[slot].delay_ms > parsed.slots[slot].timeout_ms) return false;
+  }
+  *out_rules = parsed;
+  return true;
+}
+
+bool rule_file_v3_build_engine(const RuleFileV3 *rules, RuleEngine *out_engine) {
+  if (rules == NULL || out_engine == NULL) return false;
+  rule_engine_init(out_engine);
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    if (!rules->slots[slot].enabled) continue;
+    Rule rule = {0};
+    const RuleFileV3Slot *source = &rules->slots[slot];
+    (void)snprintf(rule.id, sizeof(rule.id), "rule%u", (unsigned)slot);
+    (void)snprintf(rule.signal_key, sizeof(rule.signal_key), "Can2Data.marker");
+    rule.enabled = true;
+    rule.op = RULE_OP_GE;
+    rule.threshold = (double)source->threshold;
+    rule.relay = source->relay;
+    rule.action_state = source->action_state;
+    rule.delay_ms = source->delay_ms;
+    rule.timeout_ms = source->timeout_ms;
+    rule.safe_state = source->safe_state;
+    rule.default_state = RELAY_STATE_OFF;
+    rule.priority = source->priority;
+    if (!rule_engine_add_rule(out_engine, &rule)) return false;
+  }
+  return true;
+}
+
+size_t rule_file_format_v3(const RuleFileV3 *rules, char *out_text, size_t out_capacity) {
+  size_t used = 0u;
+
+  if (rules == NULL || out_text == NULL || out_capacity == 0u) return 0u;
+  const int header = snprintf(out_text, out_capacity, "version=3\nruleCount=2\n");
+  if (header < 0 || (size_t)header >= out_capacity) return 0u;
+  used = (size_t)header;
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const RuleFileV3Slot *rule = &rules->slots[slot];
+    const int written = snprintf(out_text + used, out_capacity - used,
+                                 "rule%u.enabled=%u\nrule%u.relay=%u\nrule%u.threshold=%lu\n"
+                                 "rule%u.action=%s\nrule%u.delayMs=%lu\nrule%u.timeoutMs=%lu\n"
+                                 "rule%u.safeState=%s\nrule%u.priority=%u\n",
+                                 (unsigned)slot, rule->enabled ? 1u : 0u,
+                                 (unsigned)slot, (unsigned)rule->relay,
+                                 (unsigned)slot, (unsigned long)rule->threshold,
+                                 (unsigned)slot, rule->action_state == RELAY_STATE_ON ? "on" : "off",
+                                 (unsigned)slot, (unsigned long)rule->delay_ms,
+                                 (unsigned)slot, (unsigned long)rule->timeout_ms,
+                                 (unsigned)slot, rule->safe_state == RELAY_STATE_ON ? "on" : "off",
+                                 (unsigned)slot, (unsigned)rule->priority);
+    if (written < 0 || (size_t)written >= out_capacity - used) return 0u;
+    used += (size_t)written;
+  }
+  return used;
+}

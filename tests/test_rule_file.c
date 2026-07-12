@@ -192,6 +192,45 @@ static int test_oversized_v2_does_not_change_candidate(void) {
   return 0;
 }
 
+static const char default_v3_text[] =
+  "version=3\nruleCount=2\n"
+  "rule0.enabled=1\nrule0.relay=0\nrule0.threshold=42434\nrule0.action=on\n"
+  "rule0.delayMs=1000\nrule0.timeoutMs=1500\nrule0.safeState=off\nrule0.priority=10\n"
+  "rule1.enabled=0\nrule1.relay=0\nrule1.threshold=42435\nrule1.action=off\n"
+  "rule1.delayMs=0\nrule1.timeoutMs=1500\nrule1.safeState=off\nrule1.priority=20\n";
+
+static int test_valid_v3_and_enabled_engine(void) {
+  RuleFileV3 rules;
+  RuleEngine engine;
+  char text[RULE_FILE_V3_MAX_BYTES + 1u];
+  RuleFileV3 round_trip;
+
+  ASSERT_TRUE(rule_file_parse_v3((const uint8_t *)default_v3_text, strlen(default_v3_text), &rules));
+  ASSERT_TRUE(rules.slots[0].enabled && !rules.slots[1].enabled);
+  const size_t len = rule_file_format_v3(&rules, text, sizeof(text));
+  ASSERT_TRUE(len > 0u && len <= RULE_FILE_V3_MAX_BYTES);
+  ASSERT_TRUE(rule_file_parse_v3((const uint8_t *)text, len, &round_trip));
+  ASSERT_TRUE(memcmp(&round_trip, &rules, sizeof(rules)) == 0);
+  ASSERT_TRUE(rule_file_v3_build_engine(&rules, &engine));
+  ASSERT_TRUE(engine.rule_count == 1u);
+  ASSERT_TRUE(engine.rules[0].threshold == 42434.0);
+  return 0;
+}
+
+static int test_invalid_v3_does_not_change_candidate(void) {
+  static const char invalid[] =
+    "version=3\nruleCount=2\nrule0.enabled=2\n";
+  RuleFileV3 before = {0};
+  RuleFileV3 candidate;
+
+  before.slots[0].enabled = true;
+  before.slots[0].threshold = 7u;
+  candidate = before;
+  ASSERT_TRUE(!rule_file_parse_v3((const uint8_t *)invalid, strlen(invalid), &candidate));
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_valid_file() == 0);
   ASSERT_TRUE(test_missing_required_field_does_not_change_candidate() == 0);
@@ -200,5 +239,7 @@ int main(void) {
   ASSERT_TRUE(test_valid_v2_default() == 0);
   ASSERT_TRUE(test_invalid_v2_classes_do_not_change_candidate() == 0);
   ASSERT_TRUE(test_oversized_v2_does_not_change_candidate() == 0);
+  ASSERT_TRUE(test_valid_v3_and_enabled_engine() == 0);
+  ASSERT_TRUE(test_invalid_v3_does_not_change_candidate() == 0);
   return 0;
 }

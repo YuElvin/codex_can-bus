@@ -3,6 +3,7 @@
 #include "main.h"
 #include "dbc_parser.h"
 #include "platform/stm32h750_bringup.h"
+#include "rule_file.h"
 #include "signal_api.h"
 
 #include "FreeRTOS.h"
@@ -98,6 +99,14 @@ extern volatile uint32_t g_rule_task_config_reload;
 extern volatile uint32_t g_rule_task_config_result;
 extern volatile uint32_t g_rule_task_config_generation;
 extern volatile uint32_t g_rule_task_config_save_request;
+extern volatile uint32_t g_rule_task_engine_reload;
+extern volatile uint32_t g_rule_file_v3_save_request;
+extern volatile uint32_t g_rule_file_v3_save_result;
+extern volatile uint32_t g_rule_file_v3_load_result;
+extern volatile uint32_t g_rule_file_v3_rule_count;
+extern volatile uint32_t g_rule_file_v2_load_result;
+extern RuleFileV3 g_rule_file_v3_current;
+extern RuleFileV3 g_rule_file_v3_pending;
 
 #define W5500_S0_REG_BLOCK 0x01u
 #define W5500_S0_TX_BLOCK 0x02u
@@ -139,9 +148,11 @@ extern volatile uint32_t g_rule_task_config_save_request;
 #define W5500_HTTP_PATH_DBC_RUNTIME 6u
 #define W5500_HTTP_PATH_SIGNALS 7u
 #define W5500_HTTP_PATH_RULE_CONFIG 8u
+#define W5500_HTTP_PATH_RULES 9u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
+#define W5500_HTTP_RULES_BODY_MAX 384u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
@@ -290,12 +301,16 @@ static const char *http_status_text(uint16_t code) {
   switch (code) {
     case 200u:
       return "OK";
+    case 201u:
+      return "Created";
     case 400u:
       return "Bad Request";
     case 404u:
       return "Not Found";
     case 405u:
       return "Method Not Allowed";
+    case 409u:
+      return "Conflict";
     case 413u:
       return "Payload Too Large";
     case 500u:
@@ -431,6 +446,28 @@ static size_t build_rule_config_body(char *body, size_t len) {
                           (unsigned long)g_rule_task_config_delay_ms,
                           (unsigned long)g_rule_task_config_timeout_ms,
                           (unsigned long)g_rule_task_config_generation);
+}
+
+static size_t build_rules_body(char *body, size_t len, int slot) {
+  const RuleFileV3Slot *first = &g_rule_file_v3_current.slots[0];
+  const RuleFileV3Slot *second = &g_rule_file_v3_current.slots[1];
+  const char *source = g_rule_file_v3_load_result == 0u ? "v3" :
+                       g_rule_file_v2_load_result == 0u ? "v2" : "v1-qspi";
+  if (slot >= 0 && slot < 2) {
+    const RuleFileV3Slot *rule = &g_rule_file_v3_current.slots[slot];
+    return (size_t)snprintf(body, len,
+      "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":3,\"slot\":%d,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}}",
+      source, slot, rule->enabled ? "true" : "false", (unsigned)rule->relay,
+      (unsigned long)rule->threshold, rule->action_state == RELAY_STATE_ON ? "on" : "off",
+      (unsigned long)rule->delay_ms, (unsigned long)rule->timeout_ms,
+      rule->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)rule->priority);
+  }
+  return (size_t)snprintf(body, len,
+    "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":3,\"rules\":[{\"slot\":0,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u},{\"slot\":1,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}]}}",
+    source, first->enabled ? "true" : "false", (unsigned)first->relay, (unsigned long)first->threshold,
+    first->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)first->delay_ms, (unsigned long)first->timeout_ms, first->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)first->priority,
+    second->enabled ? "true" : "false", (unsigned)second->relay, (unsigned long)second->threshold,
+    second->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)second->delay_ms, (unsigned long)second->timeout_ms, second->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)second->priority);
 }
 
 static const char *skip_http_space(const char *text) {
@@ -860,6 +897,211 @@ static int http_handle_rule_config(const char *body, size_t body_len) {
   return http_send_response(200u, "application/json", g_http_response_body, response_len);
 }
 
+enum {
+  HTTP_RULES_POST = 1u,
+  HTTP_RULES_PUT = 2u,
+  HTTP_RULES_DELETE = 3u,
+  HTTP_RULE_FIELD_SLOT = 1u << 0,
+  HTTP_RULE_FIELD_ENABLED = 1u << 1,
+  HTTP_RULE_FIELD_RELAY = 1u << 2,
+  HTTP_RULE_FIELD_THRESHOLD = 1u << 3,
+  HTTP_RULE_FIELD_ACTION = 1u << 4,
+  HTTP_RULE_FIELD_DELAY = 1u << 5,
+  HTTP_RULE_FIELD_TIMEOUT = 1u << 6,
+  HTTP_RULE_FIELD_SAFE_STATE = 1u << 7,
+  HTTP_RULE_FIELD_PRIORITY = 1u << 8,
+  HTTP_RULE_FIELD_ALL = HTTP_RULE_FIELD_ENABLED | HTTP_RULE_FIELD_RELAY |
+                        HTTP_RULE_FIELD_THRESHOLD | HTTP_RULE_FIELD_ACTION |
+                        HTTP_RULE_FIELD_DELAY | HTTP_RULE_FIELD_TIMEOUT |
+                        HTTP_RULE_FIELD_SAFE_STATE | HTTP_RULE_FIELD_PRIORITY,
+};
+
+static bool http_form_span_is(const char *text, size_t len, const char *expected) {
+  const size_t expected_len = strlen(expected);
+  return len == expected_len && memcmp(text, expected, len) == 0;
+}
+
+static bool http_form_parse_u32(const char *text, size_t len, uint32_t *value) {
+  uint32_t result = 0u;
+
+  if (len == 0u || value == NULL) {
+    return false;
+  }
+  for (size_t i = 0u; i < len; ++i) {
+    const uint8_t ch = (uint8_t)text[i];
+    if (ch < (uint8_t)'0' || ch > (uint8_t)'9' ||
+        result > (UINT32_MAX - (uint32_t)(ch - (uint8_t)'0')) / 10u) {
+      return false;
+    }
+    result = (result * 10u) + (uint32_t)(ch - (uint8_t)'0');
+  }
+  *value = result;
+  return true;
+}
+
+static bool http_form_parse_rule(const char *body,
+                                 size_t body_len,
+                                 bool include_slot,
+                                 uint32_t *slot,
+                                 RuleFileV3Slot *rule) {
+  uint32_t fields = 0u;
+  size_t offset = 0u;
+
+  if (body == NULL || rule == NULL || (include_slot && slot == NULL) || body_len == 0u ||
+      body[body_len - 1u] == '&') {
+    return false;
+  }
+  while (offset < body_len) {
+    size_t entry_end = offset;
+    size_t equals = offset;
+    bool has_equals = false;
+    uint32_t value;
+
+    while (entry_end < body_len && body[entry_end] != '&') {
+      if (body[entry_end] == '=' && !has_equals) {
+        equals = entry_end;
+        has_equals = true;
+      } else if (body[entry_end] == '=' || body[entry_end] == '\0') {
+        return false;
+      }
+      ++entry_end;
+    }
+    if (!has_equals || equals == offset || equals + 1u >= entry_end) {
+      return false;
+    }
+    const char *key = &body[offset];
+    const size_t key_len = equals - offset;
+    const char *value_text = &body[equals + 1u];
+    const size_t value_len = entry_end - equals - 1u;
+
+    if (include_slot && http_form_span_is(key, key_len, "slot")) {
+      if ((fields & HTTP_RULE_FIELD_SLOT) != 0u || !http_form_parse_u32(value_text, value_len, &value)) {
+        return false;
+      }
+      *slot = value;
+      fields |= HTTP_RULE_FIELD_SLOT;
+    } else if (http_form_span_is(key, key_len, "enabled")) {
+      if ((fields & HTTP_RULE_FIELD_ENABLED) != 0u || !http_form_parse_u32(value_text, value_len, &value) || value > 1u) return false;
+      rule->enabled = value != 0u;
+      fields |= HTTP_RULE_FIELD_ENABLED;
+    } else if (http_form_span_is(key, key_len, "relay")) {
+      if ((fields & HTTP_RULE_FIELD_RELAY) != 0u || !http_form_parse_u32(value_text, value_len, &value) || value >= RULE_RELAY_COUNT) return false;
+      rule->relay = (uint8_t)value;
+      fields |= HTTP_RULE_FIELD_RELAY;
+    } else if (http_form_span_is(key, key_len, "threshold")) {
+      if ((fields & HTTP_RULE_FIELD_THRESHOLD) != 0u || !http_form_parse_u32(value_text, value_len, &rule->threshold)) return false;
+      fields |= HTTP_RULE_FIELD_THRESHOLD;
+    } else if (http_form_span_is(key, key_len, "action")) {
+      if ((fields & HTTP_RULE_FIELD_ACTION) != 0u) return false;
+      if (http_form_span_is(value_text, value_len, "on")) rule->action_state = RELAY_STATE_ON;
+      else if (http_form_span_is(value_text, value_len, "off")) rule->action_state = RELAY_STATE_OFF;
+      else return false;
+      fields |= HTTP_RULE_FIELD_ACTION;
+    } else if (http_form_span_is(key, key_len, "delayMs")) {
+      if ((fields & HTTP_RULE_FIELD_DELAY) != 0u || !http_form_parse_u32(value_text, value_len, &rule->delay_ms)) return false;
+      fields |= HTTP_RULE_FIELD_DELAY;
+    } else if (http_form_span_is(key, key_len, "timeoutMs")) {
+      if ((fields & HTTP_RULE_FIELD_TIMEOUT) != 0u || !http_form_parse_u32(value_text, value_len, &rule->timeout_ms)) return false;
+      fields |= HTTP_RULE_FIELD_TIMEOUT;
+    } else if (http_form_span_is(key, key_len, "safeState")) {
+      if ((fields & HTTP_RULE_FIELD_SAFE_STATE) != 0u) return false;
+      if (http_form_span_is(value_text, value_len, "on")) rule->safe_state = RELAY_STATE_ON;
+      else if (http_form_span_is(value_text, value_len, "off")) rule->safe_state = RELAY_STATE_OFF;
+      else return false;
+      fields |= HTTP_RULE_FIELD_SAFE_STATE;
+    } else if (http_form_span_is(key, key_len, "priority")) {
+      if ((fields & HTTP_RULE_FIELD_PRIORITY) != 0u || !http_form_parse_u32(value_text, value_len, &value) || value > UINT8_MAX) return false;
+      rule->priority = (uint8_t)value;
+      fields |= HTTP_RULE_FIELD_PRIORITY;
+    } else {
+      return false;
+    }
+    offset = entry_end + (entry_end < body_len ? 1u : 0u);
+  }
+  return fields == (HTTP_RULE_FIELD_ALL | (include_slot ? HTTP_RULE_FIELD_SLOT : 0u));
+}
+
+static int http_handle_rules_write(uint32_t operation, int path_slot, const char *body, size_t body_len) {
+  RuleFileV3 candidate;
+  RuleFileV3Slot replacement = {0};
+  uint32_t slot = path_slot >= 0 ? (uint32_t)path_slot : 0u;
+  const uint32_t generation = g_rule_task_config_generation;
+  uint16_t code = 200u;
+
+  if (g_rule_file_v3_load_result != 0u && g_rule_file_v2_load_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_RULES, 500u);
+    return http_send_json_error(500u, "rules_source_unavailable", "valid v2 or v3 rules required");
+  }
+  candidate = g_rule_file_v3_current;
+  if (operation == HTTP_RULES_DELETE) {
+    if (body_len != 0u) {
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "invalid_rule", "delete body unsupported");
+    }
+    if (!candidate.slots[slot].enabled) {
+      http_record_request(W5500_HTTP_PATH_RULES, 409u);
+      return http_send_json_error(409u, "rule_disabled", "rule already disabled");
+    }
+    candidate.slots[slot].enabled = false;
+  } else {
+    if (!http_form_parse_rule(body, body_len, operation == HTTP_RULES_POST, &slot, &replacement) ||
+        replacement.delay_ms > replacement.timeout_ms) {
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "invalid_rule", "invalid rule form");
+    }
+    if (slot >= RULE_FILE_V2_RULE_COUNT) {
+      http_record_request(W5500_HTTP_PATH_RULES, 404u);
+      return http_send_json_error(404u, "not_found", "rule slot not found");
+    }
+    if (operation == HTTP_RULES_POST) {
+      if (replacement.enabled == false) {
+        http_record_request(W5500_HTTP_PATH_RULES, 400u);
+        return http_send_json_error(400u, "invalid_rule", "post must enable rule");
+      }
+      if (candidate.slots[slot].enabled) {
+        http_record_request(W5500_HTTP_PATH_RULES, 409u);
+        return http_send_json_error(409u, "rule_exists", "rule already enabled");
+      }
+      code = 201u;
+    }
+    candidate.slots[slot] = replacement;
+  }
+  if (candidate.slots[0].priority == candidate.slots[1].priority ||
+      candidate.slots[0].delay_ms > candidate.slots[0].timeout_ms ||
+      candidate.slots[1].delay_ms > candidate.slots[1].timeout_ms) {
+    http_record_request(W5500_HTTP_PATH_RULES, 400u);
+    return http_send_json_error(400u, "invalid_rule", "invalid rule set");
+  }
+
+  g_rule_file_v3_pending = candidate;
+  g_rule_file_v3_save_result = 0xffffffffu;
+  g_rule_file_v3_save_request = 1u;
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_file_v3_save_request == 0u && g_rule_file_v3_save_result != 0xffffffffu) break;
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (g_rule_file_v3_save_request != 0u || g_rule_file_v3_save_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_RULES, 500u);
+    return http_send_json_error(500u, "rule_save_failed", "rule file save failed");
+  }
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_generation != generation && g_rule_task_engine_reload == 0u &&
+        g_rule_task_config_result == 0u) break;
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (g_rule_task_config_generation == generation || g_rule_task_engine_reload != 0u ||
+      g_rule_task_config_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_RULES, 500u);
+    return http_send_json_error(500u, "rule_reload_failed", "rule reload failed");
+  }
+  const size_t response_len = build_rules_body(g_http_response_body,
+                                               sizeof(g_http_response_body),
+                                               (int)slot);
+  if (response_len >= sizeof(g_http_response_body)) return 1;
+  http_record_request(W5500_HTTP_PATH_RULES, code);
+  return http_send_response(code, "application/json", g_http_response_body, response_len);
+}
+
 static void http_record_request(uint32_t path_code, uint16_t code) {
   g_w5500_http_request_count++;
   g_w5500_http_last_path = path_code;
@@ -973,6 +1215,59 @@ static int http_handle_request(uint16_t rx_size) {
   g_w5500_http_last_rx_size = rx_size;
 
   const char *header_end = strstr(request, "\r\n\r\n");
+  uint32_t rules_operation = 0u;
+  int rules_slot = -1;
+  if (request_path_is(request, "POST", "/api/rules")) {
+    rules_operation = HTTP_RULES_POST;
+  } else if (request_path_is(request, "PUT", "/api/rules/0")) {
+    rules_operation = HTTP_RULES_PUT;
+    rules_slot = 0;
+  } else if (request_path_is(request, "PUT", "/api/rules/1")) {
+    rules_operation = HTTP_RULES_PUT;
+    rules_slot = 1;
+  } else if (request_path_is(request, "DELETE", "/api/rules/0")) {
+    rules_operation = HTTP_RULES_DELETE;
+    rules_slot = 0;
+  } else if (request_path_is(request, "DELETE", "/api/rules/1")) {
+    rules_operation = HTTP_RULES_DELETE;
+    rules_slot = 1;
+  }
+  if (rules_operation != 0u) {
+    size_t content_length = 0u;
+    bool has_content_length;
+    size_t body_offset;
+
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "bad_request", "rules header too large");
+    }
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    has_content_length = http_parse_content_length(request, header_end, &content_length);
+    if ((!has_content_length && rules_operation != HTTP_RULES_DELETE) ||
+        content_length > W5500_HTTP_RULES_BODY_MAX ||
+        (has_content_length && (size_t)rx_size < body_offset + content_length)) {
+      if ((has_content_length && (size_t)rx_size < body_offset + content_length) &&
+          read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid rules body");
+    }
+    if ((rules_operation != HTTP_RULES_DELETE && content_length == 0u) ||
+        body_offset + content_length > read_len ||
+        (size_t)rx_size != body_offset + content_length) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid rules body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_rules_write(rules_operation, rules_slot, &request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
   if (request_path_is(request, "POST", "/api/rule/config")) {
     if (header_end == NULL) {
       return W5500_HTTP_HANDLE_WAIT;
@@ -1109,6 +1404,18 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_RULE_CONFIG;
     body_len = build_rule_config_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/rules")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_RULES;
+    body_len = build_rules_body(body, sizeof(g_http_response_body), -1);
+  } else if (request_path_is(request, "GET", "/api/rules/0")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_RULES;
+    body_len = build_rules_body(body, sizeof(g_http_response_body), 0);
+  } else if (request_path_is(request, "GET", "/api/rules/1")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_RULES;
+    body_len = build_rules_body(body, sizeof(g_http_response_body), 1);
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {

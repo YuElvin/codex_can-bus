@@ -295,3 +295,9 @@ ConfigTask 现使用深度 2、元素大小 20 字节的 `ConfigCommand` 队列�
 现场 GDB 使用精确 ELF 地址写入后，配置队列 `ready=1`，两类命令累计 `enqueue=2/dequeue=2/drop=0/command=2`；规则保存结果为 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`g_w25q128_config_save_result=0`，因此“配置队列/规则保存”完成。第一次 GDB 直接写变量因 ELF 无 debug symbols 只得到 `unknown type`，没有作为证据；第二次使用无类型地址写入后才纳入结论。
 
 必须分开记录底层结果：diagnostic 命令确实入队并被消费，但本轮 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0`，因此 QSPI diagnostic 命令底层失败，待后续独立复核，不能将其写成诊断功能已通过。GDB 读取后已恢复运行；随后 ping 为 2/2，顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200，CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors、bus-off、TEC、REC 和 sendResult 均为 0。该验证未人为破坏 TF 文件，也未触发 LogTask recovery。
+
+## 本轮验证补充：RuleFile v3 受限双槽 CRUD
+
+`/config/rules-v3.conf` 是固定两槽 RuleFile：`version=3`、`ruleCount=2`，两个 slot 均保留 enabled、relay、threshold、action、delayMs、timeoutMs、safeState、priority 八字段；disabled 不装入 RuleEngine。启动按 v3→v2→v1→QSPI 回退，只有有效 v3 才停止回退，v3 缺失不自动创建。HTTP socket0 顺序接口固定为 GET 列表/详情、POST 创建 disabled 槽、PUT 完整替换、DELETE 禁用；写请求仅更新 pending，ConfigTask 单消费者执行 TF `.tmp`/`.prev` 原子替换，成功后才触发 RuleTask 原子 engine 复制与 generation 递增。
+
+最终固件的主机 CTest=`14/14`，FLASH=`85496 B`、RAM_D1=`239664 B`；目标板烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压 `3.250368 V`。真实验收：DELETE slot1 后 GDB rule_count=`1`，POST 恢复后 rule_count=`2`；PUT slot0 非默认 `42436/1100/1600` 跨复位保持；恢复 `42434/1000/1500` 后，非法 delay 大于 timeout 返回 HTTP 400 且 generation/current 不变；POST form `slot=2` 返回 HTTP 404 且最终两槽未改变。最后 ping 2/2、`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。初版曾在 ConfigTask 触发 HardFault：build-engine 的 3856 B 自动对象覆盖相邻 TCB；改为直接构造输出 engine 后反汇编栈帧为 120 B，并经相同实板链路复验通过。

@@ -125,3 +125,11 @@ timeoutMs=<uint32 十进制>
 有效 v2 在启动时构造完整两规则 `RuleEngine` 候选，由 RuleTask 在临界区一次性复制并递增 generation；同一继电器只选择最大 priority 的匹配/超时候选，延时未到保持该规则 default state，未匹配不改变默认态，输入超时使用 winner 的 safeState，手动覆盖高于所有规则。v2 缺失时目录存在后只用 `FA_CREATE_NEW` 写入固定默认文本，`v2_created=1/load_result=1` 仅表示创建，当前启动继续 v1/QSPI，下一次复位才尝试加载。无效、超限、读取失败均不改变既有安全配置且继续 v1/QSPI fallback；不写入 QSPI 多规则，不新增 HTTP/CRUD/DSL。
 
 本 ADR 的阶段 B 实际状态为“已客观验证”：marker=42435 的外部 priority winner、停帧超时 safeState、手动优先和 GPIO 结果均已完成；首次 v2 缺失创建板端未观察，保留为未观察边界。
+
+### ADR-022：RuleFile v3 受限双槽 HTTP CRUD 与 TF 原子提交
+
+阶段 C 固定 `/config/rules-v3.conf` 为两槽、640 B 上限的 `version=3/ruleCount=2` 文本。每槽必须且只含 `enabled`、`relay`、`threshold`、`action`、`delayMs`、`timeoutMs`、`safeState`、`priority`；允许空行与 LF/CRLF，严格拒绝未知、重复、缺失、非十进制、溢出、非法 relay/state、priority 冲突及 `delayMs>timeoutMs`。禁用槽保留完整字段但不加入运行 engine；启动优先级为有效 v3、v2、v1、QSPI，v3 不自动创建。
+
+HTTP 固定为 socket0 顺序服务：GET 列表/详情；POST 仅启用 disabled 槽；PUT 完整替换指定槽；DELETE 仅禁用 enabled 槽。POST/PUT 使用完整 URL-encoded 表单，非法为 400、无槽为 404、状态冲突为 409、保存/reload 失败为 500。首次写入只由当前有效 v2/v3 形成候选；HTTP 不直接修改运行 engine。ConfigTask 快照候选后使用 TF tmp/prev 原子替换，成功才提交 current/pending 并请求 RuleTask reload；HTTP 等待 save 和 generation 变化后才返回成功。实测 CRUD、复位持久化、默认恢复及非法 PUT 不变性均通过。
+
+实现中发现 `rule_file_v3_build_engine()` 的 3856 B 自动 `RuleEngine` 在 1024-word ConfigTask 栈上造成真实 TCB 覆盖和 FreeRTOS HardFault；函数现直接构造调用方提供的 engine，最终 ELF 栈帧 120 B。该 ADR 不增加第三槽、前端、鉴权、并发请求、通用配置事务或 QSPI 多规则。
