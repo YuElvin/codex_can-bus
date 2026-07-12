@@ -275,9 +275,21 @@ int can2_analyzer_bringup_run(void) {
   return g_can2_send_result == CAN_PORT_OK ? 0 : 3;
 }
 
+int can2_analyzer_receive(void) {
+  CanFrame rx;
+
+  while (can_port_receive(&g_can2_port, &rx) == CAN_PORT_OK) {
+    g_can2_rx_id = rx.id;
+    g_can2_rx_dlc = rx.dlc;
+    g_can2_rx_first_byte = rx.data[0];
+    decode_can2_frame(&rx, false);
+  }
+  capture_can2_status();
+  return 0;
+}
+
 int can2_analyzer_poll(void) {
   CanFrame tx = k_can2_analyzer_frame;
-  CanFrame rx;
 
   ++g_can2_poll_count;
   tx.data[2] = (uint8_t)g_can2_tx_sequence;
@@ -288,13 +300,7 @@ int can2_analyzer_poll(void) {
   if (g_can2_send_result == CAN_PORT_OK) {
     decode_can2_frame(&tx, true);
   }
-  while (can_port_receive(&g_can2_port, &rx) == CAN_PORT_OK) {
-    g_can2_rx_id = rx.id;
-    g_can2_rx_dlc = rx.dlc;
-    g_can2_rx_first_byte = rx.data[0];
-    decode_can2_frame(&rx, false);
-  }
-  capture_can2_status();
+  (void)can2_analyzer_receive();
   return g_can2_send_result == CAN_PORT_OK ? 0 : 1;
 }
 

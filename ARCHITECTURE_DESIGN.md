@@ -16,7 +16,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | TF 卡 | SDMMC1 | 已验证 | 当前固件跳过 PA8 检卡，保守 SDMMC 配置下读写 smoke test 通过；默认 `/www/index.html` 可通过 HTTP 读取 |
 | W25Q128 | QUADSPI | 已验证 | 默认启动只读 JEDEC ID `EF4018`；`0x00FFF000` 诊断区与 `0x00FFE000`/`0x00FFD000` 单规则双槽均已按显式请求验证 |
 | USART2 | PD5/PD6，115200 8N1 | 可用 | Windows 侧读取正常；macOS 侧曾出现乱码，必要时以 ST-Link 变量为准 |
-| FreeRTOS | SysTick/SVC/PendSV | 基础多任务已上板验证 | 单 `bringup` 任务已验证通过；CAN2 周期任务、W5500 轮询任务和状态打印任务已拆出 |
+| FreeRTOS | SysTick/SVC/PendSV | 基础多任务已上板验证 | 单 `bringup` 任务已验证通过；CAN2 接收服务每 50 ms、诊断发送每 1 s，W5500 轮询和状态打印任务已拆出 |
 
 ### 1.2 当前不再使用的旧路径
 
@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 原 `bringup` 任务继续每秒打印状态
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。当前 CAN2 周期轮询已取得 active DBC 快照：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。50 ms 最小 ConfigTask 串行执行既有 QSPI 显式诊断和单规则配置保存：默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。它不包含 HTTP、TF 文件、CRUD、多规则、队列或通用配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。50 ms 最小 ConfigTask 串行执行既有 QSPI 显式诊断和单规则配置保存：默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。它不包含 HTTP、TF 文件、CRUD、多规则、队列或通用配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
 
 ### 4.2 目标任务拆分
 

@@ -468,13 +468,23 @@ static void signal_log_task(void *argument)
 
 static void can2_periodic_task(void *argument)
 {
+  uint32_t poll_ticks = 0u;
+
   (void)argument;
 
   g_can_task_started = 1u;
   for (;;) {
-    (void)can2_analyzer_poll();
+    if (poll_ticks == 0u) {
+      (void)can2_analyzer_poll();
+    } else {
+      (void)can2_analyzer_receive();
+    }
+    ++poll_ticks;
+    if (poll_ticks >= 20u) {
+      poll_ticks = 0u;
+    }
     g_can_task_loop_count++;
-    vTaskDelay(pdMS_TO_TICKS(1000u));
+    vTaskDelay(pdMS_TO_TICKS(50u));
   }
 }
 
