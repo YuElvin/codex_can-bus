@@ -268,6 +268,16 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 烧录后优先用 ST-Link 全局变量确认各模块状态，再结合外部工具验证。
 - `CONVERSATION_SUMMARY.md` 必须记录每次关键修改、问题点、验证命令和结果。
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
+
+## 15. 阶段 B RuleFile v2 与运行态边界
+
+TF `/config/rules-v2.conf` 是唯一 v2 规则集文件，固定 512 字节上限、恰好两条规则和 `Can2Data.marker >= threshold` 语义；每条规则只允许 relay、threshold、action、delayMs、timeoutMs、safeState、priority 七字段。解析器先写局部候选，全部校验成功后才构造完整 `RuleEngine`；RuleTask 通过一次临界区复制完成原子 reload，不再以 `engine.rules[0]` 作为运行模型。
+
+同一继电器按最大 priority 选择唯一 winner。没有匹配候选时保持默认态，匹配但延时未到时保持 winner 的 default state，输入超时使用 winner 的 safeState；手动覆盖在规则评价前生效并使 winner 诊断为 `0xff`。运行态对外保留 `g_rule_task_rule_count`、`g_rule_task_winner_rule0/1`、generation/reload、relay/GPIO/safe 变量供精确 GDB 读取。
+
+启动顺序仍先加载 v1/QSPI 单规则，再检查 v2。v2 有效并 reload 完成才覆盖当前规则；缺失时在 `/config` 存在后使用 `FA_CREATE_NEW` 写固定默认文本，但 `v2_created=1/load_result=1` 的当次启动继续 v1/QSPI fallback，下一次复位才加载；无效、超限或读取失败同样不改变既有安全配置。不写入 QSPI 多规则，不改变 HTTP 单规则 API、CAN 发送逻辑、HTTP 并发模型或 LogTask recovery。
+
+本阶段已客观验证：构建 FLASH=`80192 B / 128 KB`、RAM_D1=`235048 B / 512 KB`，主机 CTest `14/14`；有效 v2、marker=42434、marker=42435 的 priority winner、手动覆盖和暂停输入 timeout 均有外部 CAN/GPIO 现场证据。首次 v2 缺失创建板端未观察，但 `FA_CREATE_NEW` 与创建后 v1/QSPI fallback 已由 ELF/诊断路径确认。
 ## 本轮验证补充：W5500、HTTP 与 CAN TX 队列边界
 
 W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；CAN2 周期任务将固定 `0x321` 帧投递到深度 1 TX 队列，现有 `CanDecodeTask` 消费后调用 `can_port_send`，不新增任务栈；ConfigTask 另有深度 2 配置命令队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TX 队列现场 `ready=1`、入队/出队 `0x2c/0x2c`、drop=0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`；RX 队列 `0x104/0x104/drop=0`。顺序 ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。

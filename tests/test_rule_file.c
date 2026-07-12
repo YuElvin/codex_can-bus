@@ -87,10 +87,118 @@ static int test_invalid_timing_does_not_change_candidate(void) {
   return 0;
 }
 
+static const char default_v2_text[] =
+  "version=2\r\n"
+  "ruleCount=2\n"
+  "\n"
+  "rule0.relay=0\n"
+  "rule0.threshold=42434\n"
+  "rule0.action=on\n"
+  "rule0.delayMs=1000\n"
+  "rule0.timeoutMs=1500\n"
+  "rule0.safeState=off\n"
+  "rule0.priority=10\n"
+  "rule1.relay=0\n"
+  "rule1.threshold=42435\n"
+  "rule1.action=off\n"
+  "rule1.delayMs=0\n"
+  "rule1.timeoutMs=1500\n"
+  "rule1.safeState=off\n"
+  "rule1.priority=20\n";
+
+static int test_valid_v2_default(void) {
+  RuleEngine engine;
+
+  ASSERT_TRUE(rule_file_parse_v2((const uint8_t *)default_v2_text,
+                                 strlen(default_v2_text),
+                                 &engine));
+  ASSERT_TRUE(engine.rule_count == 2u);
+  ASSERT_TRUE(strcmp(engine.rules[0].signal_key, "Can2Data.marker") == 0);
+  ASSERT_TRUE(engine.rules[0].op == RULE_OP_GE);
+  ASSERT_TRUE(engine.rules[0].threshold == 42434.0);
+  ASSERT_TRUE(engine.rules[0].action_state == RELAY_STATE_ON);
+  ASSERT_TRUE(engine.rules[0].delay_ms == 1000u);
+  ASSERT_TRUE(engine.rules[0].timeout_ms == 1500u);
+  ASSERT_TRUE(engine.rules[0].safe_state == RELAY_STATE_OFF);
+  ASSERT_TRUE(engine.rules[0].priority == 10u);
+  ASSERT_TRUE(engine.rules[1].threshold == 42435.0);
+  ASSERT_TRUE(engine.rules[1].action_state == RELAY_STATE_OFF);
+  ASSERT_TRUE(engine.rules[1].delay_ms == 0u);
+  ASSERT_TRUE(engine.rules[1].priority == 20u);
+  return 0;
+}
+
+static int assert_invalid_v2_does_not_change_candidate(const char *text) {
+  RuleEngine before;
+  RuleEngine candidate;
+
+  rule_engine_init(&before);
+  before.relay_defaults[0] = RELAY_STATE_ON;
+  candidate = before;
+  ASSERT_TRUE(!rule_file_parse_v2((const uint8_t *)text, strlen(text), &candidate));
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
+static int test_invalid_v2_classes_do_not_change_candidate(void) {
+  static const char unknown[] = "version=2\nruleCount=2\nunknown=1\n";
+  static const char duplicate[] =
+    "version=2\nruleCount=2\nrule0.relay=0\nrule0.relay=0\n";
+  static const char missing[] = "version=2\nruleCount=2\n";
+  static const char non_decimal[] =
+    "version=2\nruleCount=2\nrule0.relay=0\nrule0.threshold=x\n";
+  static const char overflow[] =
+    "version=2\nruleCount=2\nrule0.relay=0\nrule0.threshold=4294967296\n";
+  static const char invalid_relay[] =
+    "version=2\nruleCount=2\nrule0.relay=2\n";
+  static const char invalid_state[] =
+    "version=2\nruleCount=2\nrule0.action=enable\n";
+  static const char same_priority[] =
+    "version=2\nruleCount=2\n"
+    "rule0.relay=0\nrule0.threshold=1\nrule0.action=on\nrule0.delayMs=0\n"
+    "rule0.timeoutMs=1\nrule0.safeState=off\nrule0.priority=10\n"
+    "rule1.relay=1\nrule1.threshold=2\nrule1.action=off\nrule1.delayMs=0\n"
+    "rule1.timeoutMs=1\nrule1.safeState=off\nrule1.priority=10\n";
+  static const char invalid_timing[] =
+    "version=2\nruleCount=2\n"
+    "rule0.relay=0\nrule0.threshold=1\nrule0.action=on\nrule0.delayMs=2\n"
+    "rule0.timeoutMs=1\nrule0.safeState=off\nrule0.priority=10\n"
+    "rule1.relay=1\nrule1.threshold=2\nrule1.action=off\nrule1.delayMs=0\n"
+    "rule1.timeoutMs=1\nrule1.safeState=off\nrule1.priority=20\n";
+
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(unknown) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(duplicate) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(missing) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(non_decimal) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(overflow) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(invalid_relay) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(invalid_state) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(same_priority) == 0);
+  ASSERT_TRUE(assert_invalid_v2_does_not_change_candidate(invalid_timing) == 0);
+  return 0;
+}
+
+static int test_oversized_v2_does_not_change_candidate(void) {
+  uint8_t text[513];
+  RuleEngine before;
+  RuleEngine candidate;
+
+  memset(text, (int)'\n', sizeof(text));
+  rule_engine_init(&before);
+  before.relay_defaults[0] = RELAY_STATE_ON;
+  candidate = before;
+  ASSERT_TRUE(!rule_file_parse_v2(text, sizeof(text), &candidate));
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_valid_file() == 0);
   ASSERT_TRUE(test_missing_required_field_does_not_change_candidate() == 0);
   ASSERT_TRUE(test_invalid_threshold_does_not_change_candidate() == 0);
   ASSERT_TRUE(test_invalid_timing_does_not_change_candidate() == 0);
+  ASSERT_TRUE(test_valid_v2_default() == 0);
+  ASSERT_TRUE(test_invalid_v2_classes_do_not_change_candidate() == 0);
+  ASSERT_TRUE(test_oversized_v2_does_not_change_candidate() == 0);
   return 0;
 }

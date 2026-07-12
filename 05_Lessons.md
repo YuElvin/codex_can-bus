@@ -48,3 +48,10 @@
 - L-042：配置队列与底层存储结果必须分层记录。本轮 `g_config_queue_ready=1`、两类命令均入队/出队且 drop=0；规则保存 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`save_result=0`；但 diagnostic 命令被消费后仍返回 `0xffffffff`、`g_w25q128_erase_count=0`，该 QSPI diagnostic 底层失败待后续独立复核，禁止伪装成已验证。
 - L-043：HTTP 配置写入应复用已有 pending/ConfigTask/RuleTask 边界。板端验证必须同时看 HTTP 200、ConfigTask enqueue/dequeue/drop、QSPI save result/count、RuleTask generation/reload 和复位后的 load result；仅返回 HTTP 200 不能证明持久化完成。当前单连接 socket0 下，GET/POST 请求必须顺序执行。
 - L-044：TF RuleFile v1 的有效输入必须先落到独立候选，再通过既有 RuleTask reload 边界生效；解析失败、读取失败或超容量都不能覆盖 QSPI/编译默认安全配置。缺失文件创建必须在 `fs_mutex` 下显式确保 `/config` 存在，并使用 `FA_CREATE_NEW`，不能以 `FA_OPEN_ALWAYS` 覆盖已有文件。
+- L-045：RuleFile v2 缺失时，`v2_created=1/load_result=1` 只证明 `FA_CREATE_NEW` 创建成功，不能视为本次启动已加载；本次启动必须继续使用已加载的 v1/QSPI，只有下一次复位读取并完整 reload 成功后才记录 `load_result=0`。
+- L-046：固定两规则模型必须拒绝未知、重复、缺失、非十进制、uint32 溢出、非法 relay/state、priority 冲突、超时关系错误和超过 512 字节的输入；所有拒绝路径先保持候选 `RuleEngine` 不变。
+- L-047：同一继电器的 priority winner 必须在引擎内部选择并保留 winner index，不能靠 RuleTask 按数组顺序覆盖输出；手动覆盖应在规则评价前直接返回，并清空 winner 诊断。
+- L-048：阶段 B 的 CAN 证据必须区分真实外部 marker 值；marker=42434 的 PE7 证据和 TX self-test 不能替代 marker=42435 的 priority 冲突或暂停输入后的 timeout 证据。
+- L-049：OpenOCD 烧录前和验证结束后均执行 `pgrep`/`lsof` 检查；不得连接遗留服务，必须使用独立实例，GDB 每次 halt 后执行 `monitor resume`，结束后显式 `shutdown` 并确认 3333/6666 无监听。
+- L-050：阶段 B 最终验收必须把三类现场证据分开记录：marker=42435 的 priority winner、停帧超过 timeout 的 safeState、手动覆盖；本轮三项均已由精确 GDB 和外部 CAN/GPIO 读数完成，但首次 v2 缺失创建板端未观察，不能补写为实测。
+- L-051：后续任何需要用户操作 CANtest 的验收，主会话必须先暂停派送任务和硬件操作，给出精确发送参数或停止步骤；只有收到用户明确“已发送”“已停止”等确认后，才可继续现场读取。不能依据默认输入状态或沉默继续试探。

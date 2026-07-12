@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（阶段 A RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和板端网络回归；非法文件仅主机解析验证，未在板端注入；单规则 HTTP 配置闭环已完成并跨复位验证；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`；多规则与 LogTask recovery 分支仍未验证）
+更新时间：2026-07-13（阶段 B 已客观验证 v2 两规则解析、原子 RuleTask reload、priority/manual/timeout 和外部 CAN/GPIO 现场语义；首次 v2 缺失创建板端未观察；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
 
 ## 当前仓库
 
@@ -59,7 +59,16 @@
 
 ## 下一步建议
 
-下一阶段由主会话按 `PROJECT_FINAL_ACCEPTANCE.md` 指定；阶段 A 已完成并停止于此。下一个阶段 B 多规则运行模型不在本轮处理。
+阶段 B 已完成并停止；按派送要求不选择或推进阶段 C。
+
+## 阶段 B 实际快照
+
+- `./scripts/verify.sh` 通过，CTest `14/14`；FLASH=`80192 B / 128 KB = 61.18%`，RAM_D1=`235048 B / 512 KB = 44.83%`。ELF 已确认 `rule_file_parse_v2`、完整 `RuleEngine` 候选复制/reload、priority winner、manual/timeout 分支和 `FA_CREATE_NEW` v2 创建路径。
+- 独立 OpenOCD 烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压 `3.251976 V`。验证结束后发现 PID `41322` 仍监听 3333/6666，已通过 4444 的 `shutdown` 命令释放；随后 `pgrep`/`lsof` 均无 OpenOCD 或 3333/6666 监听。此前“已释放”的早期记录更正为不准确。
+- 有效 v2 板端读数：`g_rule_file_v2_load_result=0`、`created=0`、`size/read_len=280/280`、`rule_count=2`；RuleTask `generation=2/reload=0/rule_count=2/winner_rule0=0`；真实 marker=42434 下 PE7=`1`、PE8=`0`、GPIOE ODR=`0x80`、safe=`0`。
+- 手动覆盖现场：GDB 精确地址写入既有手动变量后读到 `manual_enabled=1/manual_active=1`、winner 两路=`0xff`、PE7=`1`、GPIOE=`0x80`；随后已清除手动并 resume。每次 halt 后均执行 `monitor resume`。
+- 板上本次启动已有 v2 文件，未观察到 `v2_created=1/load_result=1` 缺失创建现场；代码路径已修正为仅 `load_result==0` 停止 fallback，创建/无效/超限/读取失败继续 v1/QSPI，诊断变量可区分“创建”与“已加载”。
+- 补充现场完成：marker=42435 下外部 RX raw=`42435`、`rule_count=2`、`winner_rule0=1`、PE7/PE8=`0/0`；停帧后 `uwTick-updated_ms=49114 ms > 1500 ms`、`safe_active=1`、PE7/PE8=`0/0`、manual=`0/0`。首次 v2 缺失创建仍为“未观察”，不得写成板端已实测。
 
 ## 本轮已完成：单规则 HTTP 配置闭环
 

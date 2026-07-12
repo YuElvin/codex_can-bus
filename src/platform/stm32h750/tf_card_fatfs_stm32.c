@@ -578,6 +578,62 @@ int stm32h750_tf_ensure_default_rule_file(uint32_t on_threshold,
                  written == (UINT)content_len ? 0 : 1;
 }
 
+int stm32h750_tf_ensure_default_rule_file_v2(void) {
+  static const char content[] =
+    "version=2\n"
+    "ruleCount=2\n"
+    "rule0.relay=0\n"
+    "rule0.threshold=42434\n"
+    "rule0.action=on\n"
+    "rule0.delayMs=1000\n"
+    "rule0.timeoutMs=1500\n"
+    "rule0.safeState=off\n"
+    "rule0.priority=10\n"
+    "rule1.relay=0\n"
+    "rule1.threshold=42435\n"
+    "rule1.action=off\n"
+    "rule1.delayMs=0\n"
+    "rule1.timeoutMs=1500\n"
+    "rule1.safeState=off\n"
+    "rule1.priority=20\n";
+  FIL file;
+  UINT written = 0u;
+  char full_path[64];
+  char config_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+
+  if (build_fatfs_path(&ctx, "/config/rules-v2.conf", full_path, sizeof(full_path)) != TF_CARD_OK ||
+      build_fatfs_path(&ctx, "/config", config_path, sizeof(config_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+
+  g_tf_write_attempts = 1u;
+  g_tf_mkdir_result = f_mkdir(config_path);
+  if (g_tf_mkdir_result != FR_OK && g_tf_mkdir_result != FR_EXIST) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_open_result = f_open(&file, full_path, FA_CREATE_NEW | FA_WRITE);
+  if (g_tf_write_open_result == FR_EXIST) {
+    tf_fs_unlock();
+    return 0;
+  }
+  if (g_tf_write_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_result = f_write(&file, content, (UINT)(sizeof(content) - 1u), &written);
+  g_tf_write_close_result = f_close(&file);
+  g_tf_write_len = written;
+  tf_fs_unlock();
+  return g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK &&
+                 written == (UINT)(sizeof(content) - 1u) ? 0 : 1;
+}
+
 void stm32h750_tf_card_bind(TfCardPort *port, Stm32TfCardContext *ctx, FATFS *fs, const char *logical_drive) {
   static const TfCardPortOps ops = {
     .card_present = fatfs_present,

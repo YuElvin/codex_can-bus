@@ -58,6 +58,7 @@ int stm32h750_tf_ensure_default_rule_file(uint32_t on_threshold,
                                           uint32_t off_threshold,
                                           uint32_t delay_ms,
                                           uint32_t timeout_ms);
+int stm32h750_tf_ensure_default_rule_file_v2(void);
 void stm32h750_w5500_bind(W5500Port *port,
                           Stm32W5500Context *ctx,
                           SPI_HandleTypeDef *hspi,

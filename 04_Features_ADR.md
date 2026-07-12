@@ -117,3 +117,11 @@ timeoutMs=<uint32 十进制>
 `version` 必须为 `1`；四个数值必须是无符号十进制 `uint32_t`，范围为 `0..4294967295`；并且必须满足 `onThreshold > offThreshold`、`delayMs <= timeoutMs`。文件超过 256 字节、为空、缺字段、重复字段、非法数字、溢出或关系校验失败均为无效。
 
 启动优先级固定为“有效 RuleFile v1 > 有效 W25Q128 单规则双槽记录 > 编译默认安全配置”。TF 缺失或读取失败不阻断启动，也不改变已经加载的 QSPI/编译默认值。若文件返回 `FR_NO_FILE`，现有启动流程在 `fs_mutex` 下确保 `/config` 目录存在，并以当前有效单规则参数创建一次最小文件；创建使用 `FA_CREATE_NEW`，绝不覆盖已有文件。有效文件解析成功后只更新已有四参数候选并置位现有 `RuleTask` reload 边界，等待 generation 完成后才视为加载成功；无效文件不更新候选、不请求 reload，不增加规则数量，不改变 W25Q128 地址或写入策略。
+
+### ADR-021：TF RuleFile v2 固定为两条规则与 priority winner
+
+阶段 B 新增唯一 TF 文件 `/config/rules-v2.conf`，容量上限 512 字节；保留 `/config/rule.conf` v1、W25Q128 单规则双槽地址/格式/保存语义和既有 HTTP 单规则 API。v2 必须包含 `version=2`、`ruleCount=2`，并为 `rule0`、`rule1` 各提供且只提供 `relay`、`threshold`、`action`、`delayMs`、`timeoutMs`、`safeState`、`priority` 七个字段。输入固定为 `Can2Data.marker`，比较固定为 `marker >= threshold`；relay 为 0/1，action/safeState 为 on/off，priority 为 0..255 且两条不得相同，delay 不得大于 timeout。允许空行和 LF/CRLF，拒绝未知、重复、缺失、非十进制、溢出、非法状态和超限输入；解析失败保持候选不变。
+
+有效 v2 在启动时构造完整两规则 `RuleEngine` 候选，由 RuleTask 在临界区一次性复制并递增 generation；同一继电器只选择最大 priority 的匹配/超时候选，延时未到保持该规则 default state，未匹配不改变默认态，输入超时使用 winner 的 safeState，手动覆盖高于所有规则。v2 缺失时目录存在后只用 `FA_CREATE_NEW` 写入固定默认文本，`v2_created=1/load_result=1` 仅表示创建，当前启动继续 v1/QSPI，下一次复位才尝试加载。无效、超限、读取失败均不改变既有安全配置且继续 v1/QSPI fallback；不写入 QSPI 多规则，不新增 HTTP/CRUD/DSL。
+
+本 ADR 的阶段 B 实际状态为“已客观验证”：marker=42435 的外部 priority winner、停帧超时 safeState、手动优先和 GPIO 结果均已完成；首次 v2 缺失创建板端未观察，保留为未观察边界。

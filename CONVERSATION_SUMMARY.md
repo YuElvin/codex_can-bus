@@ -1917,3 +1917,46 @@
 - 主会话独立核对 `2c97b73 Add TF RuleFile v1 startup loading`：本地 `HEAD` 与 `origin/codex/W5500` 均为 `2c97b736a91a69a1948ead3b5e1e001bab12d4de`，工作树干净，`git show --check` 无空白错误。
 - 修正 `03_Context.md` 中沿用旧轮次的 RAM_D1 数值为阶段 A 最终 `231144 B / 512 KB = 44.09%`；本次仅修正文档，未改固件源码、未编译，因此未执行新的反汇编或烧录。
 - 下一派送阶段固定为 B：RuleFile v2 的两条有界规则运行模型、明确优先级和 PE7/PE8 外部 CAN/GPIO 验收；具体格式、非目标和验证门槛由主会话在派送指令中固定，派送会话不得自行改选目标。
+
+## 2026-07-13 阶段 B 多规则运行模型与优先级（进行中）
+
+- 本轮严格限定为 `PROJECT_FINAL_ACCEPTANCE.md` 阶段 B，起始基线为已推送且工作树干净的 `130a4d895da8bdce0186e7234def41e4b2ddd9f5`；实际工作目录 `/Users/elvin/Desktop/project/can_bus` 解析到 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`，远端同哈希。
+- 固定设计与假设：继续使用 TF，新建唯一 `/config/rules-v2.conf`；保留 `/config/rule.conf` v1、QSPI 单规则格式/槽地址/保存语义和既有 HTTP 单规则 API。v2 只解析 `version=2`、`ruleCount=2` 及 rule0/rule1 的固定七字段；解析成功前只写局部候选，成功后由 RuleTask 一次性原子 reload 完整两规则 `RuleEngine`。
+- 本轮成功标准：默认有效 v2 和全部指定非法输入类的主机测试；同继电器最大 priority 唯一获胜；未匹配/延时/超时/手动优先级语义；`git diff --check`、`./scripts/verify.sh`、最终 ELF 关键 `nm/objdump`；OpenOCD、精确 GDB、外部 CANtest、GPIO 和顺序 HTTP 证据全部真实记录。未验证或受硬件阻断的范围不得写成通过。
+- 当前操作记录：已完整读取本轮要求的治理文档并核对 `git status`、远端和基线；截至本条记录尚未修改固件源码、尚未编译、尚未烧录，因此尚无反汇编或板端结论。
+- 派送前 OpenOCD 状态补充：遗留 PID `32875` 已由主会话执行 TERM 停止，复查 `3333/6666` 均无监听；该动作发生在本轮烧录前，未改固件、未编译。后续烧录前及验证结束后必须再次用 `pgrep`/`lsof` 确认只使用新实例且 OpenOCD 已释放。
+
+## 2026-07-13 阶段 B 实现、静态审计与硬件阻断（未提交）
+
+- 本轮严格执行阶段 B，未实现 HTTP CRUD/前端、无界规则、DSL、QSPI 多规则、LogTask recovery、CAN 发送变化或并发 HTTP。源码新增 `/config/rules-v2.conf` v2 解析与固定默认创建、完整两规则 `RuleEngine` 候选、同继电器最大 priority winner、`Can2Data.marker >= threshold`、手动优先、延时/超时 safeState 和 winner 诊断；v1 `/config/rule.conf`、QSPI 单规则槽地址/语义和既有单规则 HTTP API 保留。
+- 代码审查修正：v2 缺失创建后不再直接 return；只有 `g_rule_file_v2_load_result==0` 的有效 v2 停止 fallback。`v2_created=1/load_result=1` 时当次启动继续 v1/QSPI，下一次复位才读取 v2；无效、超限、读取失败同样继续 v1/QSPI。主机增加有效默认 v2、未知/重复/缺失/非十进制/溢出/非法 relay/state/priority 冲突/非法 timing、513 字节超限且候选不变测试；priority、manual、timeout/延时运行测试均保留 v1 测试。
+- 实际构建问题：第一次直接执行 `cmake` 因未 source `env.sh` 得到 `command not found`，未作为源码失败；按项目脚本恢复工具链后通过。最终 `git diff --check`、`./scripts/verify.sh` 通过，CTest `14/14`；固件 `build/stm32h750/can_bus_gateway_stm32h750.elf/.hex/.bin`，FLASH=`80192 B / 128 KB = 61.18%`，RAM_D1=`235048 B / 512 KB = 44.83%`。
+- ELF 静态检查：`nm` 找到 `rule_file_parse_v2`、`rule_engine_evaluate`、`rule_task`、v2 诊断、generation/reload、winner/relay/GPIO 符号；`objdump` 确认 512 字节比较、v2 parser、`FA_CREATE_NEW`、RuleTask 完整候选复制和仅有效 v2 停止 fallback。未发现 `engine.rules[0]` 的 RuleTask 运行假设。
+- 烧录使用独立 OpenOCD，输出真实包含 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压 `3.251976 V`。首轮 GDB 每次 halt 后均执行 `monitor resume`。板上已有 v2 文件，实际读数 `v2_load_result=0/created=0/size=280/read_len=280/rule_count=2`，RuleTask `generation=2/reload=0/rule_count=2/winner0=0`；外部 marker=42434 下 PE7=`1`、PE8=`0`、GPIOE ODR=`0x80`、safe=`0`。
+- 手动覆盖现场：使用 ELF 精确地址写入既有手动变量后读到 `manual_enabled=1/manual_active=1`、winner 两路=`0xff`、PE7=`1`、GPIOE=`0x80`；随后清除手动并 resume。顺序网络回归在 GDB 恢复后通过：ping `2/2`，`/api/status`、`/api/can/status`、`/api/signals` 全部 HTTP 200；CAN `tx=22→61`、`rx=204→592`、errors/busOff/TEC/REC/sendResult 均为 0，signals 当前真实外部 marker=42434。
+- OpenOCD 事实更正：烧录命令本身带 `reset exit`，但独立 GDB 服务 PID `41322` 在后续复查时仍监听 3333/6666；已通过 4444 发送 `shutdown`，再执行 `pgrep`/`lsof`，确认无 OpenOCD 进程且 3333/6666 均无监听。早先“exit 后已释放”的表述不准确，已在 `03_Context.md` 更正；以后烧录前和结束后都必须复查。
+- 阻断：CANtest 持续提供 marker=42434，当前没有真实 marker=42435（至少 1 s）或暂停发送超过 1.5 s 的输入。故 marker=42435 两规则同时命中且 rule1 priority=20 使 PE7 off、以及输入超时 safeState 的板端外部 CAN/GPIO 证据均为“未验证/阻断”。禁止用 GDB 修改信号缓存、TX self-test 或猜测替代；本轮不提交、不推送，等待主会话通知用户调整 CANtest 后再继续。
+
+## 2026-07-13 阶段 B priority20 外部 CAN 第一段验收（已完成，等待 timeout）
+
+- 用户提供 CANtest 外部输入后，先确认无旧 OpenOCD 监听，再启动独立 OpenOCD。GDB 未复位目标，仅 halt 读取并在每次 halt 后执行 `monitor resume`。
+- 精确外部 RX 读数：`g_can2_signal_cache` 第一项 key=`Can2Data.marker`，physical double=`42435`，raw=`42435`，updated/quality=`0x0006d27f/1`；第二项 `Can2Data.sequence` raw=`4660`，quality=`1`。外部 RX frame=`0xd08`，last ID=`0x321`，DLC=`8`，DBC matched=`0xec7`，signal updates=`0x1d8e`，decode errors=`0`。
+- RuleTask 读数：`rule_count=2`、`winner_rule0=1`、`winner_rule1=0xff`、`generation=2`、`config_reload=0`、`engine_reload=0`；`manual_enabled=0`、`manual_active=0`。该证据确认 marker=42435 下 priority=20 的 rule1 胜出。
+- GPIO 读数：PE7=`0`、PE8=`0`、GPIOE ODR=`0x00000000`、`safe_active=0`，符合 rule1 action=off 且当前输入未超时。
+- 结束操作：通过 OpenOCD 4444 发送 `shutdown`，随后 `pgrep`/`lsof` 确认无 OpenOCD 进程且 3333/6666 无监听。未执行 timeout 验收，等待主会话让用户停止 CANtest 发送。
+
+## 2026-07-13 阶段 B timeout 外部 CAN 第一段验收（已完成）
+
+- 用户确认 CANtest 已停止后，确认启动前 3333/6666 无监听，启动新的独立 OpenOCD；GDB 连接后等待约 2 秒，再 halt 精确读取，随后执行 `monitor resume`、detach。
+- 精确读数：`uwTick=0x873ef`，外部 `Can2Data.marker.updated_ms=0x7b415`，差值=`49114 ms`，`quality=1`；停帧时间明确超过 1500 ms。
+- RuleTask：`safe_active=1`、`winner_rule0=1`、`rule_count=2`；PE7=`0`、PE8=`0`、GPIOE ODR=`0x00000000`；`manual_enabled=0`、`manual_active=0`。该证据证明停帧后的安全态为 off。
+- 结束操作：通过 OpenOCD 4444 发送 `shutdown`，随后 `pgrep`/`lsof` 确认无 OpenOCD 进程且 3333/6666 无监听。本轮未提交，等待主会话审计。
+
+## 2026-07-13 阶段 B 客观验收完成与收尾
+
+- 阶段 B 两项此前阻断的真实现场证据均已完成：marker=42435 外部 RX raw=`42435`、`rule_count=2`、`winner_rule0=1`、PE7=`0`；停帧后 tick 差=`49114 ms > 1500 ms`、`safe_active=1`、PE7/PE8=`0/0`、manual=`0`。阶段 B 当前状态更新为“已客观验证”。
+- 首次缺失 v2 文件的板端创建现场未观察到，仍明确记录为“未观察”；板上实际启动读到的是已有有效 v2。`v2_created=1/load_result=1` 创建后继续 v1/QSPI 的代码路径、`FA_CREATE_NEW` 和诊断区分已由源码/ELF 静态检查确认。
+- 本轮最终范围审计：修改文件均属于阶段 B 源码、测试和六份治理/对话文档，共 15 个文件；无 HTTP CRUD、前端、无界规则、QSPI 多规则、LogTask recovery、CAN 发送变化或阶段 C 内容。
+- 已确认既有证据：`git diff --check` 通过；`./scripts/verify.sh`、CTest `14/14`、最终 ELF FLASH=`80192 B`、RAM_D1=`235048 B`、`nm/objdump` 关键路径检查通过；OpenOCD 曾真实输出 `Programming Finished`、`Verified OK`、`Resetting Target`；所有 GDB halt 后均 `monitor resume`。
+- 收尾前确认 OpenOCD 已 shutdown，`pgrep/lsof` 显示无 OpenOCD 进程且 3333/6666 无监听。按固定派送要求，本阶段随后提交并推送，完成后停止，不选择阶段 C。
+- 协作协议补充：后续任何需要用户操作 CANtest 的验收，主会话先暂停派送任务和硬件操作，给出精确 CANtest 参数或停止步骤；收到用户明确“已发送/已停止”等回复后才继续。当前阶段 B 现场已完成，不再需要 CANtest 操作。

@@ -48,3 +48,9 @@
 | DBC 解码验证边界 | 当前 active DBC 已接入 CAN2 解码和 `SignalCache`；本轮 DBC mutex 下 active reload `generation/load=2/2`、TX self-test decode errors=0；外部 RX 本轮未验证，不能混写两类证据 |
 | DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、单个 128 项 `SignalCache` 和 768 B 日志缓冲，RAM_D1 为 38.83%；扩大 parser 上限、缓存或日志前必须复查内存 |
 | QSPI 诊断擦写配置数据 | `0x00FFF000` 已保留为诊断区；单规则配置使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，默认启动不擦写，显式 ST-Link 请求由 ConfigTask 串行执行；通用备份不得使用诊断扇区 |
+
+## 阶段 B 当前状态
+
+已实现 TF `/config/rules-v2.conf` 的固定两规则格式、512 字节上限、完整非法输入校验、最大 priority 选胜、手动覆盖、延时和超时 safeState；保留 v1/QSPI 单规则路径与 HTTP 单规则 API。主机测试、固件构建、ELF 反汇编、OpenOCD 烧录、有效 v2 启动加载和 marker=42434 的 RuleTask/GPIO 已验证。
+
+阶段 B 已客观验证：marker=42435 外部 RX 下 rule1 priority=20 胜出并使 PE7 off；停帧 `49114 ms > 1500 ms` 后 safe active=1 且 PE7/PE8 均 off；手动状态为 0。首次 v2 缺失创建的板端现场未观察到，代码路径和诊断语义已静态确认；本阶段完成后停止，不推进阶段 C。

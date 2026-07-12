@@ -47,6 +47,7 @@ typedef struct {
   uint32_t timeout_ms;
   RelayState safe_state;
   RelayState default_state;
+  uint8_t priority;
   bool latched_state;
   uint32_t condition_since_ms;
 } Rule;
@@ -61,6 +62,7 @@ typedef struct {
   size_t rule_count;
   RelayState relay_defaults[RULE_RELAY_COUNT];
   RelayManualOverride manual;
+  uint8_t winner_rule[RULE_RELAY_COUNT];
 } RuleEngine;
 
 void rule_engine_init(RuleEngine *engine);

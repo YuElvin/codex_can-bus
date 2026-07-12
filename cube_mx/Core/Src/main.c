@@ -154,6 +154,9 @@ volatile uint32_t g_rule_task_manual_active;
 volatile uint32_t g_rule_task_condition_since_ms;
 volatile uint32_t g_rule_task_delay_pending;
 volatile uint32_t g_rule_task_hysteresis_latched;
+volatile uint32_t g_rule_task_rule_count;
+volatile uint32_t g_rule_task_winner_rule0 = UINT32_MAX;
+volatile uint32_t g_rule_task_winner_rule1 = UINT32_MAX;
 volatile uint32_t g_rule_task_config_on_threshold = 42434u;
 volatile uint32_t g_rule_task_config_off_threshold = 42432u;
 volatile uint32_t g_rule_task_config_delay_ms = 1000u;
@@ -171,6 +174,13 @@ volatile uint32_t g_rule_file_load_result = 0xffffffffu;
 volatile uint32_t g_rule_file_created;
 volatile uint32_t g_rule_file_size;
 volatile uint32_t g_rule_file_read_len;
+volatile uint32_t g_rule_file_v2_load_result = 0xffffffffu;
+volatile uint32_t g_rule_file_v2_created;
+volatile uint32_t g_rule_file_v2_size;
+volatile uint32_t g_rule_file_v2_read_len;
+volatile uint32_t g_rule_file_v2_rule_count;
+volatile uint32_t g_rule_task_engine_reload;
+static RuleEngine g_rule_task_pending_engine;
 static QueueHandle_t g_config_command_queue;
 
 /* USER CODE END PV */
@@ -191,6 +201,7 @@ static void monitor_task(void *argument);
 static void config_task(void *argument);
 static void signal_log_task(void *argument);
 static void rule_task(void *argument);
+static void rule_task_request_engine_reload(const RuleEngine *candidate);
 
 /* USER CODE END PFP */
 
@@ -413,12 +424,87 @@ static bool rule_task_load_config(RuleEngine *engine)
   return true;
 }
 
+static void rule_task_request_engine_reload(const RuleEngine *candidate)
+{
+  if (candidate == NULL) {
+    return;
+  }
+
+  taskENTER_CRITICAL();
+  g_rule_task_pending_engine = *candidate;
+  g_rule_task_engine_reload = 1u;
+  taskEXIT_CRITICAL();
+}
+
+static bool rule_file_v2_load_from_tf(void)
+{
+  size_t file_size = 0u;
+  uint8_t file_data[RULE_FILE_V2_MAX_BYTES];
+  size_t read_len = 0u;
+  RuleEngine candidate;
+  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_V2_PATH, &file_size);
+
+  g_rule_file_v2_size = (uint32_t)file_size;
+  g_rule_file_v2_read_len = 0u;
+  g_rule_file_v2_created = 0u;
+  g_rule_file_v2_rule_count = 0u;
+  if (g_tf_card_bringup_status != 0) {
+    g_rule_file_v2_load_result = 5u;
+    return true;
+  }
+  if (size_result == FR_NO_FILE) {
+    if (stm32h750_tf_ensure_default_rule_file_v2() == 0) {
+      g_rule_file_v2_created = 1u;
+      g_rule_file_v2_load_result = 1u;
+    } else {
+      g_rule_file_v2_load_result = 2u;
+    }
+    return true;
+  }
+  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V2_MAX_BYTES ||
+      stm32h750_tf_read_file_locked(RULE_FILE_V2_PATH,
+                                     file_data,
+                                     file_size,
+                                     &read_len) != 0 ||
+      read_len != file_size) {
+    g_rule_file_v2_read_len = (uint32_t)read_len;
+    g_rule_file_v2_load_result = size_result == 0 && file_size > RULE_FILE_V2_MAX_BYTES ? 3u : 2u;
+    return false;
+  }
+  g_rule_file_v2_read_len = (uint32_t)read_len;
+  if (!rule_file_parse_v2(file_data, read_len, &candidate)) {
+    g_rule_file_v2_load_result = 4u;
+    return false;
+  }
+
+  const uint32_t previous_generation = g_rule_task_config_generation;
+  g_rule_file_v2_rule_count = (uint32_t)candidate.rule_count;
+  rule_task_request_engine_reload(&candidate);
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_generation != previous_generation &&
+        g_rule_task_engine_reload == 0u && g_rule_task_config_result == 0u) {
+      g_rule_file_v2_load_result = 0u;
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  g_rule_file_v2_load_result = 6u;
+  return true;
+}
+
 static void rule_file_load_from_tf(void)
 {
   size_t file_size = 0u;
   uint8_t file_data[RULE_FILE_V1_MAX_BYTES];
   size_t read_len = 0u;
   RuleTaskConfig candidate;
+
+  if (rule_file_v2_load_from_tf()) {
+    if (g_rule_file_v2_load_result == 0u) {
+      return;
+    }
+  }
+
   const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_PATH, &file_size);
 
   g_rule_file_size = (uint32_t)file_size;
@@ -501,26 +587,48 @@ static void rule_task(void *argument)
     const size_t count = can2_signal_cache_export_rule_snapshots(signals, 2u);
     bool marker_safe = true;
 
-    if (g_rule_task_config_reload != 0u) {
+    if (g_rule_task_engine_reload != 0u) {
+      taskENTER_CRITICAL();
+      engine = g_rule_task_pending_engine;
+      g_rule_task_engine_reload = 0u;
+      taskEXIT_CRITICAL();
+      g_rule_task_config_result = 0u;
+      ++g_rule_task_config_load_count;
+      ++g_rule_task_config_generation;
+    } else if (g_rule_task_config_reload != 0u) {
       g_rule_task_config_reload = 0u;
       (void)rule_task_load_config(&engine);
     }
 
-    for (size_t i = 0u; i < count; ++i) {
-      if (strcmp(signals[i].key, engine.rules[0].signal_key) == 0) {
-        marker_safe = !signals[i].valid || now_ms - signals[i].updated_ms > engine.rules[0].timeout_ms;
-        break;
-      }
-    }
     g_rule_task_input_count = (uint32_t)count;
     rule_engine_set_manual(&engine, manual_enabled, manual_relays);
     rule_engine_evaluate(&engine, signals, count, now_ms, relays);
     rule_apply_relays(relays);
     g_rule_task_rule_matched = g_rule_task_relay1_output == (uint32_t)RELAY_STATE_ON ? 1u : 0u;
-    g_rule_task_condition_since_ms = engine.rules[0].condition_since_ms;
-    g_rule_task_delay_pending = engine.rules[0].condition_since_ms != 0u &&
+    g_rule_task_rule_count = (uint32_t)engine.rule_count;
+    g_rule_task_winner_rule0 = engine.winner_rule[0];
+    g_rule_task_winner_rule1 = engine.winner_rule[1];
+    const uint8_t winner = engine.winner_rule[0];
+    if (winner != UINT8_MAX && winner < engine.rule_count) {
+      g_rule_task_condition_since_ms = engine.rules[winner].condition_since_ms;
+      g_rule_task_delay_pending = engine.rules[winner].condition_since_ms != 0u &&
                                   g_rule_task_relay1_output == (uint32_t)RELAY_STATE_OFF ? 1u : 0u;
-    g_rule_task_hysteresis_latched = engine.rules[0].latched_state ? 1u : 0u;
+      g_rule_task_hysteresis_latched = engine.rules[winner].latched_state ? 1u : 0u;
+      marker_safe = true;
+      for (size_t i = 0u; i < count; ++i) {
+        if (strcmp(signals[i].key, engine.rules[winner].signal_key) == 0) {
+          marker_safe = !signals[i].valid ||
+                        (engine.rules[winner].timeout_ms != 0u &&
+                         now_ms - signals[i].updated_ms > engine.rules[winner].timeout_ms);
+          break;
+        }
+      }
+    } else {
+      g_rule_task_condition_since_ms = 0u;
+      g_rule_task_delay_pending = 0u;
+      g_rule_task_hysteresis_latched = 0u;
+      marker_safe = false;
+    }
     g_rule_task_safe_active = marker_safe ? 1u : 0u;
     g_rule_task_manual_active = manual_enabled ? 1u : 0u;
     ++g_rule_task_evaluation_count;
