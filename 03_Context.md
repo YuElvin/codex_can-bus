@@ -26,20 +26,20 @@
 | 最小 DBC 解码到 SignalCache | [客观已验证] | active DBC 已接入 CAN2 TX self-test 和外部 RX；TX self-test 使用独立缓存，HTTP/Log/RuleTask 只读外部 RX 缓存，外部持续 CANtest 下 RX、matched/updates 同步增长、cache=2、errors=0 |
 | W25Q128 | [客观已验证] | 默认启动只读 JEDEC ID `EF4018`，未触发擦除；保留诊断区 `0x00FFF000` 的显式 ST-Link 擦写读回匹配 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
-| FreeRTOS 基础多任务拆分 | [客观已验证] | MonitorTask 已烧录接管 1 s 状态打印；ST-Link 连续读数确认 monitor、CAN、W5500、Config、Log、Rule 循环均增长，CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送 |
+| FreeRTOS 基础多任务拆分 | [客观已验证] | MonitorTask 已烧录接管 1 s 状态打印；CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送；W5500 状态轮询与 HTTP socket0 轮询已拆为两个 50 ms 任务，并由同一 W5500 mutex 串行化，现场计数和 HTTP 回归通过 |
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载、无效请求拒绝及候选/运行态隔离均已 ST-Link 实测 |
 
 ## 当前阻断项
 
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
-- FreeRTOS 完整多任务架构仍未完成：TF/FatFs、HTTP 和 DBC 任务尚未拆分，也未引入队列。ConfigTask 现串行执行显式 QSPI 诊断和单规则 QSPI 保存，但不构成通用配置服务。
+- FreeRTOS 完整多任务架构仍未完成：TF/FatFs、DBC 任务尚未拆分，也未引入队列；HTTP 已从 W5500 状态轮询中独立为单独任务，但仍是 socket0 单连接最小实现。ConfigTask 现串行执行显式 QSPI 诊断和单规则 QSPI 保存，但不构成通用配置服务。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload 及 QSPI 保存成功后的自动 reload 已现场验证。ST-Link 写入的 pending 候选参数在 ConfigTask 保存读回成功前不得改变 RuleTask 运行态；完整规则文件、HTTP 控制仍未实现，不得将该诊断入口表述为完整规则管理功能。
 
 ## 当前风险
 
-- 后续继续拆分 TF/FatFs、QSPI、HTTP 和配置任务时，共享资源必须加串行化或 mutex。
+- 后续继续拆分 TF/FatFs、QSPI、DBC 和配置任务时，共享资源必须加串行化或 mutex；当前 W5500 状态/HTTP 两任务已共用 `g_w5500_mutex`，FatFs 仍使用既有 `fs_mutex`。
 - 当前 HTTP 服务仍是 socket0 单连接最小实现，不支持并发连接、目录映射、HTTP Range、分块传输编码或通用上传；当前只把 `/` 和 `/index.html` 映射到 `/www/index.html`，只支持 `POST /api/dbc/upload` 的 1024 字节以内单请求体 DBC 上传。
 - DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 接收服务、`SignalCache`、最多两项的只读实时信号 API、LogTask 和最小内置 RuleTask；RuleTask 额外保留默认关闭的 ST-Link 手动覆盖验收入口，ConfigTask 仅承载已验证的单规则 QSPI 双槽保存。
 - 当前最小解码器在成功发送的 `0x321` 周期诊断帧上执行 TX self-test，也在外部 RX while-loop 上执行同一函数；两条路径使用独立 `SignalCache`，HTTP/Log/RuleTask 只消费外部 RX 缓存，且仍必须用独立来源计数区分验证。

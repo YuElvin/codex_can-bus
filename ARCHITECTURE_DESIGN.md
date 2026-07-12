@@ -265,3 +265,6 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 烧录后优先用 ST-Link 全局变量确认各模块状态，再结合外部工具验证。
 - `CONVERSATION_SUMMARY.md` 必须记录每次关键修改、问题点、验证命令和结果。
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
+## 本轮验证补充：W5500 与 HTTP 最小服务边界
+
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。该边界不引入并发 HTTP、队列或协议扩展；现场已确认两个任务计数递增，`ping` 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均返回 HTTP 200。TF/FatFs、DBC 任务拆分和通用配置事务仍待后续定义。

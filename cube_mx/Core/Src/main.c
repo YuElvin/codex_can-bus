@@ -36,6 +36,7 @@
 #include "rule_config.h"
 #include "rule_engine.h"
 #include "signal_log_buffer.h"
+#include "semphr.h"
 #include "task.h"
 
 /* USER CODE END Includes */
@@ -71,6 +72,10 @@ volatile uint32_t g_can_task_started;
 volatile uint32_t g_can_task_loop_count;
 volatile uint32_t g_w5500_task_started;
 volatile uint32_t g_w5500_task_loop_count;
+volatile uint32_t g_http_task_started;
+volatile uint32_t g_http_task_loop_count;
+volatile uint32_t g_w5500_mutex_ready;
+static SemaphoreHandle_t g_w5500_mutex;
 volatile uint32_t g_monitor_task_started;
 volatile uint32_t g_monitor_task_loop_count;
 volatile uint32_t g_config_task_started;
@@ -132,6 +137,7 @@ static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
+static void http_periodic_task(void *argument);
 static void monitor_task(void *argument);
 static void config_task(void *argument);
 static void signal_log_task(void *argument);
@@ -222,7 +228,7 @@ static void bringup_print_status(const char *phase)
   char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -231,6 +237,9 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_can_task_loop_count,
                  (unsigned long)g_w5500_task_started,
                  (unsigned long)g_w5500_task_loop_count,
+                 (unsigned long)g_http_task_started,
+                 (unsigned long)g_http_task_loop_count,
+                 (unsigned long)g_w5500_mutex_ready,
                  (unsigned long)g_monitor_task_started,
                  (unsigned long)g_monitor_task_loop_count,
                  g_can_bringup_status,
@@ -497,15 +506,44 @@ static void can2_periodic_task(void *argument)
   }
 }
 
+static void w5500_mutex_take(void)
+{
+  if (g_w5500_mutex != NULL) {
+    (void)xSemaphoreTake(g_w5500_mutex, portMAX_DELAY);
+  }
+}
+
+static void w5500_mutex_give(void)
+{
+  if (g_w5500_mutex != NULL) {
+    (void)xSemaphoreGive(g_w5500_mutex);
+  }
+}
+
 static void w5500_periodic_task(void *argument)
 {
   (void)argument;
 
   g_w5500_task_started = 1u;
   for (;;) {
+    w5500_mutex_take();
     (void)w5500_bringup_poll();
-    (void)w5500_http_status_poll();
+    w5500_mutex_give();
     g_w5500_task_loop_count++;
+    vTaskDelay(pdMS_TO_TICKS(50u));
+  }
+}
+
+static void http_periodic_task(void *argument)
+{
+  (void)argument;
+
+  g_http_task_started = 1u;
+  for (;;) {
+    w5500_mutex_take();
+    (void)w5500_http_status_poll();
+    w5500_mutex_give();
+    g_http_task_loop_count++;
     vTaskDelay(pdMS_TO_TICKS(50u));
   }
 }
@@ -599,6 +637,13 @@ static void bringup_default_task(void *argument)
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;
 
+  g_w5500_mutex = xSemaphoreCreateMutex();
+  if (g_w5500_mutex == NULL) {
+    g_w5500_mutex_ready = 0u;
+    Error_Handler();
+  }
+  g_w5500_mutex_ready = 1u;
+
   if (xTaskCreate(can2_periodic_task,
                   "can2",
                   1024u,
@@ -615,6 +660,15 @@ static void bringup_default_task(void *argument)
                   tskIDLE_PRIORITY + 2u,
                   NULL) != pdPASS) {
     g_w5500_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  if (xTaskCreate(http_periodic_task,
+                  "http",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 2u,
+                  NULL) != pdPASS) {
+    g_http_task_started = 0xffffffffu;
     Error_Handler();
   }
   if (xTaskCreate(monitor_task,
