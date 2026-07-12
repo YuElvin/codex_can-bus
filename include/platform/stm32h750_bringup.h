@@ -85,6 +85,11 @@ int w5500_bringup_poll(void);
 int w5500_http_dbc_lock(void);
 void w5500_http_dbc_unlock(void);
 int w5500_http_load_active_dbc(void);
+void w5500_http_request_dbc_reload(void);
+int w5500_http_dbc_reload_requested(void);
+int w5500_http_process_dbc_reload(void);
+int w5500_http_dbc_reload_complete(void);
+int w5500_http_dbc_reload_result(void);
 const DbcDatabase *w5500_http_active_dbc_snapshot(void);
 int w5500_http_status_poll(void);
 

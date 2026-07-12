@@ -34,4 +34,5 @@
 - L-032：把 bring-up 的永久循环移交给新任务前，先核对 `FreeRTOSConfig.h` 的 `INCLUDE_vTaskDelete`；若要用 `vTaskDelete(NULL)` 回收原任务栈，必须启用该可选 API，并在 ELF 中确认创建新任务后确实跳转到 `vTaskDelete`。
 - L-033：运行态 DBC 双槽不能只保护 active 指针赋值；加载可能覆盖下一槽，而 CAN 解码仍持有旧指针。加载解析/槽切换和解码查表/写缓存必须共用同一 mutex；本轮未引入独立 DbcTask 或队列。
 - L-034：DBC mutex 验收必须分开记录 active reload、TX self-test 和外部 RX；本轮 reload `generation/load=2/2`、TX decode errors=0，但没有持续外部 CAN 输入，外部 RX 必须记为“未验证”。
+- L-035：阶段 7 的 DbcTask 先只承载 active DBC reload 一次性命令；HTTP 写入 active 文件后提交请求并有限等待，任务调用既有加锁加载函数。这样可验证任务边界而不引入通用消息总线或改变 API 语义；验收必须同时看 `request/complete/result`、runtime generation 和 HTTP 激活响应。
 - L-033：ST-Link 配置诊断入口必须把 pending 候选与 RuleTask 当前运行态参数分开。ConfigTask 先复制候选并调用 QSPI 保存；只有保存及读回比较成功，才一次性提交运行态参数并请求 reload。无效或失败候选可保留在 pending 供诊断，但不得改变当前 active 参数、RuleTask generation 或继电器输出。

@@ -1791,3 +1791,14 @@
 - 最终网络回归严格按 socket0 串行完成：`ping -c 2 -S 192.168.1.100 192.168.1.88` 为 `2/2`；`GET /api/status` 返回 `HTTP/1.1 200 OK`，字段为 `rtos.started=1/ready=1/loop=20`、`w5500.status=0/link=1/version=4/phycfgr=191`、`tf.status=0`、`qspi.status=0/jedec=15679512`；随后 `GET /api/can/status` 返回 `HTTP/1.1 200 OK`，字段为 `tx=24/rx=0/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=23`；最后 `GET /api/signals` 返回 `HTTP/1.1 200 OK`，`items=[]/count=0`。
 - 本轮只更新文档，没有源码改动，因此未重新编译或反汇编；OpenOCD 已通过 `shutdown` 释放，最终未保留调试服务。阶段 12 的本次稳定性基线通过，但外部 CAN RX 和 LogTask recovery 分支仍分别保持“未验证/待真实错误触发”。
 - CAN 现场补充边界：CANtest 开始发送前，用户观察到未收到开发板数据；该现象没有被当作代码修复结论。CANtest 开始发送后，根会话连续两次 HTTP 读取为 `tx=53/rx=240/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=52`，约 2 秒后为 `tx=68/rx=397/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=67`，因此当前板端证据支持周期 TX 已发送、总线有 ACK/外部 RX 且无 CAN 错误。整个补充过程无源码修改。
+
+## 2026-07-13 阶段 7 独立 DbcTask active reload 窄命令（已完成）
+
+- 本轮从已推送稳定性基线 `8a523ee Record CAN stability evidence` 继续。按要求先完整复查治理文档、计划、架构、经验和 Git 状态；工作树起始干净，分支为 `codex/W5500`。未重复稳定性基线、DBC mutex、CAN TX/RX、RuleTask/QSPI 双槽或 W5500/HTTP 任务拆分。
+- 选择阶段 7 的最小缺口：新增独立 `DbcTask`，只消费现有 `POST /api/dbc/active` 写入 active 文件后的单次 reload 请求；任务调用既有 `w5500_http_load_active_dbc()`，继续使用 DBC mutex。HTTP 最多等待 100 ms 后返回原有成功/失败语义；没有新增通用配置系统、通用消息总线、多规则或 API 字段。
+- 源码改动：`main.c` 新增 50 ms `DbcTask` 和 `started/loop/request/complete/last_result` 诊断；W5500 DBC 适配新增窄请求、处理和结果接口；`POST /api/dbc/active` 改为提交请求并有限等待；同步更新阶段计划、上下文、Feature/ADR、架构和经验记录。
+- 验证：`git diff --check && ./scripts/verify.sh` 通过；host CTest `13/13`；STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`73888 B / 128 KB = 56.37%`，RAM_D1=`231040 B / 512 KB = 44.07%`。`nm/objdump` 确认 `DbcTask`、任务创建、50 ms `vTaskDelay`、请求消费、既有 reload 调用和 HTTP 有限等待路径。
+- 烧录：OpenOCD/ST-Link 对 `build/stm32h750/can_bus_gateway_stm32h750.hex` 输出 `Programming Finished`、`Verified OK`，目标电压约 `3.250368 V`；调试会话已 `resume`/`shutdown` 释放。
+- 实机证据：运行态 ST-Link 读取 `g_dbc_task_started=1`、loop=`0x5c`，启动 active DBC `result=0/valid=1/generation=1/load_count=1`。顺序 `POST /api/dbc/active` 返回 HTTP 200、`activated=true/runtimeGeneration=2`；`GET /api/dbc/runtime` 返回 `generation=2/activeSlot=1/lastResult=0`。随后精确读数为 DbcTask `request=1/complete=1/lastResult=0/loop=0x1fe`，runtime `generation=2/load_count=2`。
+- 网络与既有接口回归：`ping -c 2 -S 192.168.1.100 192.168.1.88` 为 2/2；`GET /api/status`、`GET /api/can/status`、`GET /api/signals` 均 HTTP 200。现场 CAN 读数为 `tx=20/rx=185/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=19`，signals 返回 marker=`42434`、sequence=`4660`。本轮未改变 CAN 语义。
+- 问题点：第一次 ST-Link 读取使用“复位后立即 halt”，只能得到启动早期值，未作为运行态结论；随后改为运行 5 秒后 halt 的精确读取。无编译、烧录、HTTP 或硬件验证伪造结果。

@@ -235,7 +235,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、W5500/HTTP、Monitor、Log、Rule、Config 任务独立运行；W5500 mutex 与 DBC mutex 已烧录验证；完整队列、TF/DBC 专用任务待实现 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行；W5500 mutex 与 DBC mutex、active DBC reload 窄命令已烧录验证；完整队列和 TF 专用任务待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
@@ -267,4 +267,4 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
 ## 本轮验证补充：W5500 与 HTTP 最小服务边界
 
-W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。运行态 DBC 加载解析/槽切换与 CAN2 解码另共用 `w5500_http_dbc_lock()`；该边界不引入并发 HTTP、队列或协议扩展。现场 active reload `generation/load=2/2`、TX self-test decode errors=0，`ping` 2/2，三个状态/API 请求均 HTTP 200；外部 RX 本轮未验证。TF/FatFs、独立 DBC 任务和通用配置事务仍待后续定义。
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。新增 `DbcTask` 以 50 ms 周期消费一次性 active DBC reload 请求，调用既有加锁加载函数；HTTP 最多等待 100 ms，协议和响应语义不变。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`。现场 `request=1/complete=1/result=0`、`generation/load=2/2`、`ping` 2/2，`/api/dbc/active`、`/api/dbc/runtime`、三个状态/API 请求均 HTTP 200；外部 RX 本轮由既有 CAN 回归读数支持。TF/FatFs 专用任务、通用队列和通用配置事务仍待后续定义。

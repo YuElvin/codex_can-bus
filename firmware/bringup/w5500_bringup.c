@@ -7,6 +7,7 @@
 
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "task.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +63,9 @@ volatile uint32_t g_w5500_http_dbc_runtime_valid = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_generation = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_active_slot = 0xffffffffu;
 volatile uint32_t g_w5500_http_signals_count = 0u;
+static volatile uint32_t g_w5500_http_dbc_reload_request = 0u;
+static volatile uint32_t g_w5500_http_dbc_reload_complete = 0u;
+static volatile uint32_t g_w5500_http_dbc_reload_result = 0xffffffffu;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -565,6 +569,36 @@ int w5500_http_load_active_dbc(void) {
   return result;
 }
 
+void w5500_http_request_dbc_reload(void) {
+  g_w5500_http_dbc_reload_result = 0xffffffffu;
+  g_w5500_http_dbc_reload_complete = 0u;
+  g_w5500_http_dbc_reload_request = 1u;
+}
+
+int w5500_http_dbc_reload_requested(void) {
+  return g_w5500_http_dbc_reload_request != 0u ? 1 : 0;
+}
+
+int w5500_http_process_dbc_reload(void) {
+  int result;
+  if (g_w5500_http_dbc_reload_request == 0u) {
+    return 1;
+  }
+  g_w5500_http_dbc_reload_request = 0u;
+  result = w5500_http_load_active_dbc();
+  g_w5500_http_dbc_reload_result = (uint32_t)result;
+  g_w5500_http_dbc_reload_complete = 1u;
+  return result;
+}
+
+int w5500_http_dbc_reload_complete(void) {
+  return g_w5500_http_dbc_reload_complete != 0u ? 1 : 0;
+}
+
+int w5500_http_dbc_reload_result(void) {
+  return (int)g_w5500_http_dbc_reload_result;
+}
+
 const DbcDatabase *w5500_http_active_dbc_snapshot(void) {
   return g_w5500_http_dbc_runtime_valid != 0u ? g_http_dbc_runtime_active_db : NULL;
 }
@@ -781,7 +815,11 @@ static int http_handle_dbc_active(void) {
     http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
     return http_send_json_error(500u, "active_save_failed", "dbc active save failed");
   }
-  if (w5500_http_load_active_dbc() != 0) {
+  w5500_http_request_dbc_reload();
+  for (uint32_t wait_ms = 0u; wait_ms < 100u && !w5500_http_dbc_reload_complete(); ++wait_ms) {
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (!w5500_http_dbc_reload_complete() || w5500_http_dbc_reload_result() != 0) {
     dbc_record_active_report(&report, 0u);
     http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 500u);
     return http_send_json_error(500u, "runtime_load_failed", "dbc runtime load failed");
