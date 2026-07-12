@@ -504,11 +504,16 @@ static void config_task(void *argument)
       bringup_print_status("w25q128_diag");
     }
     if (g_rule_task_config_save_request != 0u) {
+      int save_result;
+
       g_rule_task_config_save_request = 0u;
-      (void)w25q128_rule_config_save(g_rule_task_config_on_threshold,
-                                      g_rule_task_config_off_threshold,
-                                      g_rule_task_config_delay_ms,
-                                      g_rule_task_config_timeout_ms);
+      save_result = w25q128_rule_config_save(g_rule_task_config_on_threshold,
+                                              g_rule_task_config_off_threshold,
+                                              g_rule_task_config_delay_ms,
+                                              g_rule_task_config_timeout_ms);
+      if (save_result == 0) {
+        g_rule_task_config_reload = 1u;
+      }
       bringup_print_status("rule_config_save");
     }
     ++g_config_task_loop_count;

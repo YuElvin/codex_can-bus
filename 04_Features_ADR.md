@@ -13,7 +13,7 @@
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；`0x321` TX self-test 和外部 CANtest RX 均无解码错误，且 self-test 缓存已与外部消费缓存隔离。配置生效仍待实现 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；规则和配置仍待实现 |
-| F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，最小 ST-Link 单规则 reload 已验证候选生效、恢复和失败保留旧配置 |
+| F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，最小 ST-Link 单规则 reload 与 QSPI 保存成功自动 reload 已验证候选生效、恢复和失败保留旧配置 |
 
 ## ADR 索引
 
@@ -64,6 +64,6 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 
 默认启动的 W25Q128 bring-up 只读 JEDEC ID。既有 `g_w25q128_diagnostic_request` 非零时，50 ms ConfigTask 清除请求、独占执行保留区 `0x00FFF000` 的擦写读回诊断并更新结果与次数；bringup 任务不再直接执行该写路径。本步不定义配置数据、备份地址、文件来源、HTTP、队列或持久化，后续正式配置保存必须另行确定地址和事务边界。
 
-### ADR-011：单规则配置的最小 QSPI 持久化
+### ADR-011：单规则配置的最小 QSPI 持久化与安全生效
 
-为直接推进配置备份目标，固定 `0x00FFE000` 为独立 4 KiB 单规则记录扇区，禁止与 `0x00FFF000` 诊断扇区混用。记录仅含 magic、version、四个整数规则参数与 XOR checksum；启动只读加载，`ConfigTask` 收到显式 ST-Link 保存请求后才擦除、写入并读回比较。保存不自动 reload、不增加 HTTP、TF 文件、CRUD、多规则、队列或通用恢复策略；后续扩展必须定义版本迁移和事务边界。
+为直接推进配置备份目标，固定 `0x00FFE000` 为独立 4 KiB 单规则记录扇区，禁止与 `0x00FFF000` 诊断扇区混用。记录仅含 magic、version、四个整数规则参数与 XOR checksum；启动只读加载，`ConfigTask` 收到显式 ST-Link 保存请求后才擦除、写入并读回比较。只有保存函数返回成功时才置位既有 RuleTask reload 请求，保存失败保留旧 engine；不增加 HTTP、TF 文件、CRUD、多规则、队列或通用恢复策略。后续扩展必须定义版本迁移和事务边界。

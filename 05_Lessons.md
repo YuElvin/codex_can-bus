@@ -28,3 +28,4 @@
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。
+- L-029：单规则 QSPI 保存接入运行态时，只有 `w25q128_rule_config_save()` 成功完成读回比较后才能置位 RuleTask reload；保存失败不得请求 reload，避免未持久化候选替换旧有效 engine。验收须在新鲜外部 CAN 输入下同时读取保存计数、RuleTask generation/load、safe 状态与 PE7，再恢复默认记录并复位确认。
