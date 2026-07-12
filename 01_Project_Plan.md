@@ -1,6 +1,6 @@
 # 项目计划
 
-本文件只记录当前计划和验收边界；长历史保留在 `CONVERSATION_SUMMARY.md`，详细架构设计保留在 `ARCHITECTURE_DESIGN.md`。
+本文件只记录当前计划和验收边界；长历史保留在 `CONVERSATION_SUMMARY.md`，详细架构设计保留在 `ARCHITECTURE_DESIGN.md`。项目最终通过条件和固定后续阶段见 `PROJECT_FINAL_ACCEPTANCE.md`。
 
 ## 当前目标
 

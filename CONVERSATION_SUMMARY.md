@@ -1856,6 +1856,12 @@
 - 随后通过 HTTP 已恢复默认 `42434/42432/1000/1500`；`/api/can/status` 返回 HTTP 200，`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。本轮未人为破坏 TF 文件，LogTask recovery 仍未验证。
 - 边界明确：本功能是单规则 HTTP/QSPI/RuleTask 闭环，不是规则文件、多规则、CRUD 或完整配置管理；先前 ConfigTask diagnostic 底层 `0xffffffff/erase_count=0` 问题本轮未混入修复，仍待独立复核。
 
+## 2026-07-13 项目最终验收与固定阶段路线（治理更新）
+
+- 用户要求主会话明确项目完整功能的最终验收成果、每阶段唯一目标和派送条件；不再允许派送会话自行选择开发方向。新增 `PROJECT_FINAL_ACCEPTANCE.md`，把最终验收拆分为硬件启动、CAN/DBC、HTTP、TF/日志 recovery、配置持久化、规则管理、异常稳定性和最终发布审计八类证据，并规定每个代码阶段必须经过 verify、ELF 反汇编、OpenOCD、GDB resume、顺序 HTTP/CAN 及文档/推送。
+- 固定后续顺序：A 规则文件最小格式与启动加载，B 多规则优先级，C 规则 HTTP 最小 CRUD，D LogTask recovery 真实异常，E QSPI diagnostic 失败复核，F 稳定性/异常，G 最终全量审计。阶段 A 前必须先在 ADR 固化规则文件字段、版本、容量和非法输入行为。
+- 本次仅创建/更新治理文档，未改固件源码、未编译，因此未执行反汇编或烧录。后续派送固定使用 `gpt-5.6-luna`、高推理强度，并由主会话给出唯一目标、验收和非目标。
+
 ## 2026-07-13 阶段 7 ConfigTask 通用配置命令队列边界（已完成，QSPI diagnostic 底层失败待复核）
 
 - 本轮从已推送基线 `56469b2 Add CAN TX queue boundary` 继续。实际目录为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`，起始工作树干净。按治理要求先实查 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、本文件及 `git status/log`；当前阶段 7 的最小未完成项为通用配置队列，LogTask recovery 因禁止人为破坏 TF 文件而继续不选。
