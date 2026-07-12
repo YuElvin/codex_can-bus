@@ -24,7 +24,7 @@
 | 4 | FDCAN2 外部 CAN 收发 | [客观已验证] | Windows CANtest 可收开发板帧，开发板可收 Windows 发帧 |
 | 5 | W25Q128 QSPI | [客观已验证] | 默认启动只读 JEDEC ID；`0x00FFF000` 保留诊断区仅显式触发擦除、写入、读回匹配 |
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
-| 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2、MonitorTask、LogTask、RuleTask、ConfigTask、DbcTask 已独立运行；TfTask 已接管一次性 TF 初始化并由 bring-up 有限等待；W5500 状态/HTTP 任务由 W5500 mutex 保护，DBC active 加载与 CAN 解码由 DBC mutex 串行化；完整队列和通用配置保存仍待做 |
+| 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2、MonitorTask、LogTask、RuleTask、ConfigTask、DbcTask 已独立运行；TfTask 已接管一次性 TF 初始化并由 bring-up 有限等待；W5500 状态/HTTP 任务由 W5500 mutex 保护，DBC active 加载与 CAN 解码由 DBC mutex 串行化；DbcTask reload 已接入深度 1 命令队列，通用 CAN/配置队列仍待做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX 和 `/api/signals` 已上板验证；LogTask 默认路径批量写已验证。默认读失败时的 recovery 选择已编译/单测，但本次未触发，仍待现场覆盖；规则待实现 |

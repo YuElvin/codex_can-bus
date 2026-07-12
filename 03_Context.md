@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（TfTask 一次性初始化边界已完成；阶段 12 稳定性基线已完成；LogTask recovery 分支仍未验证）
+更新时间：2026-07-13（DbcTask reload 队列边界已完成；TfTask 一次性初始化边界和阶段 12 稳定性基线已完成；LogTask recovery 分支仍未验证）
 
 ## 当前仓库
 
@@ -38,6 +38,8 @@
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload 及 QSPI 保存成功后的自动 reload 已现场验证。ST-Link 写入的 pending 候选参数在 ConfigTask 保存读回成功前不得改变 RuleTask 运行态；完整规则文件、HTTP 控制仍未实现，不得将该诊断入口表述为完整规则管理功能。
 - 阶段 12 稳定性基线已完成：当前固件重新烧录 Verify 通过，两次任务计数增长，关键模块状态为 0，ping 与三个只读 API 串行返回 HTTP 200；本轮外部 CAN RX 为 0，不能作为外部 RX 验证。
 - CANtest 现场状态已补充：开始发送前曾未观察到开发板数据；开始发送后连续 HTTP 读数为 `tx=53→68`、`rx=240→397`、`errors=0`、`tec=0`、`rec=0`、`busOff=0`、`sendResult=0`、`poll=52→67`。该结果作为当前外部 CAN RX 与周期 TX/ACK 证据，不表述为代码修复；本轮无源码修改。
+- CANtest 后续确认：用户重启 CAN 接收软件后已实际看到开发板数据，说明此前未显示是接收软件的显示/会话状态，不是板端 TX 故障；此前 `tx=9→17`、`sendResult=0`、`errors=0` 与重启后的可见结果一致支持该判断。
+- DbcTask 队列边界已烧录验证：新增深度 1 的 reload 命令队列；ST-Link 读数 `queue_ready=1/enqueue=1/drop=0`、`started=1/request=1/complete=1/last_result=0`，任务循环持续增长；`POST /api/dbc/active` 返回 200 且 `runtimeGeneration=2`，保留原 API 和 DBC 语义。
 
 ## 当前风险
 

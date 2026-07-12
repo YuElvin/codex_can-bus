@@ -1813,3 +1813,13 @@
 - 网络与既有接口回归：使用实际可用路由执行 `ping 192.168.1.88` 为 2/2；顺序 `GET /api/status`、`GET /api/can/status`、`GET /api/signals`、`GET /api/dbc/runtime` 均 HTTP 200。最终 `/api/status` 显示 `rtos.ready=1`、`w5500.status=0/link=1/version=4`、`tf.status=0`、`qspi.status=0`；CAN status 为 `errors=0/busOff=0/tec=0/rec=0/sendResult=0`，signals 返回 marker=`42434`、sequence=`4660`，runtime `loaded=true/lastResult=0`。
 - 问题点与边界：`ping -S 192.168.1.100` 因本机没有该源地址而返回 `bind: Can't assign requested address`，不作为固件失败；复位后过早执行的第一次 `/api/status` 超时，随后目标恢复运行并重试 HTTP 200，不作为 TfTask 失败。GDB 每次读取后均显式 `monitor resume`，最终才 detach/关闭调试服务。
 - CANtest 显示边界：用户反馈 CANtest 未显示开发板数据但持续向板发送信号；板端两次 `/api/can/status` 只读读数为 `tx=9/rx=83/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=8`，约 2 秒后 `tx=17/rx=154/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=16`。因此板端发送调用和外部接收均持续增长且无控制器错误，CANtest 看不到 `0x321` 不是当前板端 TX 调用失败证据；后续应检查 CANtest 接收过滤、通道、波特率、classic CAN 帧格式和显示设置。本轮不因该现象改代码。
+
+## 2026-07-13 阶段 7 DbcTask reload 命令队列（已完成）
+
+- 用户要求继续全量开发，且明确 CANtest 重启接收软件后已看到开发板数据；因此将此前未显示问题记录为接收软件显示/会话状态，不是板端 TX 故障。本轮没有修改 CAN 逻辑。
+- 按当前计划选择阶段 7 的最小未完成可烧录边界：把既有 DbcTask active reload 单次标志替换为深度 1 的 FreeRTOS 命令队列。HTTP 仍提交无请求体 `POST /api/dbc/active`，DbcTask 仍每 50 ms 消费并调用既有 `w5500_http_load_active_dbc()`；保留 100 ms 有限等待、文件策略、运行态双槽和 API 语义。队列未初始化或满时记录 drop 并沿用失败响应，不引入通用消息总线。
+- 初次构建暴露状态行新增参数未同步格式串，产生 format 类型警告；已立即补齐 `dq/denq/ddrop` 占位符并重新验证，修正后无新增编译警告。
+- `git diff --check`、`./scripts/verify.sh` 通过；host CTest `13/13`；STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`74604 B / 128 KB = 56.92%`、RAM_D1=`231056 B / 512 KB = 44.07%`。`nm/objdump` 确认 `xQueueCreate(1,sizeof(uint8_t))`、HTTP `xQueueSend`、DbcTask 队列检查/`xQueueReceive`、既有 active DBC 加载和 50 ms 调度路径。
+- 已通过 OpenOCD/ST-Link 烧录，真实输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压约 `3.251976 V`。GDB 精确地址读取后均执行 `monitor resume` 再 detach：初始读数 `queue_ready=1/enqueue=0/drop=0`、`g_dbc_task_started=1/request=0/complete=0/last_result=0xffffffff`，两次读数间 DbcTask loop `0x6f→0xac`、W5500/HTTP/CAN 任务计数增长；激活后读数 `queue_ready=1/enqueue=1/drop=0`、DbcTask `complete=1/request=1/loop=0x259/started=1`、runtime generation=`2`，CAN2 `rx_id=0x321`。
+- 网络/CAN 回归：`ping 192.168.1.88` 为 `2/2`；顺序 `POST /api/dbc/active` 返回 HTTP 200 且 `activated=true/runtimeGeneration=2`，`GET /api/dbc/runtime`、`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。现场 CAN 为 `tx=25/rx=233/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=24`，signals 返回 marker=`42434`、sequence=`4660`。OpenOCD 已释放。
+- 本轮已同步 `03_Context.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本文件；当前代码改动尚未提交推送，下一步为最终差异检查后提交并推送。

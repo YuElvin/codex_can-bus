@@ -63,9 +63,11 @@ volatile uint32_t g_w5500_http_dbc_runtime_valid = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_generation = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_active_slot = 0xffffffffu;
 volatile uint32_t g_w5500_http_signals_count = 0u;
-static volatile uint32_t g_w5500_http_dbc_reload_request = 0u;
 static volatile uint32_t g_w5500_http_dbc_reload_complete = 0u;
 static volatile uint32_t g_w5500_http_dbc_reload_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_dbc_reload_queue_ready;
+volatile uint32_t g_w5500_http_dbc_reload_enqueue_count;
+volatile uint32_t g_w5500_http_dbc_reload_queue_drop_count;
 
 extern volatile int g_tf_card_bringup_status;
 extern volatile int g_w5500_bringup_status;
@@ -152,6 +154,7 @@ static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
 static uint8_t g_w5500_bound;
 static SemaphoreHandle_t g_w5500_dbc_mutex;
+static QueueHandle_t g_w5500_dbc_reload_queue;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
 static char g_http_response_body[640];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
@@ -570,25 +573,44 @@ int w5500_http_load_active_dbc(void) {
 }
 
 void w5500_http_request_dbc_reload(void) {
+  const uint8_t command = 1u;
+
   g_w5500_http_dbc_reload_result = 0xffffffffu;
   g_w5500_http_dbc_reload_complete = 0u;
-  g_w5500_http_dbc_reload_request = 1u;
+  if (g_w5500_dbc_reload_queue == NULL ||
+      xQueueSend(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
+    ++g_w5500_http_dbc_reload_queue_drop_count;
+    g_w5500_http_dbc_reload_result = 1u;
+    return;
+  }
+  ++g_w5500_http_dbc_reload_enqueue_count;
 }
 
 int w5500_http_dbc_reload_requested(void) {
-  return g_w5500_http_dbc_reload_request != 0u ? 1 : 0;
+  return g_w5500_dbc_reload_queue != NULL &&
+                 uxQueueMessagesWaiting(g_w5500_dbc_reload_queue) != 0u
+             ? 1
+             : 0;
 }
 
 int w5500_http_process_dbc_reload(void) {
+  uint8_t command = 0u;
   int result;
-  if (g_w5500_http_dbc_reload_request == 0u) {
+  if (g_w5500_dbc_reload_queue == NULL ||
+      xQueueReceive(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS ||
+      command != 1u) {
     return 1;
   }
-  g_w5500_http_dbc_reload_request = 0u;
   result = w5500_http_load_active_dbc();
   g_w5500_http_dbc_reload_result = (uint32_t)result;
   g_w5500_http_dbc_reload_complete = 1u;
   return result;
+}
+
+int w5500_http_dbc_reload_queue_init(void) {
+  g_w5500_dbc_reload_queue = xQueueCreate(1u, sizeof(uint8_t));
+  g_w5500_http_dbc_reload_queue_ready = g_w5500_dbc_reload_queue != NULL ? 1u : 0u;
+  return g_w5500_dbc_reload_queue != NULL ? 0 : 1;
 }
 
 int w5500_http_dbc_reload_complete(void) {

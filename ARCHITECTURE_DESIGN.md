@@ -267,4 +267,4 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
 ## 本轮验证补充：W5500 与 HTTP 最小服务边界
 
-W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期消费一次性 active DBC reload 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；两者都不引入通用队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TfTask 现场 `started=1/complete=1/result=0`，CAN/W5500/HTTP loop 在显式 resume 后持续增长，ping 2/2，`/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200；通用队列和通用配置事务仍待后续定义。
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；尚未引入通用 CAN/配置队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 DbcTask 队列现场 `queue_ready=1/enqueue=1/drop=0`、`request=1/complete=1/result=0`，runtime generation=2；ping 2/2，`/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200。CANtest 接收软件重启后可见开发板数据，此前未显示不作为板端 TX 故障。

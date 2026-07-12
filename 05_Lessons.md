@@ -37,3 +37,5 @@
 - L-035：阶段 7 的 DbcTask 先只承载 active DBC reload 一次性命令；HTTP 写入 active 文件后提交请求并有限等待，任务调用既有加锁加载函数。这样可验证任务边界而不引入通用消息总线或改变 API 语义；验收必须同时看 `request/complete/result`、runtime generation 和 HTTP 激活响应。
 - L-033：ST-Link 配置诊断入口必须把 pending 候选与 RuleTask 当前运行态参数分开。ConfigTask 先复制候选并调用 QSPI 保存；只有保存及读回比较成功，才一次性提交运行态参数并请求 reload。无效或失败候选可保留在 pending 供诊断，但不得改变当前 active 参数、RuleTask generation 或继电器输出。
 - L-036：一次性 TF 初始化拆为 `TfTask` 时，任务必须复用既有 `fs_mutex`，写入明确完成/结果变量；bring-up 只能用带 `vTaskDelay` 的有限等待，超时进入 `Error_Handler()`。GDB 读取后要显式 `monitor resume` 再做 HTTP，不能把 halted 目标的超时算作固件回归。
+- L-037：阶段 7 的最小队列通信应先替换已有单次标志，而不是同时引入通用消息总线；深度 1 的 DbcTask reload 队列可用 `ready/enqueue/drop`、`request/complete/result` 和 runtime generation 共同验收。GDB 读数后必须显式 resume 再执行 HTTP。
+- L-038：CANtest 未显示开发板帧时，若板端 `tx` 持续增长且 `sendResult=0/errors=0`，应先重启接收软件复核会话/显示状态；本轮用户确认重启后可见，不能把接收软件显示问题归因于板端 TX。

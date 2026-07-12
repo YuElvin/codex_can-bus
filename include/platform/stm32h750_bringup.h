@@ -86,6 +86,7 @@ int w5500_http_dbc_lock(void);
 void w5500_http_dbc_unlock(void);
 int w5500_http_load_active_dbc(void);
 void w5500_http_request_dbc_reload(void);
+int w5500_http_dbc_reload_queue_init(void);
 int w5500_http_dbc_reload_requested(void);
 int w5500_http_process_dbc_reload(void);
 int w5500_http_dbc_reload_complete(void);
