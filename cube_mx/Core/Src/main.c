@@ -71,6 +71,8 @@ volatile uint32_t g_can_task_started;
 volatile uint32_t g_can_task_loop_count;
 volatile uint32_t g_w5500_task_started;
 volatile uint32_t g_w5500_task_loop_count;
+volatile uint32_t g_monitor_task_started;
+volatile uint32_t g_monitor_task_loop_count;
 volatile uint32_t g_config_task_started;
 volatile uint32_t g_config_task_loop_count;
 volatile uint32_t g_tf_csv_write_count;
@@ -126,6 +128,7 @@ static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
+static void monitor_task(void *argument);
 static void config_task(void *argument);
 static void signal_log_task(void *argument);
 static void rule_task(void *argument);
@@ -215,7 +218,7 @@ static void bringup_print_status(const char *phase)
   char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -224,6 +227,8 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_can_task_loop_count,
                  (unsigned long)g_w5500_task_started,
                  (unsigned long)g_w5500_task_loop_count,
+                 (unsigned long)g_monitor_task_started,
+                 (unsigned long)g_monitor_task_loop_count,
                  g_can_bringup_status,
                  (unsigned long)g_can_tx_count,
                  (unsigned long)g_can_rx_count,
@@ -501,6 +506,19 @@ static void w5500_periodic_task(void *argument)
   }
 }
 
+static void monitor_task(void *argument)
+{
+  (void)argument;
+
+  g_monitor_task_started = 1u;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000u));
+    ++g_freertos_loop_count;
+    ++g_monitor_task_loop_count;
+    bringup_print_status("run");
+  }
+}
+
 static void config_task(void *argument)
 {
   (void)argument;
@@ -583,6 +601,15 @@ static void bringup_default_task(void *argument)
     g_w5500_task_started = 0xffffffffu;
     Error_Handler();
   }
+  if (xTaskCreate(monitor_task,
+                  "monitor",
+                  1024u,
+                  NULL,
+                  tskIDLE_PRIORITY + 1u,
+                  NULL) != pdPASS) {
+    g_monitor_task_started = 0xffffffffu;
+    Error_Handler();
+  }
   if (xTaskCreate(config_task,
                   "config",
                   1024u,
@@ -611,11 +638,7 @@ static void bringup_default_task(void *argument)
     Error_Handler();
   }
 
-  for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(1000u));
-    g_freertos_loop_count++;
-    bringup_print_status("run");
-  }
+  vTaskDelete(NULL);
 }
 
 /* USER CODE END 0 */

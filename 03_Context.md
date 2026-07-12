@@ -26,7 +26,7 @@
 | 最小 DBC 解码到 SignalCache | [客观已验证] | active DBC 已接入 CAN2 TX self-test 和外部 RX；TX self-test 使用独立缓存，HTTP/Log/RuleTask 只读外部 RX 缓存，外部持续 CANtest 下 RX、matched/updates 同步增长、cache=2、errors=0 |
 | W25Q128 | [客观已验证] | 默认启动只读 JEDEC ID `EF4018`，未触发擦除；保留诊断区 `0x00FFF000` 的显式 ST-Link 擦写读回匹配 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
-| FreeRTOS 基础多任务拆分 | [客观已验证] | CAN2 任务现每 50 ms 接收 FIFO、每 1 s 保持诊断发送，已编译/反汇编/烧录复核；任务循环、外部 RX/DBC 解码均连续增长 |
+| FreeRTOS 基础多任务拆分 | [客观已验证] | MonitorTask 已烧录接管 1 s 状态打印；ST-Link 连续读数确认 monitor、CAN、W5500、Config、Log、Rule 循环均增长，CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送 |
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载和无效请求拒绝均已 ST-Link 实测 |
 
