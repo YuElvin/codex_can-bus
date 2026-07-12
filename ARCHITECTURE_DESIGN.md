@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 创建低优先级 `MonitorTask`，由其每秒打印状态；`bringup` 任务随后删除自身
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。50 ms 最小 ConfigTask 串行执行既有 QSPI 显式诊断和单规则配置保存：默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。它不包含 HTTP、TF 文件、CRUD、多规则、队列或通用配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms 最小 ConfigTask 串行执行既有 QSPI 显式诊断和单规则配置保存：默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。它不包含 HTTP、TF 文件、CRUD、多规则、队列或通用配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
 
 ### 4.2 目标任务拆分
 
@@ -235,7 +235,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行；W5500 mutex 与 DBC mutex、active DBC reload 窄命令已烧录验证；完整队列和 TF 专用任务待实现 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；W5500 mutex 与 DBC mutex、active DBC reload 窄命令已烧录验证；完整队列待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
@@ -267,4 +267,4 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
 ## 本轮验证补充：W5500 与 HTTP 最小服务边界
 
-W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。新增 `DbcTask` 以 50 ms 周期消费一次性 active DBC reload 请求，调用既有加锁加载函数；HTTP 最多等待 100 ms，协议和响应语义不变。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`。现场 `request=1/complete=1/result=0`、`generation/load=2/2`、`ping` 2/2，`/api/dbc/active`、`/api/dbc/runtime`、三个状态/API 请求均 HTTP 200；外部 RX 本轮由既有 CAN 回归读数支持。TF/FatFs 专用任务、通用队列和通用配置事务仍待后续定义。
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期消费一次性 active DBC reload 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；两者都不引入通用队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TfTask 现场 `started=1/complete=1/result=0`，CAN/W5500/HTTP loop 在显式 resume 后持续增长，ping 2/2，`/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200；通用队列和通用配置事务仍待后续定义。

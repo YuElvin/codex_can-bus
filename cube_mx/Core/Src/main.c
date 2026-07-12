@@ -80,6 +80,9 @@ volatile uint32_t g_dbc_task_loop_count;
 volatile uint32_t g_dbc_task_request_count;
 volatile uint32_t g_dbc_task_complete_count;
 volatile uint32_t g_dbc_task_last_result = 0xffffffffu;
+volatile uint32_t g_tf_task_started;
+volatile uint32_t g_tf_task_complete;
+volatile uint32_t g_tf_task_last_result = 0xffffffffu;
 static SemaphoreHandle_t g_w5500_mutex;
 volatile uint32_t g_monitor_task_started;
 volatile uint32_t g_monitor_task_loop_count;
@@ -144,6 +147,7 @@ static void can2_periodic_task(void *argument);
 static void w5500_periodic_task(void *argument);
 static void http_periodic_task(void *argument);
 static void dbc_task(void *argument);
+static void tf_task(void *argument);
 static void monitor_task(void *argument);
 static void config_task(void *argument);
 static void signal_log_task(void *argument);
@@ -234,7 +238,7 @@ static void bringup_print_status(const char *phase)
   char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -251,6 +255,9 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_dbc_task_request_count,
                  (unsigned long)g_dbc_task_complete_count,
                  (unsigned long)g_dbc_task_last_result,
+                 (unsigned long)g_tf_task_started,
+                 (unsigned long)g_tf_task_complete,
+                 (unsigned long)g_tf_task_last_result,
                  (unsigned long)g_monitor_task_started,
                  (unsigned long)g_monitor_task_loop_count,
                  g_can_bringup_status,
@@ -574,6 +581,16 @@ static void dbc_task(void *argument)
   }
 }
 
+static void tf_task(void *argument)
+{
+  (void)argument;
+  g_tf_task_started = 1u;
+  g_tf_task_last_result = (uint32_t)tf_card_bringup_run();
+  g_tf_card_bringup_status = (int)g_tf_task_last_result;
+  g_tf_task_complete = 1u;
+  vTaskDelete(NULL);
+}
+
 static void monitor_task(void *argument)
 {
   (void)argument;
@@ -658,7 +675,23 @@ static void bringup_default_task(void *argument)
   bringup_print_status("can2");
   g_w5500_bringup_status = w5500_bringup_run();
   bringup_print_status("w5500");
-  g_tf_card_bringup_status = tf_card_bringup_run();
+  if (xTaskCreate(tf_task,
+                  "tf",
+                  2048u,
+                  NULL,
+                  tskIDLE_PRIORITY + 2u,
+                  NULL) != pdPASS) {
+    g_tf_task_started = 0xffffffffu;
+    Error_Handler();
+  }
+  for (uint32_t wait_ms = 0u; g_tf_task_complete == 0u && wait_ms < 5000u; ++wait_ms) {
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (g_tf_task_complete == 0u) {
+    g_tf_task_last_result = 0xffffffffu;
+    g_tf_card_bringup_status = -1;
+    Error_Handler();
+  }
   (void)w5500_http_load_active_dbc();
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;

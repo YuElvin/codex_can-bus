@@ -9,7 +9,7 @@
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
-| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、LogTask、RuleTask、ConfigTask、DbcTask 已并行运行；W5500 状态轮询与 HTTP socket0 轮询已拆为两个 50 ms 任务并由同一 mutex 串行化；DbcTask 仅消费 active DBC reload 窄命令，现场激活与 API 回归通过；完整队列、TF 专用任务与通用配置保存待实现 |
+| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；完整队列与通用配置保存待实现 |
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；完整规则与通用配置仍待实现 |
@@ -74,3 +74,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-013：DbcTask 只承载 active DBC reload 窄命令
 
 为推进阶段 7 的任务边界，新增独立 `DbcTask`，仅消费由现有 `POST /api/dbc/active` 提交的一次性 reload 请求；任务调用既有 `w5500_http_load_active_dbc()`，继续使用 DBC mutex。HTTP 等待最多 100 ms 后沿用原有成功/失败语义；不引入通用消息总线、配置系统、多规则或 API 变化。已实机验证 `request=1/complete=1/result=0`、`runtimeGeneration=2`。
+
+### ADR-014：TfTask 只承载一次性 TF 初始化
+
+为推进阶段 7 的任务边界，新增一次性 `TfTask`，复用既有 `tf_card_bringup_run()`、默认页面确保函数和 `fs_mutex`。bring-up 创建任务后以 `vTaskDelay(1)` 等待完成信号，最多等待 5000 ms；成功或失败均通过 `g_tf_task_complete/g_tf_task_last_result` 明确交付，超时进入 `Error_Handler()`。本轮不引入队列、不改变 FatFs/recovery/API 语义，已烧录验证 `started=1/complete=1/result=0`。
