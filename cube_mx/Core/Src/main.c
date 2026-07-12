@@ -35,6 +35,7 @@
 #include "platform/stm32h750_bringup.h"
 #include "rule_config.h"
 #include "rule_engine.h"
+#include "rule_file.h"
 #include "signal_log_buffer.h"
 #include "queue.h"
 #include "semphr.h"
@@ -166,6 +167,10 @@ volatile uint32_t g_rule_task_config_result = 0xffffffffu;
 volatile uint32_t g_rule_task_config_load_count;
 volatile uint32_t g_rule_task_config_generation;
 volatile uint32_t g_rule_task_config_save_request;
+volatile uint32_t g_rule_file_load_result = 0xffffffffu;
+volatile uint32_t g_rule_file_created;
+volatile uint32_t g_rule_file_size;
+volatile uint32_t g_rule_file_read_len;
 static QueueHandle_t g_config_command_queue;
 
 /* USER CODE END PV */
@@ -406,6 +411,70 @@ static bool rule_task_load_config(RuleEngine *engine)
   ++g_rule_task_config_load_count;
   ++g_rule_task_config_generation;
   return true;
+}
+
+static void rule_file_load_from_tf(void)
+{
+  size_t file_size = 0u;
+  uint8_t file_data[RULE_FILE_V1_MAX_BYTES];
+  size_t read_len = 0u;
+  RuleTaskConfig candidate;
+  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_PATH, &file_size);
+
+  g_rule_file_size = (uint32_t)file_size;
+  g_rule_file_read_len = 0u;
+  g_rule_file_created = 0u;
+  if (g_tf_card_bringup_status != 0) {
+    g_rule_file_load_result = 5u;
+    return;
+  }
+  if (size_result == FR_NO_FILE) {
+    if (stm32h750_tf_ensure_default_rule_file(g_rule_task_config_on_threshold,
+                                               g_rule_task_config_off_threshold,
+                                               g_rule_task_config_delay_ms,
+                                               g_rule_task_config_timeout_ms) == 0) {
+      g_rule_file_created = 1u;
+      g_rule_file_load_result = 1u;
+    } else {
+      g_rule_file_load_result = 2u;
+    }
+    return;
+  }
+  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V1_MAX_BYTES ||
+      stm32h750_tf_read_file_locked(RULE_FILE_PATH,
+                                     file_data,
+                                     file_size,
+                                     &read_len) != 0 ||
+      read_len != file_size) {
+    g_rule_file_read_len = (uint32_t)read_len;
+    g_rule_file_load_result = size_result == 0 && file_size > RULE_FILE_V1_MAX_BYTES ? 3u : 2u;
+    return;
+  }
+  g_rule_file_read_len = (uint32_t)read_len;
+  if (!rule_file_parse_v1(file_data, read_len, &candidate)) {
+    g_rule_file_load_result = 4u;
+    return;
+  }
+
+  const uint32_t previous_generation = g_rule_task_config_generation;
+  g_rule_task_config_on_threshold = (uint32_t)candidate.on_threshold;
+  g_rule_task_config_off_threshold = (uint32_t)candidate.off_threshold;
+  g_rule_task_config_delay_ms = candidate.delay_ms;
+  g_rule_task_config_timeout_ms = candidate.timeout_ms;
+  g_rule_task_config_pending_on_threshold = g_rule_task_config_on_threshold;
+  g_rule_task_config_pending_off_threshold = g_rule_task_config_off_threshold;
+  g_rule_task_config_pending_delay_ms = g_rule_task_config_delay_ms;
+  g_rule_task_config_pending_timeout_ms = g_rule_task_config_timeout_ms;
+  g_rule_task_config_reload = 1u;
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_generation != previous_generation &&
+        g_rule_task_config_reload == 0u && g_rule_task_config_result == 0u) {
+      g_rule_file_load_result = 0u;
+      return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  g_rule_file_load_result = 6u;
 }
 
 static void rule_task(void *argument)
@@ -897,6 +966,7 @@ static void bringup_default_task(void *argument)
     g_rule_task_started = 0xffffffffu;
     Error_Handler();
   }
+  rule_file_load_from_tf();
 
   vTaskDelete(NULL);
 }

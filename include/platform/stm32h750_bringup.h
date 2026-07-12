@@ -54,6 +54,10 @@ int stm32h750_tf_replace_file_with_backup_locked(const char *tmp_path,
                                                  const uint8_t *data,
                                                  size_t len);
 int stm32h750_tf_ensure_default_www(void);
+int stm32h750_tf_ensure_default_rule_file(uint32_t on_threshold,
+                                          uint32_t off_threshold,
+                                          uint32_t delay_ms,
+                                          uint32_t timeout_ms);
 void stm32h750_w5500_bind(W5500Port *port,
                           Stm32W5500Context *ctx,
                           SPI_HandleTypeDef *hspi,

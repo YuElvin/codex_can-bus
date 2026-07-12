@@ -6,6 +6,7 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 
+#include <stdio.h>
 #include <string.h>
 
 extern SD_HandleTypeDef hsd1;
@@ -508,6 +509,73 @@ int stm32h750_tf_ensure_default_www(void) {
   }
   g_tf_www_index_status = 0u;
   return 0;
+}
+
+int stm32h750_tf_ensure_default_rule_file(uint32_t on_threshold,
+                                          uint32_t off_threshold,
+                                          uint32_t delay_ms,
+                                          uint32_t timeout_ms) {
+  char content[160];
+  FIL file;
+  UINT written = 0u;
+  char full_path[64];
+  char config_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+  const int content_len = snprintf(content,
+                                   sizeof(content),
+                                   "version=1\n"
+                                   "onThreshold=%lu\n"
+                                   "offThreshold=%lu\n"
+                                   "delayMs=%lu\n"
+                                   "timeoutMs=%lu\n",
+                                   (unsigned long)on_threshold,
+                                   (unsigned long)off_threshold,
+                                   (unsigned long)delay_ms,
+                                   (unsigned long)timeout_ms);
+
+  if (content_len <= 0 || (size_t)content_len >= sizeof(content) ||
+      on_threshold <= off_threshold || delay_ms > timeout_ms ||
+      build_fatfs_path(&ctx, "/config/rule.conf", full_path, sizeof(full_path)) != TF_CARD_OK ||
+      build_fatfs_path(&ctx, "/config", config_path, sizeof(config_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+
+  g_tf_write_attempts = 1u;
+  g_tf_mkdir_result = f_mkdir(config_path);
+  if (g_tf_mkdir_result != FR_OK && g_tf_mkdir_result != FR_EXIST) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_open_result = f_open(&file, full_path, FA_READ);
+  if (g_tf_write_open_result == FR_OK) {
+    (void)f_close(&file);
+    tf_fs_unlock();
+    return 0;
+  }
+  if (g_tf_write_open_result != FR_NO_FILE) {
+    tf_fs_unlock();
+    return 1;
+  }
+
+  g_tf_write_open_result = f_open(&file, full_path, FA_CREATE_NEW | FA_WRITE);
+  if (g_tf_write_open_result == FR_EXIST) {
+    tf_fs_unlock();
+    return 0;
+  }
+  if (g_tf_write_open_result != FR_OK) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_tf_write_result = f_write(&file, content, (UINT)content_len, &written);
+  g_tf_write_close_result = f_close(&file);
+  g_tf_write_len = written;
+  tf_fs_unlock();
+  return g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK &&
+                 written == (UINT)content_len ? 0 : 1;
 }
 
 void stm32h750_tf_card_bind(TfCardPort *port, Stm32TfCardContext *ctx, FATFS *fs, const char *logical_drive) {

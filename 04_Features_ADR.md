@@ -14,6 +14,7 @@
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；完整规则与通用配置仍待实现 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |
+| F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
 
 ## ADR 索引
 
@@ -30,6 +31,7 @@
 | ADR-010 | 最小 ConfigTask 仅串行执行既有 W25Q128 显式诊断请求 | 已接受，默认零擦写、显式请求擦写读回与任务运行均已上板验证 |
 | ADR-011 | 单规则配置使用 QSPI 双槽做最小持久化 | 已接受，v1 兼容、交替保存、读回校验、损坏最新槽回退、两槽无效默认保留和复位加载均已上板验证 |
 | ADR-018 | ConfigTask 使用固定深度命令队列 | 已接受，诊断和单规则保存入口已烧录验证入队/出队；完整配置模型和 HTTP 来源不在本 ADR |
+| ADR-020 | TF RuleFile v1 采用固定文本格式并通过 RuleTask reload 生效 | 已接受；有效/缺失路径板端验证，非法板端输入未注入 |
 
 ## 决策记录摘要
 
@@ -99,3 +101,19 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-019：单规则 HTTP 配置复用 ConfigTask 保存边界
 
 新增 `GET /api/rule/config` 和 `POST /api/rule/config`，POST 只接受已有单规则的 `onThreshold`、`offThreshold`、`delayMs`、`timeoutMs` 四个整数。HTTP 任务写入 pending 候选并置位兼容保存请求，实际 QSPI 双槽保存仍由 ConfigTask 深度 2 队列执行，成功后由 RuleTask reload；HTTP 等待保存和 reload 完成后才返回 200，非法关系返回 400，失败返回 500。本 ADR 不宣称规则文件、多规则、CRUD 或通用配置事务；本轮已烧录验证 HTTP 读写、QSPI 保存、RuleTask generation 和复位加载。
+
+### ADR-020：TF RuleFile v1 固定为单规则文本文件
+
+阶段 A 的 RuleFile 路径固定为 `/config/rule.conf`，文件容量上限为 256 字节。文件使用 ASCII 文本，每行一个 `key=value`，允许空行和 LF/CRLF 行尾；不允许注释、未知字段、重复字段、等号两侧空白或其他空白字符。必须且只能出现以下五个字段各一次：
+
+```text
+version=1
+onThreshold=<uint32 十进制>
+offThreshold=<uint32 十进制>
+delayMs=<uint32 十进制>
+timeoutMs=<uint32 十进制>
+```
+
+`version` 必须为 `1`；四个数值必须是无符号十进制 `uint32_t`，范围为 `0..4294967295`；并且必须满足 `onThreshold > offThreshold`、`delayMs <= timeoutMs`。文件超过 256 字节、为空、缺字段、重复字段、非法数字、溢出或关系校验失败均为无效。
+
+启动优先级固定为“有效 RuleFile v1 > 有效 W25Q128 单规则双槽记录 > 编译默认安全配置”。TF 缺失或读取失败不阻断启动，也不改变已经加载的 QSPI/编译默认值。若文件返回 `FR_NO_FILE`，现有启动流程在 `fs_mutex` 下确保 `/config` 目录存在，并以当前有效单规则参数创建一次最小文件；创建使用 `FA_CREATE_NEW`，绝不覆盖已有文件。有效文件解析成功后只更新已有四参数候选并置位现有 `RuleTask` reload 边界，等待 generation 完成后才视为加载成功；无效文件不更新候选、不请求 reload，不增加规则数量，不改变 W25Q128 地址或写入策略。

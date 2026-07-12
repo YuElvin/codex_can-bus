@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（单规则 HTTP 配置闭环已完成并跨复位验证；已恢复默认参数；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`；规则文件/多规则仍未实现；LogTask recovery 分支仍未验证）
+更新时间：2026-07-13（阶段 A RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和板端网络回归；非法文件仅主机解析验证，未在板端注入；单规则 HTTP 配置闭环已完成并跨复位验证；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`；多规则与 LogTask recovery 分支仍未验证）
 
 ## 当前仓库
 
@@ -29,6 +29,7 @@
 | FreeRTOS 基础多任务拆分 | [客观已验证] | TfTask 已烧录接管一次性 TF mount/smoke/default-page 初始化并由 bring-up 有限等待；MonitorTask 已接管 1 s 状态打印；CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送；W5500 状态轮询与 HTTP socket0 轮询已拆为两个 50 ms 任务并由 mutex 串行化 |
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测；新增 HTTP GET/POST 单规则配置闭环并跨复位验证 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载、无效请求拒绝及候选/运行态隔离均已 ST-Link 实测 |
+| TF RuleFile v1 | [客观已验证；非法板端输入未注入] | 首次启动 TF `status=0` 时缺失文件 `load_result=1/created=1`；复位后读取 `75` 字节有效文件，`load_result=0/read_len=75`，RuleTask `generation=2/reload=0`，有效文件把此前 HTTP 写入的 QSPI `42435/42433/1100/1600` 覆盖回 `42434/42432/1000/1500`；纯解析主机测试覆盖缺字段、非法阈值和非法时序且候选不变 |
 
 ## 当前阻断项
 
@@ -36,6 +37,7 @@
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。HTTP POST 通过 ConfigTask 队列保存并跨复位加载，随后已恢复默认 `42434/42432/1000/1500`。完整规则文件、多规则和 CRUD 仍未实现，不得将该单规则接口表述为完整规则管理功能。
+- 阶段 A RuleFile v1 已完成板端有效/缺失路径：首次缺失创建不阻断启动，复位后有效文件通过既有 RuleTask reload 覆盖非默认 QSPI 参数；RuleTask 读数为 `generation=2/reload=0`，外部 CAN marker=42434 时 PE7=`1`、PE8=`0`、GPIOE ODR=`0x80`。非法文件未通过真实 TF 输入注入，结论限于主机纯解析测试，禁止写成板端非法文件实测。
 - 阶段 12 稳定性基线已完成：当前固件重新烧录 Verify 通过，两次任务计数增长，关键模块状态为 0，ping 与三个只读 API 串行返回 HTTP 200；本轮外部 CAN RX 为 0，不能作为外部 RX 验证。
 - CANtest 现场状态已补充：开始发送前曾未观察到开发板数据；开始发送后连续 HTTP 读数为 `tx=53→68`、`rx=240→397`、`errors=0`、`tec=0`、`rec=0`、`busOff=0`、`sendResult=0`、`poll=52→67`。该结果作为当前外部 CAN RX 与周期 TX/ACK 证据，不表述为代码修复；本轮无源码修改。
 - CANtest 后续确认：用户重启 CAN 接收软件后已实际看到开发板数据，说明此前未显示是接收软件的显示/会话状态，不是板端 TX 故障；此前 `tx=9→17`、`sendResult=0`、`errors=0` 与重启后的可见结果一致支持该判断。
@@ -57,7 +59,7 @@
 
 ## 下一步建议
 
-下一阶段由主会话按 `PROJECT_FINAL_ACCEPTANCE.md` 指定；当前固定下一目标是阶段 A：先在 ADR 定义 TF 规则文件最小格式，再实现并烧录验证其启动加载与非法文件安全行为。派送会话不得自行选择目标。
+下一阶段由主会话按 `PROJECT_FINAL_ACCEPTANCE.md` 指定；阶段 A 已完成并停止于此。下一个阶段 B 多规则运行模型不在本轮处理。
 
 ## 本轮已完成：单规则 HTTP 配置闭环
 

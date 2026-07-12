@@ -56,6 +56,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | D2 SRAM | 后续 DMA buffer 预留 | 当前 W5500 SPI、保守 SDMMC 路径不依赖 ETH DMA |
 | TF 卡 | `/www/`、`/dbc/`、`/log/`、`/config/` | 一期主要资源存储介质 |
 | QSPI W25Q128 | 单规则配置备份、最小 Web/恢复信息、版本信息 | 默认启动只读识别；`0x00FFF000` 固定为诊断区，`0x00FFE000`/`0x00FFD000` 为单规则双槽，通用备份必须定义新的多记录模型 |
+| TF RuleFile | `/config/rule.conf` 单规则启动覆盖 | v1 固定文本字段，最大 256 字节；有效文件优先于 QSPI，缺失只创建不覆盖，非法保持当前安全配置 |
 
 当前 DBC 候选读回 + 最小 active 激活 + 运行态双槽快照源码编译基线：FLASH 约 49.27%，RAM_D1 约 34.91%。后续每次引入网络服务、HTTP、DBC、信号缓存或日志，都要复查 Flash/RAM 水位。
 
@@ -210,6 +211,8 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - `rules.json`：规则列表、手动状态、默认安全状态。
 - `can_tx.json`：周期发送列表。
 
+阶段 A 的单规则文件不是通用配置服务：`/config/rule.conf` 只允许 `version=1`、`onThreshold`、`offThreshold`、`delayMs`、`timeoutMs` 五个字段各一次，值为无符号十进制 `uint32_t`；文件不超过 256 字节，且满足 `onThreshold > offThreshold`、`delayMs <= timeoutMs`。缺失时在已挂载 TF 上显式确保 `/config` 后用 `FA_CREATE_NEW` 创建当前有效单规则的最小文本；有效文件解析成功后通过既有 RuleTask reload 覆盖 QSPI/编译默认值，其他错误只记录状态并保留当前值。
+
 写配置采用 `file.tmp -> flush -> rename`；失败时保持旧配置，Web 返回错误，运行态继续使用内存配置。
 
 ## 11. 继电器规则引擎
@@ -239,7 +242,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
-| 11 | 规则/继电器 | 部分已验证 | 固定高滞回、延时、超时、单规则 QSPI 双槽和 RuleTask reload 已验证；新增 `GET/POST /api/rule/config` 已验证 HTTP→ConfigTask→QSPI→RuleTask→复位加载；规则文件、多规则仍待做 |
+| 11 | 规则/继电器 | 部分已验证 | 固定高滞回、延时、超时、单规则 QSPI 双槽和 RuleTask reload 已验证；新增 `GET/POST /api/rule/config` 已验证 HTTP→ConfigTask→QSPI→RuleTask→复位加载；RuleFile v1 有效/缺失路径已板端验证，非法板端输入未注入；多规则仍待做 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
 ## 13. 风险与规避

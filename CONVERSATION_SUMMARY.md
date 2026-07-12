@@ -1873,3 +1873,41 @@
 - 重要问题点：diagnostic 命令确实入队并被 ConfigTask 消费，但底层返回 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0`；只能记录为“QSPI diagnostic 命令底层失败，待后续复核”，不能写成 QSPI diagnostic 已通过。未人为破坏 TF 文件，LogTask recovery 仍未验证。
 - GDB 释放并恢复运行后，网络/CAN 回归通过：`ping 192.168.1.88` 为 2/2；顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200；W5500 link/version=`1/4`、TF/QSPI status=`0/0`；CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors=`0`、busOff=`0`、TEC/REC=`0/0`、sendResult=`0`，signals 持续返回 marker=`42434`、sequence=`4660`。OpenOCD 已结束，无驻留调试服务。
 - 本轮同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本文件。下一步为最终 diff 检查、提交并推送；完成后停止，等待新的独立会话。
+
+## 2026-07-13 阶段 A RuleFile v1 最小格式与启动加载（板端验证进行中）
+
+### 范围、假设和实现
+
+- 本轮严格只执行 `PROJECT_FINAL_ACCEPTANCE.md` 阶段 A，不实现多规则、HTTP CRUD、LogTask recovery、QSPI diagnostic 修复或通用配置服务。
+- RuleFile v1 固定为 TF `/config/rule.conf`，容量上限 256 字节；ASCII `key=value` 文本，允许空行和 LF/CRLF，不允许注释、未知字段、重复字段或字段两侧空白。必须各出现一次：`version=1`、`onThreshold`、`offThreshold`、`delayMs`、`timeoutMs`。数值为无符号十进制 `uint32_t`，并满足 `onThreshold > offThreshold`、`delayMs <= timeoutMs`。
+- 新增纯解析 `rule_file_parse_v1()`，先写局部候选，完整校验成功后才写出参，保证非法输入不改变候选配置。有效文件优先于 QSPI/编译默认；缺失或读取/格式无效保持当前已加载安全配置。
+- 启动顺序为：`bringup_default_task` 先执行 W25Q128 bring-up 和 QSPI 单规则加载，再完成 TfTask 挂载/smoke/default page，加载 active DBC，创建既有 RuleTask；随后读取 RuleFile。有效解析只更新现有四参数并置位 `g_rule_task_config_reload`，等待 generation 变化、reload 清零和 `g_rule_task_config_result=0` 后才报告有效加载。RuleTask 本身仍是唯一装载 `RuleEngine` 的边界。
+- RuleFile 缺失时，`stm32h750_tf_ensure_default_rule_file()` 在同一 `fs_mutex` 下显式 `f_mkdir("/config")`，接受 `FR_OK/FR_EXIST`，再以 `FA_READ` 探测文件；只有 `FR_NO_FILE` 才使用 `FA_CREATE_NEW|FA_WRITE` 创建当前有效单规则文本，绝不覆盖已有文件。
+
+### 源码与测试文件
+
+- 新增 `include/rule_file.h`、`src/core/rule_file.c`、`tests/test_rule_file.c`；更新 `CMakeLists.txt` 加入核心库、固件和测试目标。
+- 更新 `include/platform/stm32h750_bringup.h`、`src/platform/stm32h750/tf_card_fatfs_stm32.c`、`cube_mx/Core/Src/main.c`，加入 TF 缺失创建、文件大小/读取上限、RuleTask reload 等待和 `g_rule_file_*` 诊断变量。
+- 用户审查发现第一次补丁把未使用的 `config_path` 误插入 `stm32h750_tf_append_file_locked()`；已删除并确认该变量只在 RuleFile 创建函数中使用。随后构建通过。
+
+### 已完成验证
+
+- `git diff --check` 通过。
+- 主机 CMake/Ninja 构建通过；CTest `14/14` 全部通过，新增 `rule_file` 测试覆盖有效文件、缺失必填字段、非法阈值、非法时序及候选不变性。
+- `./scripts/verify.sh` 通过；STM32 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf` 已重新链接，FLASH=`77868 B / 128 KB = 59.41%`，RAM_D1=`231144 B / 512 KB = 44.09%`。
+- 定向 `nm/objdump` 已确认：`rule_file_parse_v1` 存在 256 字节上限和完整字段校验；`rule_file_load_from_tf` 先 `stm32h750_tf_file_size_locked`，缺失走 `stm32h750_tf_ensure_default_rule_file`，超限拒绝，读取后调用纯解析，成功后写入四参数并置位 reload，最多等待 250 次 1 ms；`stm32h750_tf_ensure_default_rule_file` 反汇编确认调用 `f_mkdir`、`f_open(FA_READ/FA_CREATE_NEW)`、`f_write`、`f_close` 和 unlock。
+
+### 当前未完成与下一步
+
+- 本轮尚未烧录，因此 TF 文件实际状态、RuleFile 有效覆盖 QSPI、无效文件保持参数、RuleTask generation/reload、继电器 GPIO 以及顺序 `ping`/`/api/status`/`/api/can/status`/`/api/signals` 现场证据均为“待验证”。烧录后每次 GDB halt 读取必须显式 `monitor resume`。
+
+### 阶段 A 板端验收结果
+
+- OpenOCD/ST-Link 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex` 成功，实际输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压 `3.251976 V`。
+- 首次启动实际读数：TF `g_tf_card_bringup_status=0`、`g_rule_file_load_result=1`（缺失）、`g_rule_file_created=1`、`g_rule_file_size=0`、`g_rule_file_read_len=0`；有效运行参数保持 QSPI/编译默认 `42434/42432/1000/1500`，未阻断启动。RuleFile 创建函数的目标路径在同一 `fs_mutex` 下显式 `f_mkdir("/config")`，随后使用 `FA_CREATE_NEW`，不覆盖已有文件。
+- 用既有单规则 HTTP 接口把 QSPI 当前记录写为 `42435/42433/1100/1600`，POST 实际返回 HTTP 200、generation=3，随后 GET 读回相同值。复位后有效 `/config/rule.conf` 读取 `75` 字节：`g_rule_file_load_result=0`、`created=0`、`size=75`、`read_len=75`；最终运行参数回到 `42434/42432/1000/1500`，证明有效 RuleFile 优先覆盖非默认 QSPI 参数。
+- 同次精确 ELF 地址读取：`g_rule_task_config_generation=2`、`g_rule_task_config_reload=0`、`g_rule_task_config_load_count=2`、`g_rule_task_config_result=0`、`g_rule_task_started=1`；TF mount/mkdir/read/open/lock 结果均为 0，runtime DBC `generation=1/result=0`，W25Q128 `config_load_result=0/load_count=1/addr=0x00FFE000/sequence=7`。RuleTask 外部输入为 marker=42434 时 `rule_matched=1/safe_active=0/relay1=1/relay2=0/GPIOE ODR=0x80`。
+- 复位后顺序网络回归实际通过：`ping -c 2 -S 192.168.1.100 192.168.1.88` 为 2/2；`GET /api/status`、`GET /api/can/status`、`GET /api/signals` 均 HTTP 200。状态 API 为 W5500 `status=0/link=1/version=4/phycfgr=191`、TF `status=0`、QSPI `status=0`；CAN API 为 `tx=107/rx=1046/errors=0/busOff=0/tec=0/rec=0/sendResult=0`；signals 返回外部 `Can2Data.marker=42434`、`sequence=4660`。
+- 每次 GDB halt 读取后均执行了 `monitor resume`，再进行 HTTP；读取结束后 OpenOCD 服务已关闭。一次复位命令中对已运行目标重复发送 `monitor resume` 曾出现 `not halted/context restore failed`，未用于读数结论；后续按 `monitor reset run` 后 detach、等待，再单独 halt/read/resume 完成验证。
+- 无效文件未通过真实 TF 输入注入：没有新增 HTTP 写接口，也没有篡改 TF。`rule_file` 主机 CTest 已覆盖有效文件、缺失字段、非法阈值、非法时序及候选不变；板端无效 RuleFile 行为记录为“未注入/未验证”，不宣称现场通过。
+- 阶段 A 完成边界：有效 RuleFile v1、缺失文件安全创建、有效覆盖 QSPI、RuleTask reload/GPIO、OpenOCD、反汇编、主机测试和顺序 HTTP/CAN 回归均已完成；多规则及其他阶段目标不在本轮。
