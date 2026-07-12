@@ -69,6 +69,7 @@ int can2_analyzer_poll(void);
 int can2_analyzer_receive(void);
 int can2_analyzer_decode_pending(void);
 int can2_analyzer_rx_queue_init(void);
+int can2_analyzer_tx_queue_init(void);
 size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
 size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity);
 int tf_card_bringup_run(void);

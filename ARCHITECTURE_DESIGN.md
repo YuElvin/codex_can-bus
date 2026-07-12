@@ -235,7 +235,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、CanDecodeTask、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；外部 CAN RX 深度 8 队列、W5500 mutex、DBC mutex、active DBC reload 窄命令已烧录验证；CAN TX 和通用配置队列待实现 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、CanDecodeTask、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；外部 CAN RX 深度 8 队列、CAN TX 深度 1 队列、W5500 mutex、DBC mutex、active DBC reload 窄命令已烧录验证；通用配置队列待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
@@ -265,6 +265,6 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 烧录后优先用 ST-Link 全局变量确认各模块状态，再结合外部工具验证。
 - `CONVERSATION_SUMMARY.md` 必须记录每次关键修改、问题点、验证命令和结果。
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
-## 本轮验证补充：W5500 与 HTTP 最小服务边界
+## 本轮验证补充：W5500、HTTP 与 CAN TX 队列边界
 
-W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；尚未引入通用 CAN/配置队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 DbcTask 队列现场 `queue_ready=1/enqueue=1/drop=0`、`request=1/complete=1/result=0`，runtime generation=2；ping 2/2，`/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200。CANtest 接收软件重启后可见开发板数据，此前未显示不作为板端 TX 故障。
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；CAN2 周期任务将固定 `0x321` 帧投递到深度 1 TX 队列，现有 `CanDecodeTask` 消费后调用 `can_port_send`，不新增任务栈；通用配置队列仍未引入。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TX 队列现场 `ready=1`、入队/出队 `0x2c/0x2c`、drop=0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`；RX 队列 `0x104/0x104/drop=0`。顺序 ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。

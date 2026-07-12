@@ -54,12 +54,17 @@ volatile uint32_t g_can2_rx_queue_drop_count;
 volatile uint32_t g_can2_rx_queue_dequeue_count;
 volatile uint32_t g_can2_decode_task_started;
 volatile uint32_t g_can2_decode_task_loop_count;
+volatile uint32_t g_can2_tx_queue_ready;
+volatile uint32_t g_can2_tx_queue_enqueue_count;
+volatile uint32_t g_can2_tx_queue_drop_count;
+volatile uint32_t g_can2_tx_queue_dequeue_count;
 
 static Stm32FdcanContext g_can2_ctx;
 static CanPort g_can2_port;
 static SignalCache g_can2_signal_cache;
 static SignalCache g_can2_tx_self_test_signal_cache;
 static QueueHandle_t g_can2_rx_queue;
+static QueueHandle_t g_can2_tx_queue;
 
 static const CanFrame k_fd_probe_frame = {
   .id = 0x18ff50e5u,
@@ -309,6 +314,14 @@ int can2_analyzer_receive(void) {
 int can2_analyzer_decode_pending(void) {
   CanFrame rx;
 
+  while (g_can2_tx_queue != NULL && xQueueReceive(g_can2_tx_queue, &rx, 0u) == pdPASS) {
+    ++g_can2_tx_queue_dequeue_count;
+    g_can2_send_result = can_port_send(&g_can2_port, &rx);
+    if (g_can2_send_result == CAN_PORT_OK) {
+      decode_can2_frame(&rx, true);
+    }
+  }
+
   while (g_can2_rx_queue != NULL && xQueueReceive(g_can2_rx_queue, &rx, 0u) == pdPASS) {
     ++g_can2_rx_queue_dequeue_count;
     decode_can2_frame(&rx, false);
@@ -322,6 +335,12 @@ int can2_analyzer_rx_queue_init(void) {
   return g_can2_rx_queue_ready == 1u ? 0 : 1;
 }
 
+int can2_analyzer_tx_queue_init(void) {
+  g_can2_tx_queue = xQueueCreate(1u, sizeof(CanFrame));
+  g_can2_tx_queue_ready = g_can2_tx_queue != NULL ? 1u : 0u;
+  return g_can2_tx_queue_ready == 1u ? 0 : 1;
+}
+
 int can2_analyzer_poll(void) {
   CanFrame tx = k_can2_analyzer_frame;
 
@@ -330,9 +349,12 @@ int can2_analyzer_poll(void) {
   tx.data[3] = (uint8_t)(g_can2_tx_sequence >> 8);
   ++g_can2_tx_sequence;
 
-  g_can2_send_result = can_port_send(&g_can2_port, &tx);
-  if (g_can2_send_result == CAN_PORT_OK) {
-    decode_can2_frame(&tx, true);
+  if (g_can2_tx_queue == NULL || xQueueSend(g_can2_tx_queue, &tx, 0u) != pdPASS) {
+    ++g_can2_tx_queue_drop_count;
+    g_can2_send_result = CAN_PORT_ERROR;
+  } else {
+    ++g_can2_tx_queue_enqueue_count;
+    g_can2_send_result = CAN_PORT_OK;
   }
   (void)can2_analyzer_receive();
   return g_can2_send_result == CAN_PORT_OK ? 0 : 1;
