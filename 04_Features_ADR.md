@@ -9,7 +9,7 @@
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
-| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 已用深度 1 命令队列验证，通用 CAN/配置队列待实现 |
+| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；外部 CAN RX 已用深度 8 队列交给 CanDecodeTask；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 已用深度 1 命令队列验证，CAN TX/通用配置队列待实现 |
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；完整规则与通用配置仍待实现 |
@@ -82,3 +82,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-015：DbcTask reload 使用深度 1 命令队列
 
 为形成最小任务通信闭环，现有 HTTP active DBC reload 请求改为投递到深度 1 的 FreeRTOS 队列，由 `DbcTask` 单消费者取出后调用既有加锁加载函数。队列满或未初始化时记录丢弃并沿用 HTTP 有限等待失败语义；不引入通用消息总线，也不改变文件、运行态快照或 API 字段。已烧录验证 `queue_ready=1/enqueue=1/drop=0`、`request=1/complete=1/result=0`。
+
+### ADR-016：外部 CAN RX 使用固定深度队列交给 CanDecodeTask
+
+为完成阶段 7 的最小 CAN 任务通信边界，CAN2 周期任务只负责从 FDCAN2 FIFO 读取外部帧并投递到深度 8 的 `CanFrame` 队列；独立 `CanDecodeTask` 每 10 ms 消费队列并执行既有 DBC mutex 保护下的解码和外部 `SignalCache` 更新。TX self-test 仍在 CAN2 周期任务内使用独立缓存，不能替代外部 RX 证据。队列满时只计数丢弃，不阻塞 CAN2 任务；已烧录验证入队/出队 `413/413`、丢弃 `0`、外部 RX decode `413`、decode errors `0`。本 ADR 不引入 TX 队列、IRQ 接收或通用消息总线。

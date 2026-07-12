@@ -20,6 +20,9 @@
 - L-018：DBC 活动文件切换前必须重新从 TF 读回候选并复用 portable parser 校验；无效候选只返回错误，不触发 `/dbc/active.dbc` 替换。最小阶段先保留候选文件，使用 `/dbc/active.write.tmp` + `/dbc/active.prev.dbc` 保护旧活动文件。
 - L-019：运行态 active DBC 加载要解析到非活动槽，只有 parser 返回有效后才切换 active 指针、slot 和 generation；reload 失败或无效文件不能清空既有有效快照。双槽 `DbcDatabase` 会显著增加 RAM_D1，本轮从 25.12% 升到 34.91%，后续接信号缓存前必须继续复查内存。
 - L-020：CAN 解码验证必须区分来源：成功发送的周期诊断帧可作为 TX self-test 验证 active DBC→decoder→`SignalCache`，不能替代外部 CANtest→FDCAN2_RX 验证；分别读取 `g_can2_dbc_tx_self_test_frame_count` 和 `g_can2_dbc_rx_frame_count`。
+
+- L-021：新增 FreeRTOS 任务前必须按 `configTOTAL_HEAP_SIZE` 核对任务栈总量；本轮新 CanDecodeTask 使用 1024 words 栈会在真实启动时触发 `Error_Handler()`，改为 512 words 后才完成任务创建和现场运行验证。队列任务必须同时记录 ready、enqueue、dequeue、drop，不能只凭任务 started 宣称解耦成功。
+- L-022：CAN RX 队列拆分后仍必须保持 TX self-test 缓存与外部 RX 缓存隔离；现场验收要同时看队列入/出队、`g_can2_dbc_rx_frame_count`、decode errors 和 `/api/signals`，不能用 TX 计数代替外部 RX。
 - L-021：外部 CAN 解码验收至少要连续两次读取并确认 `g_can2_dbc_rx_frame_count`、matched 与 signal_updates 同步增长，同时核对 last RX ID/DLC；单次静态计数不能证明持续外部输入。
 - L-022：在当前 CAN2 单写者、W5500 单读者阶段，HTTP 读取 SignalCache 时用短 FreeRTOS 临界区复制固定小快照；不要直接序列化正在被 CAN2 任务更新的缓存结构。
 - L-023：最小 CSV 可复用同一 `can2_signal_cache_copy()` 快照和 FatFs mutex；空文件只写一次表头，后续在 `f_lseek(f_size())` 后追加。验收必须连续读取 `g_tf_csv_write_count/g_tf_csv_write_result/g_tf_csv_write_len/g_tf_csv_file_size`，同时确认 CAN RX、匹配和信号更新继续增长。

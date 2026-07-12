@@ -33,7 +33,7 @@
 ## 当前阻断项
 
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
-- FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，但尚未引入 CAN 通用队列或通用配置队列；HTTP 仍是 socket0 单连接最小实现。ConfigTask 现串行执行显式 QSPI 诊断和单规则 QSPI 保存，但不构成通用配置服务。
+- FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask；尚未引入 CAN TX 队列或通用配置队列。HTTP 仍是 socket0 单连接最小实现。ConfigTask 现串行执行显式 QSPI 诊断和单规则 QSPI 保存，但不构成通用配置服务。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload 及 QSPI 保存成功后的自动 reload 已现场验证。ST-Link 写入的 pending 候选参数在 ConfigTask 保存读回成功前不得改变 RuleTask 运行态；完整规则文件、HTTP 控制仍未实现，不得将该诊断入口表述为完整规则管理功能。
 - 阶段 12 稳定性基线已完成：当前固件重新烧录 Verify 通过，两次任务计数增长，关键模块状态为 0，ping 与三个只读 API 串行返回 HTTP 200；本轮外部 CAN RX 为 0，不能作为外部 RX 验证。
