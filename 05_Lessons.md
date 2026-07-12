@@ -46,3 +46,4 @@
 - L-040：通用配置队列的最小边界可以保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内快照为固定 `ConfigCommand` 后投递到深度 2 队列，再由单消费者执行诊断或规则保存；验收必须同时读取 `ready/enqueue/dequeue/drop` 和实际命令结果。本轮两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存成功，但不能把队列消费成功表述为 QSPI diagnostic 成功。
 - L-041：ELF 没有 debug symbols 时，GDB 直接 `set var` 可能只得到 `unknown type` 且不改变目标内存；必须使用 ELF 的精确符号地址和 `set *(unsigned int*)address=value`，并在每次 halt 读取后显式 `monitor resume`。本轮第一次 diagnostic 请求因此未生效，第二次精确地址写入才证明队列入队/出队。
 - L-042：配置队列与底层存储结果必须分层记录。本轮 `g_config_queue_ready=1`、两类命令均入队/出队且 drop=0；规则保存 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`save_result=0`；但 diagnostic 命令被消费后仍返回 `0xffffffff`、`g_w25q128_erase_count=0`，该 QSPI diagnostic 底层失败待后续独立复核，禁止伪装成已验证。
+- L-043：HTTP 配置写入应复用已有 pending/ConfigTask/RuleTask 边界。板端验证必须同时看 HTTP 200、ConfigTask enqueue/dequeue/drop、QSPI save result/count、RuleTask generation/reload 和复位后的 load result；仅返回 HTTP 200 不能证明持久化完成。当前单连接 socket0 下，GET/POST 请求必须顺序执行。

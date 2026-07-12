@@ -95,3 +95,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-018：ConfigTask 使用固定深度命令队列
 
 为完成阶段 7 的最小配置任务通信边界，保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内转换为 `ConfigCommand`，投递到深度 2 队列，再由同一 ConfigTask 单消费者执行 QSPI 诊断或单规则保存。命令包含规则候选快照，避免消费时读取变化中的 pending 字段；队列满只计数丢弃并保留原请求。已烧录验证两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存结果为 0。该 ADR 不定义多记录配置文件、HTTP API、CRUD 或通用消息总线；本轮底层 QSPI 诊断返回失败，不能将其计为诊断功能成功。
+
+### ADR-019：单规则 HTTP 配置复用 ConfigTask 保存边界
+
+新增 `GET /api/rule/config` 和 `POST /api/rule/config`，POST 只接受已有单规则的 `onThreshold`、`offThreshold`、`delayMs`、`timeoutMs` 四个整数。HTTP 任务写入 pending 候选并置位兼容保存请求，实际 QSPI 双槽保存仍由 ConfigTask 深度 2 队列执行，成功后由 RuleTask reload；HTTP 等待保存和 reload 完成后才返回 200，非法关系返回 400，失败返回 500。本 ADR 不宣称规则文件、多规则、CRUD 或通用配置事务；本轮已烧录验证 HTTP 读写、QSPI 保存、RuleTask generation 和复位加载。

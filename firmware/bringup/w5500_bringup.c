@@ -10,6 +10,7 @@
 #include "task.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern SPI_HandleTypeDef hspi2;
@@ -85,6 +86,18 @@ extern volatile uint32_t g_can2_rec;
 extern volatile uint32_t g_can2_send_result;
 extern volatile uint32_t g_can2_poll_count;
 extern volatile uint32_t g_w25q128_jedec_id;
+extern volatile uint32_t g_rule_task_config_on_threshold;
+extern volatile uint32_t g_rule_task_config_off_threshold;
+extern volatile uint32_t g_rule_task_config_delay_ms;
+extern volatile uint32_t g_rule_task_config_timeout_ms;
+extern volatile uint32_t g_rule_task_config_pending_on_threshold;
+extern volatile uint32_t g_rule_task_config_pending_off_threshold;
+extern volatile uint32_t g_rule_task_config_pending_delay_ms;
+extern volatile uint32_t g_rule_task_config_pending_timeout_ms;
+extern volatile uint32_t g_rule_task_config_reload;
+extern volatile uint32_t g_rule_task_config_result;
+extern volatile uint32_t g_rule_task_config_generation;
+extern volatile uint32_t g_rule_task_config_save_request;
 
 #define W5500_S0_REG_BLOCK 0x01u
 #define W5500_S0_TX_BLOCK 0x02u
@@ -125,6 +138,7 @@ extern volatile uint32_t g_w25q128_jedec_id;
 #define W5500_HTTP_PATH_DBC_ACTIVE 5u
 #define W5500_HTTP_PATH_DBC_RUNTIME 6u
 #define W5500_HTTP_PATH_SIGNALS 7u
+#define W5500_HTTP_PATH_RULE_CONFIG 8u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
@@ -405,6 +419,18 @@ static size_t build_signals_body(char *body, size_t len) {
   const size_t count = can2_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
   g_w5500_http_signals_count = (uint32_t)count;
   return signal_api_build_json(entries, count, body, len);
+}
+
+static size_t build_rule_config_body(char *body, size_t len) {
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"onThreshold\":%lu,\"offThreshold\":%lu,"
+                          "\"delayMs\":%lu,\"timeoutMs\":%lu,\"generation\":%lu}}",
+                          (unsigned long)g_rule_task_config_on_threshold,
+                          (unsigned long)g_rule_task_config_off_threshold,
+                          (unsigned long)g_rule_task_config_delay_ms,
+                          (unsigned long)g_rule_task_config_timeout_ms,
+                          (unsigned long)g_rule_task_config_generation);
 }
 
 static const char *skip_http_space(const char *text) {
@@ -760,6 +786,80 @@ static int http_send_json_error(uint16_t code, const char *error_code, const cha
   return http_send_response(code, "application/json", body, body_len);
 }
 
+static void http_record_request(uint32_t path_code, uint16_t code);
+
+static bool http_parse_rule_value(const char *body, const char *key, uint32_t *value) {
+  const char *entry = strstr(body, key);
+  char *end = NULL;
+  unsigned long parsed;
+
+  if (entry == NULL) {
+    return false;
+  }
+  entry += strlen(key);
+  while (*entry == ' ' || *entry == '\t' || *entry == ':') {
+    ++entry;
+  }
+  parsed = strtoul(entry, &end, 10);
+  if (end == entry || parsed > 0xfffffffful) {
+    return false;
+  }
+  *value = (uint32_t)parsed;
+  return true;
+}
+
+static int http_handle_rule_config(const char *body, size_t body_len) {
+  uint32_t on_threshold;
+  uint32_t off_threshold;
+  uint32_t delay_ms;
+  uint32_t timeout_ms;
+  const uint32_t generation = g_rule_task_config_generation;
+
+  if (body_len == 0u || body_len >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
+      !http_parse_rule_value(body, "\"onThreshold\"", &on_threshold) ||
+      !http_parse_rule_value(body, "\"offThreshold\"", &off_threshold) ||
+      !http_parse_rule_value(body, "\"delayMs\"", &delay_ms) ||
+      !http_parse_rule_value(body, "\"timeoutMs\"", &timeout_ms) ||
+      on_threshold <= off_threshold || delay_ms > timeout_ms) {
+    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 400u);
+    return http_send_json_error(400u, "invalid_rule_config", "invalid rule config");
+  }
+
+  g_rule_task_config_pending_on_threshold = on_threshold;
+  g_rule_task_config_pending_off_threshold = off_threshold;
+  g_rule_task_config_pending_delay_ms = delay_ms;
+  g_rule_task_config_pending_timeout_ms = timeout_ms;
+  g_rule_task_config_result = 0xffffffffu;
+  g_rule_task_config_save_request = 1u;
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_save_request == 0u && g_rule_task_config_result != 0xffffffffu) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (g_rule_task_config_save_request != 0u || g_rule_task_config_result != 0u) {
+    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 500u);
+    return http_send_json_error(500u, "rule_config_save_failed", "rule config save failed");
+  }
+  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+    if (g_rule_task_config_generation != generation && g_rule_task_config_reload == 0u) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  if (g_rule_task_config_generation == generation || g_rule_task_config_reload != 0u) {
+    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 500u);
+    return http_send_json_error(500u, "rule_config_reload_failed", "rule config reload pending");
+  }
+  const size_t response_len = build_rule_config_body(g_http_response_body,
+                                                     sizeof(g_http_response_body));
+  if (response_len >= sizeof(g_http_response_body)) {
+    return 1;
+  }
+  http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+}
+
 static void http_record_request(uint32_t path_code, uint16_t code) {
   g_w5500_http_request_count++;
   g_w5500_http_last_path = path_code;
@@ -873,6 +973,31 @@ static int http_handle_request(uint16_t rx_size) {
   g_w5500_http_last_rx_size = rx_size;
 
   const char *header_end = strstr(request, "\r\n\r\n");
+  if (request_path_is(request, "POST", "/api/rule/config")) {
+    if (header_end == NULL) {
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    const size_t body_offset = (size_t)((header_end + 4u) - request);
+    size_t content_length = 0u;
+    if (!http_parse_content_length(request, header_end, &content_length) ||
+        content_length == 0u || content_length >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
+        (size_t)rx_size < body_offset + content_length ||
+        body_offset + content_length >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
+        body_offset + content_length > read_len) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid rule config body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    request[body_offset + content_length] = '\0';
+    return http_handle_rule_config(&request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
   if (request_path_is(request, "POST", "/api/dbc/upload")) {
     if (header_end == NULL) {
       if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
@@ -980,6 +1105,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_SIGNALS;
     body_len = build_signals_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/rule/config")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_RULE_CONFIG;
+    body_len = build_rule_config_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {

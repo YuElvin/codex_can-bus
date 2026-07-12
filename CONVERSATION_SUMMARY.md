@@ -1847,6 +1847,15 @@
 - 问题点与边界：第一次 GDB 读取未带类型转换，只得到 `unknown type` 提示，未作为读数；随后使用 `(unsigned int)` 精确读取。未新增任务，因此未重复触发上次 1024-word 栈导致 `Error_Handler()` 的问题。通用配置队列、IRQ/semaphore CAN 接收、完整多任务架构和 LogTask recovery 仍未完成/未验证；禁止人为破坏 TF 文件触发 recovery。
 - 本轮同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本文件。下一步为最终差异检查、提交并推送；完成后停止，等待新的独立会话。
 
+## 2026-07-13 单规则 HTTP 配置闭环（已完成）
+
+- 本轮选择当前板端可闭环的最小规则管理功能：新增 `GET /api/rule/config` 与 `POST /api/rule/config`，只控制已有单规则的 `onThreshold`、`offThreshold`、`delayMs`、`timeoutMs`；HTTP 不直接调用 QSPI，而是复用 pending 候选、ConfigTask 深度 2 队列、QSPI 双槽保存和 RuleTask reload。
+- `git diff --check`、`./scripts/verify.sh` 通过，host CTest `13/13`；STM32 固件编译成功，FLASH=`76560 B / 128 KB = 58.41%`、RAM_D1=`231136 B / 512 KB = 44.09%`。ELF 反汇编确认新增 HTTP 配置响应/路由，ConfigTask 仍先 `xQueueSend/xQueueReceive` 后调用 `w25q128_rule_config_save`。
+- OpenOCD/ST-Link 烧录真实输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压约 `3.251976 V`。顺序 ping 为 `2/2`；GET 初始返回 `42434/42432/1000/1500/generation=1`；POST `42435/42433/1100/1600` 返回 HTTP 200、generation=2，随后 GET 读回相同参数。
+- GDB 精确 ELF 地址读数：active 参数为 `42435/42433/1100/1600`，QSPI save result/count=`0/1`，ConfigTask enqueue/dequeue/drop=`1/1/0`，RuleTask generation/reload=`2/0`。复位后仍加载该非默认参数，`config_load_result=0`、RuleTask generation/load=`1/1`，证明跨复位持久化。
+- 随后通过 HTTP 已恢复默认 `42434/42432/1000/1500`；`/api/can/status` 返回 HTTP 200，`errors=0`、`busOff=0`、`tec=0`、`rec=0`、`sendResult=0`。本轮未人为破坏 TF 文件，LogTask recovery 仍未验证。
+- 边界明确：本功能是单规则 HTTP/QSPI/RuleTask 闭环，不是规则文件、多规则、CRUD 或完整配置管理；先前 ConfigTask diagnostic 底层 `0xffffffff/erase_count=0` 问题本轮未混入修复，仍待独立复核。
+
 ## 2026-07-13 阶段 7 ConfigTask 通用配置命令队列边界（已完成，QSPI diagnostic 底层失败待复核）
 
 - 本轮从已推送基线 `56469b2 Add CAN TX queue boundary` 继续。实际目录为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`，起始工作树干净。按治理要求先实查 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、本文件及 `git status/log`；当前阶段 7 的最小未完成项为通用配置队列，LogTask recovery 因禁止人为破坏 TF 文件而继续不选。

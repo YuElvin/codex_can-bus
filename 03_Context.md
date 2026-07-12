@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（通用 ConfigTask 命令队列边界已完成；CAN TX/RX 队列、DbcTask reload 队列、TfTask 一次性初始化边界和阶段 12 稳定性基线已完成；LogTask recovery 分支仍未验证）
+更新时间：2026-07-13（单规则 HTTP 配置闭环已完成并跨复位验证；已恢复默认参数；规则文件/多规则仍未实现；LogTask recovery 分支仍未验证）
 
 ## 当前仓库
 
@@ -27,7 +27,7 @@
 | W25Q128 | [客观已验证] | 默认启动只读 JEDEC ID `EF4018`，未触发擦除；保留诊断区 `0x00FFF000` 的显式 ST-Link 擦写读回匹配 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
 | FreeRTOS 基础多任务拆分 | [客观已验证] | TfTask 已烧录接管一次性 TF mount/smoke/default-page 初始化并由 bring-up 有限等待；MonitorTask 已接管 1 s 状态打印；CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送；W5500 状态轮询与 HTTP socket0 轮询已拆为两个 50 ms 任务并由 mutex 串行化 |
-| 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测 |
+| 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测；新增 HTTP GET/POST 单规则配置闭环并跨复位验证 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载、无效请求拒绝及候选/运行态隔离均已 ST-Link 实测 |
 
 ## 当前阻断项
@@ -35,7 +35,7 @@
 - recovery 分支尚未在实机触发：先前读到 `/log/signal.csv` `FR_DISK_ERR=1`，但最终固件启动时大小读取返回 0，因此按策略选择默认路径。禁止人为破坏原文件以强行覆盖该分支；它保留为待异常条件复验项，不阻断已完成的 LogTask 默认路径验收。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；通用配置队列仍未引入。HTTP 仍是 socket0 单连接最小实现。ConfigTask 现串行执行显式 QSPI 诊断和单规则 QSPI 保存，但不构成通用配置服务。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
-- 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload 及 QSPI 保存成功后的自动 reload 已现场验证。ST-Link 写入的 pending 候选参数在 ConfigTask 保存读回成功前不得改变 RuleTask 运行态；完整规则文件、HTTP 控制仍未实现，不得将该诊断入口表述为完整规则管理功能。
+- 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。HTTP POST 通过 ConfigTask 队列保存并跨复位加载，随后已恢复默认 `42434/42432/1000/1500`。完整规则文件、多规则和 CRUD 仍未实现，不得将该单规则接口表述为完整规则管理功能。
 - 阶段 12 稳定性基线已完成：当前固件重新烧录 Verify 通过，两次任务计数增长，关键模块状态为 0，ping 与三个只读 API 串行返回 HTTP 200；本轮外部 CAN RX 为 0，不能作为外部 RX 验证。
 - CANtest 现场状态已补充：开始发送前曾未观察到开发板数据；开始发送后连续 HTTP 读数为 `tx=53→68`、`rx=240→397`、`errors=0`、`tec=0`、`rec=0`、`busOff=0`、`sendResult=0`、`poll=52→67`。该结果作为当前外部 CAN RX 与周期 TX/ACK 证据，不表述为代码修复；本轮无源码修改。
 - CANtest 后续确认：用户重启 CAN 接收软件后已实际看到开发板数据，说明此前未显示是接收软件的显示/会话状态，不是板端 TX 故障；此前 `tx=9→17`、`sendResult=0`、`errors=0` 与重启后的可见结果一致支持该判断。
@@ -63,3 +63,10 @@
 4. 后续规则阶段仅在实际需要时再考虑规则文件来源；不把当前 ST-Link 单规则 reload 或已验证的 QSPI 保存自动 reload 入口直接扩展为未验证的 CRUD/API。
 5. ConfigTask 已完成单规则 QSPI 双槽保存、读回、复位加载、候选/运行态隔离、成功自动 reload 及当前两类命令的统一队列边界；后续如扩展为通用配置，仍需定义多记录模型与正式命令来源，再引入文件读写或 HTTP，不能把当前单规则双槽表述为完整配置管理。
 6. TfTask 当前只负责一次性 mount/smoke/default-page 初始化；TfTask 完成后由 bring-up 以 1 ms `vTaskDelay` 等待，最多 5000 ms，超时进入 `Error_Handler()`，不改变 recovery 选择语义。
+
+## 本轮已完成：单规则 HTTP 配置闭环
+
+- 新增 `GET /api/rule/config` 与 `POST /api/rule/config`，仅控制已有单规则四个参数；有效 POST 经 ConfigTask 深度 2 队列执行 QSPI 双槽保存，成功后 RuleTask reload，HTTP 等待完成后返回 200。
+- 实机顺序证据：重新烧录 Verify 通过；ping 2/2；GET 初始 `42434/42432/1000/1500/generation=1`；POST `42435/42433/1100/1600` 返回 200、generation=2；GDB 读到 QSPI save result/count=`0/1`、ConfigTask enqueue/dequeue/drop=`1/1/0`、RuleTask generation/reload=`2/0`。
+- 复位后仍加载 `42435/42433/1100/1600`，`config_load_result=0`、RuleTask generation/load=`1/1`；随后通过 HTTP 已恢复默认 `42434/42432/1000/1500`，`/api/can/status` 仍为 200 且错误、bus-off、TEC、REC、sendResult 均为 0。
+- 本功能仍不是规则文件、多规则或完整 CRUD；本轮未人为破坏 TF 文件，LogTask recovery 仍未验证。

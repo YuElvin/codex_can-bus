@@ -235,11 +235,11 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、CanDecodeTask、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；外部 CAN RX 深度 8 队列、CAN TX 深度 1 队列、W5500 mutex、DBC mutex、active DBC reload 窄命令和 ConfigTask 深度 2 命令队列已烧录验证；完整配置服务仍待实现 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | 既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界已烧录验证；单规则 HTTP 配置已复用 ConfigTask 完成闭环；完整配置服务仍待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
-| 11 | 规则/继电器 | 部分已验证 | 最小固定高滞回规则已烧录验证：`on=42434/off=42432`，1000 ms 连续匹配后 PE7 高、42433 保持、42432 释放，PE8 始终低，停帧超过 1500 ms 两路安全回低；ST-Link 单规则 reload 已验证失配、恢复与失败保留旧规则；完整文件配置待做 |
+| 11 | 规则/继电器 | 部分已验证 | 固定高滞回、延时、超时、单规则 QSPI 双槽和 RuleTask reload 已验证；新增 `GET/POST /api/rule/config` 已验证 HTTP→ConfigTask→QSPI→RuleTask→复位加载；规则文件、多规则仍待做 |
 | 12 | 稳定性测试 | 待做 | 长跑、拔卡、断网、总线关闭、大文件上传 |
 
 ## 13. 风险与规避
@@ -268,6 +268,12 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 ## 本轮验证补充：W5500、HTTP 与 CAN TX 队列边界
 
 W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；CAN2 周期任务将固定 `0x321` 帧投递到深度 1 TX 队列，现有 `CanDecodeTask` 消费后调用 `can_port_send`，不新增任务栈；ConfigTask 另有深度 2 配置命令队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TX 队列现场 `ready=1`、入队/出队 `0x2c/0x2c`、drop=0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`；RX 队列 `0x104/0x104/drop=0`。顺序 ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。
+
+## 本轮验证补充：单规则 HTTP 配置闭环
+
+本轮新增 `GET /api/rule/config` 和 `POST /api/rule/config`，只控制已有单规则四个参数，不改变 QSPI 地址布局、记录格式或任务数量。POST 校验阈值和时间关系，写入 pending 候选后等待 ConfigTask 队列完成 QSPI 双槽保存，再等待 RuleTask reload 完成后返回 200；这不是规则文件、多规则或完整 CRUD。
+
+重新烧录输出 `Programming Finished`、`Verified OK`，目标电压约 `3.251976 V`。顺序 ping 为 2/2；GET 初始返回 `42434/42432/1000/1500/generation=1`；POST `42435/42433/1100/1600` 返回 200、generation=2，GET 读回相同参数。GDB 读数为 QSPI save result/count=`0/1`、ConfigTask enqueue/dequeue/drop=`1/1/0`、RuleTask generation/reload=`2/0`；复位后非默认参数仍在，config load result=0、RuleTask generation/load=`1/1`。随后恢复默认参数，`/api/can/status` 仍为 200 且 errors、bus-off、TEC、REC、sendResult 均为 0。LogTask recovery 未触发。
 
 ## 本轮验证补充：ConfigTask 通用命令队列边界
 

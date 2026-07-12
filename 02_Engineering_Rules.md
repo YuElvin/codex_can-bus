@@ -48,4 +48,4 @@ cmake --build build/stm32h750
 - 每轮结束前更新 `CONVERSATION_SUMMARY.md`。
 - 当前快照放 `03_Context.md`，功能/决策状态放 `04_Features_ADR.md`，可复用经验放 `05_Lessons.md`。
 - 如果本轮只改文档，没有编译，必须在记录里写明未编译和未反汇编原因。
-
+- HTTP 配置写入必须经过已有任务队列并等待持久化/运行态结果；不能从 HTTP 任务直接调用 QSPI 写函数。
