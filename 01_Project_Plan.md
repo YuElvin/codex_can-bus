@@ -46,4 +46,4 @@
 | DBC 上传过大或半包 | 当前仅支持 1024 字节以内、单连接完整请求体；body 未收全时等待下一轮轮询，不作为完整上传系统；候选文件替换采用 `/dbc/upload.write.tmp` -> `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc` |
 | DBC 解码验证边界 | 当前 active DBC 已接入 CAN2 解码和 `SignalCache`；TX self-test 与外部 CANtest `0x321` RX 均已验证，诊断继续保留来源计数，不能混写两类证据 |
 | DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、单个 128 项 `SignalCache` 和 768 B 日志缓冲，RAM_D1 为 38.83%；扩大 parser 上限、缓存或日志前必须复查内存 |
-| QSPI 诊断擦写配置数据 | `0x00FFF000` 已保留为诊断区；单规则备份固定为相邻但独立的 `0x00FFE000`，默认启动不擦写，显式 ST-Link 请求由 ConfigTask 串行执行；通用备份不得使用诊断扇区 |
+| QSPI 诊断擦写配置数据 | `0x00FFF000` 已保留为诊断区；单规则配置使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，默认启动不擦写，显式 ST-Link 请求由 ConfigTask 串行执行；通用备份不得使用诊断扇区 |

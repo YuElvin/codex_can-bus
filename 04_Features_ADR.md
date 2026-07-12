@@ -7,7 +7,7 @@
 | F-001 | W5500 SPI 网络 bring-up | [客观已验证] | 作为当前网络主路径，替代 LAN8720/RMII |
 | F-002 | FDCAN2 外部 CAN 收发 | [客观已验证] | `PB5/PB6` + MCP2562FD + USBCAN-2E-U 是当前外部 CAN 主通道 |
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
-| F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，`0x00FFE000` 已烧录验证单规则记录保存、读回与复位加载 |
+| F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | CAN2 周期任务、W5500 轮询任务、状态打印任务和最小 ConfigTask 已上板复核；ConfigTask 串行执行显式 QSPI 诊断和单规则保存，完整队列/mutex 与通用配置保存待实现 |
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
@@ -28,7 +28,7 @@
 | ADR-008 | 用独立最小 LogTask 替换监控循环直接 CSV 写入，并在启动时一次性选择日志路径 | 已接受，recovery 现场验收待做 |
 | ADR-009 | RuleTask 复用 portable rule_engine，仅从短临界区外部 RX SignalCache 快照集中驱动 PE7/PE8 | 已接受，最小 marker、固定延时/高滞回、手动优先级与单规则 reload 已上板验证 |
 | ADR-010 | 最小 ConfigTask 仅串行执行既有 W25Q128 显式诊断请求 | 已接受，默认零擦写、显式请求擦写读回与任务运行均已上板验证 |
-| ADR-011 | 单规则配置使用独立 QSPI 记录做最小持久化 | 已接受，显式保存、读回校验、非默认配置复位恢复和默认值恢复均已上板验证 |
+| ADR-011 | 单规则配置使用 QSPI 双槽做最小持久化 | 已接受，v1 兼容、交替保存、读回校验、损坏最新槽回退、两槽无效默认保留和复位加载均已上板验证 |
 
 ## 决策记录摘要
 
@@ -66,4 +66,4 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 
 ### ADR-011：单规则配置的最小 QSPI 持久化与安全生效
 
-为直接推进配置备份目标，固定 `0x00FFE000` 为独立 4 KiB 单规则记录扇区，禁止与 `0x00FFF000` 诊断扇区混用。记录仅含 magic、version、四个整数规则参数与 XOR checksum；启动只读加载，`ConfigTask` 收到显式 ST-Link 保存请求后才擦除、写入并读回比较。只有保存函数返回成功时才置位既有 RuleTask reload 请求，保存失败保留旧 engine；不增加 HTTP、TF 文件、CRUD、多规则、队列或通用恢复策略。后续扩展必须定义版本迁移和事务边界。
+为直接推进配置备份目标，`0x00FFE000` 主槽和 `0x00FFD000` 备用槽只保存一条规则，禁止与 `0x00FFF000` 诊断扇区混用。v2 记录含 magic、version、四个整数规则参数、递增 sequence 与 XOR checksum；启动只读选择有效记录中 sequence 最新的一份，保存只擦写另一槽并读回比较。v1 主槽记录仍可加载，首次 v2 保存写入备用槽。目标板已通过仅在验证固件中临时擦除槽的方式确认：最新槽无效时加载较旧有效槽，两槽都无效时保留编译默认配置并报告 load result=2；测试入口已移除。只有保存函数返回成功时才置位既有 RuleTask reload 请求，保存失败保留旧 engine；不增加 HTTP、TF 文件、CRUD、多规则、队列或通用恢复策略。后续扩展必须定义多记录模型和命令来源。
