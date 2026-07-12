@@ -9,7 +9,7 @@
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
-| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；外部 CAN RX 已用深度 8 队列交给 CanDecodeTask，CAN TX 已用深度 1 队列交给现有 CanDecodeTask 发送；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 已用深度 1 命令队列验证，通用配置队列待实现 |
+| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；外部 CAN RX 已用深度 8 队列交给 CanDecodeTask，CAN TX 已用深度 1 队列交给现有 CanDecodeTask 发送；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 和 ConfigTask 两类命令均已有固定深度队列，完整配置服务仍待实现 |
 | F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；默认大小读取失败时选择 recovery 的源码/单测已完成但本次现场未触发；完整规则与通用配置仍待实现 |
@@ -29,6 +29,7 @@
 | ADR-009 | RuleTask 复用 portable rule_engine，仅从短临界区外部 RX SignalCache 快照集中驱动 PE7/PE8 | 已接受，最小 marker、固定延时/高滞回、手动优先级与单规则 reload 已上板验证 |
 | ADR-010 | 最小 ConfigTask 仅串行执行既有 W25Q128 显式诊断请求 | 已接受，默认零擦写、显式请求擦写读回与任务运行均已上板验证 |
 | ADR-011 | 单规则配置使用 QSPI 双槽做最小持久化 | 已接受，v1 兼容、交替保存、读回校验、损坏最新槽回退、两槽无效默认保留和复位加载均已上板验证 |
+| ADR-018 | ConfigTask 使用固定深度命令队列 | 已接受，诊断和单规则保存入口已烧录验证入队/出队；完整配置模型和 HTTP 来源不在本 ADR |
 
 ## 决策记录摘要
 
@@ -90,3 +91,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-017：CAN2 周期发送使用深度 1 TX 队列
 
 为完成阶段 7 的最小发送边界，CAN2 周期任务只生成并投递固定 `0x321` 周期帧到深度 1 的 `CanFrame` TX 队列；复用现有 `CanDecodeTask` 消费该队列并调用 `can_port_send`，实际发送成功后才执行独立 TX self-test 解码。这样不新增任务栈，也不改变 1 s 发送节奏、外部 RX 队列、HTTP/API 或 DBC 语义。队列满时只计数丢弃并返回发送失败。已烧录验证 `ready=1`、入队/出队无丢弃，CAN2 `errors=0/sendResult=0`；本 ADR 不引入通用配置队列或 IRQ 发送。
+
+### ADR-018：ConfigTask 使用固定深度命令队列
+
+为完成阶段 7 的最小配置任务通信边界，保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内转换为 `ConfigCommand`，投递到深度 2 队列，再由同一 ConfigTask 单消费者执行 QSPI 诊断或单规则保存。命令包含规则候选快照，避免消费时读取变化中的 pending 字段；队列满只计数丢弃并保留原请求。已烧录验证两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存结果为 0。该 ADR 不定义多记录配置文件、HTTP API、CRUD 或通用消息总线；本轮底层 QSPI 诊断返回失败，不能将其计为诊断功能成功。

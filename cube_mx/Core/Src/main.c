@@ -36,6 +36,7 @@
 #include "rule_config.h"
 #include "rule_engine.h"
 #include "signal_log_buffer.h"
+#include "queue.h"
 #include "semphr.h"
 #include "task.h"
 
@@ -43,6 +44,18 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum {
+  CONFIG_COMMAND_DIAGNOSTIC = 1u,
+  CONFIG_COMMAND_RULE_SAVE = 2u
+} ConfigCommandType;
+
+typedef struct {
+  uint32_t type;
+  uint32_t on_threshold;
+  uint32_t off_threshold;
+  uint32_t delay_ms;
+  uint32_t timeout_ms;
+} ConfigCommand;
 
 /* USER CODE END PTD */
 
@@ -101,6 +114,12 @@ volatile uint32_t g_monitor_task_started;
 volatile uint32_t g_monitor_task_loop_count;
 volatile uint32_t g_config_task_started;
 volatile uint32_t g_config_task_loop_count;
+volatile uint32_t g_config_queue_ready;
+volatile uint32_t g_config_queue_enqueue_count;
+volatile uint32_t g_config_queue_dequeue_count;
+volatile uint32_t g_config_queue_drop_count;
+volatile uint32_t g_config_task_command_count;
+volatile uint32_t g_config_task_last_command = 0xffffffffu;
 volatile uint32_t g_tf_csv_write_count;
 volatile uint32_t g_tf_csv_write_result = 0xffffffffu;
 volatile uint32_t g_tf_csv_write_len;
@@ -147,6 +166,7 @@ volatile uint32_t g_rule_task_config_result = 0xffffffffu;
 volatile uint32_t g_rule_task_config_load_count;
 volatile uint32_t g_rule_task_config_generation;
 volatile uint32_t g_rule_task_config_save_request;
+static QueueHandle_t g_config_command_queue;
 
 /* USER CODE END PV */
 
@@ -252,7 +272,7 @@ static void bringup_print_status(const char *phase)
   char line[1080];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu cfgqr=%lu cfgqe=%lu cfgqd=%lu cfgdrop=%lu cfgcmd=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -287,6 +307,11 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_tf_task_last_result,
                  (unsigned long)g_monitor_task_started,
                  (unsigned long)g_monitor_task_loop_count,
+                 (unsigned long)g_config_queue_ready,
+                 (unsigned long)g_config_queue_enqueue_count,
+                 (unsigned long)g_config_queue_dequeue_count,
+                 (unsigned long)g_config_queue_drop_count,
+                 (unsigned long)g_config_task_command_count,
                  g_can_bringup_status,
                  (unsigned long)g_can_tx_count,
                  (unsigned long)g_can_rx_count,
@@ -643,38 +668,72 @@ static void monitor_task(void *argument)
   }
 }
 
+static int config_queue_enqueue_pending(void)
+{
+  ConfigCommand command = {0};
+
+  if (g_config_command_queue == NULL) {
+    return 1;
+  }
+
+  if (g_w25q128_diagnostic_request != 0u) {
+    command.type = CONFIG_COMMAND_DIAGNOSTIC;
+    if (xQueueSend(g_config_command_queue, &command, 0u) != pdPASS) {
+      ++g_config_queue_drop_count;
+      return 1;
+    }
+    g_w25q128_diagnostic_request = 0u;
+    ++g_config_queue_enqueue_count;
+  }
+
+  if (g_rule_task_config_save_request != 0u) {
+    command.type = CONFIG_COMMAND_RULE_SAVE;
+    command.on_threshold = g_rule_task_config_pending_on_threshold;
+    command.off_threshold = g_rule_task_config_pending_off_threshold;
+    command.delay_ms = g_rule_task_config_pending_delay_ms;
+    command.timeout_ms = g_rule_task_config_pending_timeout_ms;
+    if (xQueueSend(g_config_command_queue, &command, 0u) != pdPASS) {
+      ++g_config_queue_drop_count;
+      return 1;
+    }
+    g_rule_task_config_save_request = 0u;
+    ++g_config_queue_enqueue_count;
+  }
+
+  return 0;
+}
+
 static void config_task(void *argument)
 {
   (void)argument;
 
   g_config_task_started = 1u;
   for (;;) {
-    if (g_w25q128_diagnostic_request != 0u) {
-      g_w25q128_diagnostic_request = 0u;
-      g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
-      ++g_w25q128_diagnostic_count;
-      bringup_print_status("w25q128_diag");
-    }
-    if (g_rule_task_config_save_request != 0u) {
-      const uint32_t on_threshold = g_rule_task_config_pending_on_threshold;
-      const uint32_t off_threshold = g_rule_task_config_pending_off_threshold;
-      const uint32_t delay_ms = g_rule_task_config_pending_delay_ms;
-      const uint32_t timeout_ms = g_rule_task_config_pending_timeout_ms;
-      int save_result;
+    ConfigCommand command;
 
-      g_rule_task_config_save_request = 0u;
-      save_result = w25q128_rule_config_save(on_threshold,
-                                              off_threshold,
-                                              delay_ms,
-                                              timeout_ms);
-      if (save_result == 0) {
-        g_rule_task_config_on_threshold = on_threshold;
-        g_rule_task_config_off_threshold = off_threshold;
-        g_rule_task_config_delay_ms = delay_ms;
-        g_rule_task_config_timeout_ms = timeout_ms;
-        g_rule_task_config_reload = 1u;
+    (void)config_queue_enqueue_pending();
+    if (xQueueReceive(g_config_command_queue, &command, 0u) == pdPASS) {
+      ++g_config_queue_dequeue_count;
+      ++g_config_task_command_count;
+      g_config_task_last_command = command.type;
+      if (command.type == CONFIG_COMMAND_DIAGNOSTIC) {
+        g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
+        ++g_w25q128_diagnostic_count;
+        bringup_print_status("w25q128_diag");
+      } else if (command.type == CONFIG_COMMAND_RULE_SAVE) {
+        const int save_result = w25q128_rule_config_save(command.on_threshold,
+                                                          command.off_threshold,
+                                                          command.delay_ms,
+                                                          command.timeout_ms);
+        if (save_result == 0) {
+          g_rule_task_config_on_threshold = command.on_threshold;
+          g_rule_task_config_off_threshold = command.off_threshold;
+          g_rule_task_config_delay_ms = command.delay_ms;
+          g_rule_task_config_timeout_ms = command.timeout_ms;
+          g_rule_task_config_reload = 1u;
+        }
+        bringup_print_status("rule_config_save");
       }
-      bringup_print_status("rule_config_save");
     }
     ++g_config_task_loop_count;
     vTaskDelay(pdMS_TO_TICKS(50u));
@@ -742,6 +801,11 @@ static void bringup_default_task(void *argument)
   g_freertos_bringup_complete = 1u;
 
   if (w5500_http_dbc_reload_queue_init() != 0) {
+    Error_Handler();
+  }
+  g_config_command_queue = xQueueCreate(2u, sizeof(ConfigCommand));
+  g_config_queue_ready = g_config_command_queue != NULL ? 1u : 0u;
+  if (g_config_command_queue == NULL) {
     Error_Handler();
   }
 

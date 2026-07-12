@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（CAN TX 队列边界已完成；DbcTask reload 队列、TfTask 一次性初始化边界和阶段 12 稳定性基线已完成；LogTask recovery 分支仍未验证）
+更新时间：2026-07-13（通用 ConfigTask 命令队列边界已完成；CAN TX/RX 队列、DbcTask reload 队列、TfTask 一次性初始化边界和阶段 12 稳定性基线已完成；LogTask recovery 分支仍未验证）
 
 ## 当前仓库
 
@@ -41,6 +41,7 @@
 - CANtest 后续确认：用户重启 CAN 接收软件后已实际看到开发板数据，说明此前未显示是接收软件的显示/会话状态，不是板端 TX 故障；此前 `tx=9→17`、`sendResult=0`、`errors=0` 与重启后的可见结果一致支持该判断。
 - DbcTask 队列边界已烧录验证：新增深度 1 的 reload 命令队列；ST-Link 读数 `queue_ready=1/enqueue=1/drop=0`、`started=1/request=1/complete=1/last_result=0`，任务循环持续增长；`POST /api/dbc/active` 返回 200 且 `runtimeGeneration=2`，保留原 API 和 DBC 语义。
 - CAN TX 队列边界已烧录验证：新增深度 1 的 `CanFrame` 队列；反汇编确认 CAN2 周期任务调用 `xQueueSend`，CanDecodeTask 路径调用 `xQueueReceive` 后再执行 `can_port_send`，实际发送成功才执行 TX self-test 解码。GDB 读数 `tx_queue_ready=1`，入队/出队由 `0x1a/0x1a` 增长到 `0x2c/0x2c`，丢弃为 0；同次 RX 队列为 `0x104/0x104`、丢弃为 0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`。网络顺序回归 `ping=2/2`，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。
+- 通用 ConfigTask 命令队列边界已烧录验证：新增深度 2、元素 20 字节的 `ConfigCommand` 队列；旧 `g_w25q128_diagnostic_request` 和 `g_rule_task_config_save_request` 只作为兼容入口，均先入队再由 ConfigTask 消费。GDB 精确地址读数为 `ready=1`、两次命令累计 `enqueue=2/dequeue=2/drop=0/command=2`；规则保存命令返回 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`save_result=0`。同次网络回归 ping=2/2，三个只读 API 均 HTTP 200，CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，错误和 bus-off 均为 0。注意：本轮诊断命令确实入队并消费，但底层诊断返回 `0xffffffff`、`erase_count=0`，因此只证明队列路径，不证明该次 QSPI 诊断成功。
 
 ## 当前风险
 
@@ -60,5 +61,5 @@
 2. recovery 分支未上板覆盖前，不加入文件轮换、下载、HTTP 配置、重试或队列；未来发生真实默认路径读取失败时再复验该分支。
 3. 后续扩展静态文件服务时再处理目录映射、Content-Type 映射和并发连接，不要把当前 socket0 实现当作完整 Web 服务。
 4. 后续规则阶段仅在实际需要时再考虑规则文件来源；不把当前 ST-Link 单规则 reload 或已验证的 QSPI 保存自动 reload 入口直接扩展为未验证的 CRUD/API。
-5. ConfigTask 已完成单规则 QSPI 双槽保存、读回、复位加载、候选/运行态隔离及成功自动 reload 最小闭环；后续如扩展为通用配置，先定义多记录模型与正式命令来源，再引入队列、文件读写或 HTTP，不能把当前单规则双槽表述为完整配置管理。
+5. ConfigTask 已完成单规则 QSPI 双槽保存、读回、复位加载、候选/运行态隔离、成功自动 reload 及当前两类命令的统一队列边界；后续如扩展为通用配置，仍需定义多记录模型与正式命令来源，再引入文件读写或 HTTP，不能把当前单规则双槽表述为完整配置管理。
 6. TfTask 当前只负责一次性 mount/smoke/default-page 初始化；TfTask 完成后由 bring-up 以 1 ms `vTaskDelay` 等待，最多 5000 ms，超时进入 `Error_Handler()`，不改变 recovery 选择语义。

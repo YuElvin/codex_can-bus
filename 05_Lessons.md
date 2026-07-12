@@ -43,3 +43,6 @@
 - L-037：阶段 7 的最小队列通信应先替换已有单次标志，而不是同时引入通用消息总线；深度 1 的 DbcTask reload 队列可用 `ready/enqueue/drop`、`request/complete/result` 和 runtime generation 共同验收。GDB 读数后必须显式 resume 再执行 HTTP。
 - L-038：CANtest 未显示开发板帧时，若板端 `tx` 持续增长且 `sendResult=0/errors=0`，应先重启接收软件复核会话/显示状态；本轮用户确认重启后可见，不能把接收软件显示问题归因于板端 TX。
 - L-039：在当前 64 KB FreeRTOS heap 和既有任务栈预算下，CAN TX 队列可复用现有 `CanDecodeTask` 消费，不新增任务；用深度 1 `CanFrame` 队列即可验证入队、出队和发送边界。必须把 TX self-test 解码放在实际 `can_port_send` 成功之后，并同时读取 TX/RX 队列 drop 计数。
+- L-040：通用配置队列的最小边界可以保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内快照为固定 `ConfigCommand` 后投递到深度 2 队列，再由单消费者执行诊断或规则保存；验收必须同时读取 `ready/enqueue/dequeue/drop` 和实际命令结果。本轮两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存成功，但不能把队列消费成功表述为 QSPI diagnostic 成功。
+- L-041：ELF 没有 debug symbols 时，GDB 直接 `set var` 可能只得到 `unknown type` 且不改变目标内存；必须使用 ELF 的精确符号地址和 `set *(unsigned int*)address=value`，并在每次 halt 读取后显式 `monitor resume`。本轮第一次 diagnostic 请求因此未生效，第二次精确地址写入才证明队列入队/出队。
+- L-042：配置队列与底层存储结果必须分层记录。本轮 `g_config_queue_ready=1`、两类命令均入队/出队且 drop=0；规则保存 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`save_result=0`；但 diagnostic 命令被消费后仍返回 `0xffffffff`、`g_w25q128_erase_count=0`，该 QSPI diagnostic 底层失败待后续独立复核，禁止伪装成已验证。

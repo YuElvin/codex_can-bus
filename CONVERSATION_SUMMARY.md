@@ -1846,3 +1846,15 @@
 - 网络回归：按 socket0 单连接顺序执行 `ping -c 2 192.168.1.88`，结果 `2/2`；依次 `GET /api/status`、`GET /api/can/status`、`GET /api/signals`，全部返回 `HTTP/1.1 200 OK`。signals 返回外部 `Can2Data.marker=42434`、`sequence=4660`。本轮未执行 DBC active POST，避免重复无关文件操作；既有 DBC/API 语义未改动。
 - 问题点与边界：第一次 GDB 读取未带类型转换，只得到 `unknown type` 提示，未作为读数；随后使用 `(unsigned int)` 精确读取。未新增任务，因此未重复触发上次 1024-word 栈导致 `Error_Handler()` 的问题。通用配置队列、IRQ/semaphore CAN 接收、完整多任务架构和 LogTask recovery 仍未完成/未验证；禁止人为破坏 TF 文件触发 recovery。
 - 本轮同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本文件。下一步为最终差异检查、提交并推送；完成后停止，等待新的独立会话。
+
+## 2026-07-13 阶段 7 ConfigTask 通用配置命令队列边界（已完成，QSPI diagnostic 底层失败待复核）
+
+- 本轮从已推送基线 `56469b2 Add CAN TX queue boundary` 继续。实际目录为 `/Users/elvin/Desktop/project/can_bus_W5500`，分支为 `codex/W5500`，起始工作树干净。按治理要求先实查 `AGENTS.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、本文件及 `git status/log`；当前阶段 7 的最小未完成项为通用配置队列，LogTask recovery 因禁止人为破坏 TF 文件而继续不选。
+- 本轮假设和边界：保留现有 ST-Link 请求标志作为兼容生产者；新增固定深度 2 的 `ConfigCommand` 队列，ConfigTask 先把诊断请求或规则保存请求转换为命令，规则命令在入队时快照 pending 候选，再由同一 ConfigTask 单消费者执行原有 QSPI 函数。未新增任务、未改变 `0x00FFF000` 诊断区、未改变 `0x00FFE000/0x00FFD000` 单规则双槽、未加入 HTTP/CRUD/多规则/配置文件。
+- 源码修改仅为 `cube_mx/Core/Src/main.c`：新增 `ConfigCommand`、配置队列和 `ready/enqueue/dequeue/drop/command` 诊断；旧 diagnostic/save 请求不再直接执行 QSPI，而是经过队列消费后执行。`git diff --check` 和 `./scripts/verify.sh` 通过；host CTest `13/13` 通过；STM32 ELF 构建成功，FLASH=`75552 B / 128 KB = 57.64%`，RAM_D1=`231136 B / 512 KB = 44.09%`。
+- ELF 反汇编确认 `bringup_default_task` 调用 `xQueueGenericCreate(length=2,item_size=20)` 后再创建 ConfigTask；`config_task` 对两类入口调用 `xQueueGenericSend`，再用 `xQueueReceive` 消费，命令类型分支内分别调用 `w25q128_diagnostic_run` 或 `w25q128_rule_config_save`。
+- OpenOCD/ST-Link 烧录真实输出为目标电压 `3.250368 V`、`Programming Finished`、`Verified OK`、`Resetting Target`。GDB 第一次直接写 `g_w25q128_diagnostic_request` 因 ELF 无 debug symbols 得到 `unknown type`，请求未生效，未作为证据；随后依据 ELF 精确地址使用 `set *(unsigned int*)address=value`，并在 halt 后显式 `monitor resume`。
+- 配置队列现场证据：初始 `ready=1/enqueue=0/dequeue=0/drop=0/command=0`；精确写入 diagnostic 请求后为 `enqueue=1/dequeue=1/drop=0/command=1`；再写入默认规则候选保存请求后累计为 `enqueue=2/dequeue=2/drop=0/command=2`。规则保存结果为 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`g_w25q128_config_save_result=0`，因此配置队列/规则保存完成。
+- 重要问题点：diagnostic 命令确实入队并被 ConfigTask 消费，但底层返回 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0`；只能记录为“QSPI diagnostic 命令底层失败，待后续复核”，不能写成 QSPI diagnostic 已通过。未人为破坏 TF 文件，LogTask recovery 仍未验证。
+- GDB 释放并恢复运行后，网络/CAN 回归通过：`ping 192.168.1.88` 为 2/2；顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200；W5500 link/version=`1/4`、TF/QSPI status=`0/0`；CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors=`0`、busOff=`0`、TEC/REC=`0/0`、sendResult=`0`，signals 持续返回 marker=`42434`、sequence=`4660`。OpenOCD 已结束，无驻留调试服务。
+- 本轮同步更新 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本文件。下一步为最终 diff 检查、提交并推送；完成后停止，等待新的独立会话。

@@ -78,7 +78,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 创建低优先级 `MonitorTask`，由其每秒打印状态；`bringup` 任务随后删除自身
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms 最小 ConfigTask 串行执行既有 QSPI 显式诊断和单规则配置保存：默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。它不包含 HTTP、TF 文件、CRUD、多规则、队列或通用配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms ConfigTask 现把兼容的 ST-Link 诊断/规则保存请求转换为 `ConfigCommand`，经深度 2 队列由单消费者执行；规则候选在入队时快照。默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。该队列不包含 HTTP、TF 文件、CRUD、多规则或完整配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
 
 ### 4.2 目标任务拆分
 
@@ -93,7 +93,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | `LogTask` | 中 | 1024 words | 100ms 调度、1s 采样 + 512B/5s flush | 最多两项 CSV 行缓冲，单批写 TF 卡 | FatFs mutex、768B 日志 buffer |
 | `NetTask` | 中 | 3072-4096 words | W5500 socket 事件/轮询 | W5500 socket 服务、连接维护 | W5500 mutex/socket 状态 |
 | `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | REST、静态文件、上传下载 | FatFs mutex、配置 mutex、命令队列 |
-| `ConfigTask` | 低 | 1024 words | 50 ms 轮询 | 当前仅执行显式 W25Q128 诊断请求；后续才配置校验、保存和备份 | 当前无队列，后续 `cfg_cmd_q`、FatFs mutex、QSPI mutex |
+| `ConfigTask` | 低 | 1024 words | 50 ms 轮询 | 消费固定深度 `ConfigCommand` 队列，当前承载 W25Q128 诊断和单规则保存；后续才扩展配置校验、文件保存和备份 | `cfg_cmd_q`、未来 FatFs mutex、QSPI mutex |
 | `MonitorTask` | 低 | 1024 words | 500ms/1s | LED 心跳、状态统计、看门狗、诊断打印 | 系统状态 |
 
 优先级原则：CAN 收发和解码不被 Web、TF 卡和 W5500 长操作阻塞；FatFs 和 W25Q128 写操作串行化；Web 读取快照，不长时间持锁。
@@ -235,7 +235,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、CanDecodeTask、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；外部 CAN RX 深度 8 队列、CAN TX 深度 1 队列、W5500 mutex、DBC mutex、active DBC reload 窄命令已烧录验证；通用配置队列待实现 |
+| 7 | FreeRTOS 多任务拆分 | 部分已验证 | CAN2、CanDecodeTask、W5500/HTTP、Monitor、Log、Rule、Config、DbcTask 独立运行，TfTask 已完成一次性 TF 初始化边界；外部 CAN RX 深度 8 队列、CAN TX 深度 1 队列、W5500 mutex、DBC mutex、active DBC reload 窄命令和 ConfigTask 深度 2 命令队列已烧录验证；完整配置服务仍待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
 | 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证，recovery 分支待真实错误触发 |
@@ -267,4 +267,12 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 - 当前分支 `codex/W5500` 是 W5500 方案主线，不再把 LAN8720 问题作为活动软件路线推进。
 ## 本轮验证补充：W5500、HTTP 与 CAN TX 队列边界
 
-W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；CAN2 周期任务将固定 `0x321` 帧投递到深度 1 TX 队列，现有 `CanDecodeTask` 消费后调用 `can_port_send`，不新增任务栈；通用配置队列仍未引入。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TX 队列现场 `ready=1`、入队/出队 `0x2c/0x2c`、drop=0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`；RX 队列 `0x104/0x104/drop=0`。顺序 ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。
+W5500 状态轮询与 HTTP socket0 轮询由两个独立 50 ms FreeRTOS 任务执行，共用 `g_w5500_mutex` 串行化 SPI/socket 访问。`DbcTask` 以 50 ms 周期从深度 1 reload 命令队列取出一次性 active DBC 请求，`TfTask` 负责一次性 TF mount/smoke/default-page 初始化；CAN2 周期任务将固定 `0x321` 帧投递到深度 1 TX 队列，现有 `CanDecodeTask` 消费后调用 `can_port_send`，不新增任务栈；ConfigTask 另有深度 2 配置命令队列。运行态 DBC 加载解析/槽切换与 CAN2 解码仍共用 `w5500_http_dbc_lock()`；FatFs 操作继续共用 `fs_mutex`。本轮 TX 队列现场 `ready=1`、入队/出队 `0x2c/0x2c`、drop=0，CAN2 `tx=0x2d/rx=0x1b3/errors=0/sendResult=0`；RX 队列 `0x104/0x104/drop=0`。顺序 ping 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。
+
+## 本轮验证补充：ConfigTask 通用命令队列边界
+
+ConfigTask 现使用深度 2、元素大小 20 字节的 `ConfigCommand` 队列。既有 `g_w25q128_diagnostic_request` 和 `g_rule_task_config_save_request` 仅作为兼容入口；ConfigTask 先把请求转换为命令并快照规则候选，再由同一任务单消费者执行 `w25q128_diagnostic_run()` 或 `w25q128_rule_config_save()`。本轮源码、`./scripts/verify.sh`、13/13 host CTest、ELF 反汇编和 OpenOCD `Programming Finished/Verified OK/Resetting Target` 均完成；固件 FLASH=`75552 B / 128 KB = 57.64%`，RAM_D1=`231136 B / 512 KB = 44.09%`。
+
+现场 GDB 使用精确 ELF 地址写入后，配置队列 `ready=1`，两类命令累计 `enqueue=2/dequeue=2/drop=0/command=2`；规则保存结果为 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`g_w25q128_config_save_result=0`，因此“配置队列/规则保存”完成。第一次 GDB 直接写变量因 ELF 无 debug symbols 只得到 `unknown type`，没有作为证据；第二次使用无类型地址写入后才纳入结论。
+
+必须分开记录底层结果：diagnostic 命令确实入队并被消费，但本轮 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0`，因此 QSPI diagnostic 命令底层失败，待后续独立复核，不能将其写成诊断功能已通过。GDB 读取后已恢复运行；随后 ping 为 2/2，顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200，CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors、bus-off、TEC、REC 和 sendResult 均为 0。该验证未人为破坏 TF 文件，也未触发 LogTask recovery。
