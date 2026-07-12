@@ -1982,3 +1982,4 @@
 - 只读回归：`/api/status`、`/api/can/status`、`/api/signals` 都为 HTTP 200；CAN 为 `tx=52/rx=0/errors=0/busOff=0/tec=0/rec=0/sendResult=0`。本轮 CANtest 停止，signals 空是预期，未把它写成 CAN RX 证据。所有 GDB halt 后均 `monitor resume`；OpenOCD 已通过 4444 shutdown，随后仍需在提交前复查 3333/6666。
 - 阶段 C 范围审计：仅固定两槽 v3、严格 URL-encoded CRUD、ConfigTask TF 原子保存和 RuleTask reload；无第三槽、前端、鉴权、并发 HTTP、QSPI 多规则或 CAN 行为变更。治理文件 `01/03/04/ARCHITECTURE/CONVERSATION` 已同步；下一会话固定进入 `PROJECT_FINAL_ACCEPTANCE.md` 定义的阶段 D。
 - 收尾接口审查发现 POST form `slot=2` 未满足“无效槽 404”契约，已最小调整为先完成字段解析再由路由返回 404。重新 `./scripts/verify.sh` 通过，CTest=`14/14`，最终 FLASH=`85496 B / 128 KB = 65.23%`、RAM_D1=`239664 B / 512 KB = 45.71%`；反汇编确认内联 HTTP 路径存在 `404` 分支。修复版重新 OpenOCD 烧录 Verify 通过，稳定 ping 2/2；真实 POST `slot=2` 返回 HTTP 404，后续 GET 两槽保持默认 enabled，OpenOCD 已随 `reset exit` 关闭。
+- 阶段 C 最终源码、测试和治理记录已提交为 `e25b491 Add bounded RuleFile v3 CRUD` 并成功推送到 `origin/codex/W5500`。提交前 `git diff --check` 通过，确认无 OpenOCD 进程且 3333/6666 无监听；全局项目目标仍未完成，下一新会话固定从阶段 D 开始。
