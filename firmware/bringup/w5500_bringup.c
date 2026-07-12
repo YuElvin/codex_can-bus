@@ -5,6 +5,9 @@
 #include "platform/stm32h750_bringup.h"
 #include "signal_api.h"
 
+#include "FreeRTOS.h"
+#include "semphr.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -144,6 +147,7 @@ typedef struct {
 static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
 static uint8_t g_w5500_bound;
+static SemaphoreHandle_t g_w5500_dbc_mutex;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
 static char g_http_response_body[640];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
@@ -488,7 +492,7 @@ static void dbc_record_runtime_failure(const DbcUploadReport *report) {
   }
 }
 
-int w5500_http_load_active_dbc(void) {
+static int w5500_http_load_active_dbc_unlocked(void) {
   DbcUploadReport report;
   size_t read_len = 0u;
   size_t line_count = 0u;
@@ -537,6 +541,28 @@ int w5500_http_load_active_dbc(void) {
   g_w5500_http_dbc_runtime_load_count++;
   dbc_record_runtime_report(&report, 1u);
   return 0;
+}
+
+int w5500_http_dbc_lock(void) {
+  if (g_w5500_dbc_mutex == NULL) {
+    return 1;
+  }
+  return xSemaphoreTake(g_w5500_dbc_mutex, portMAX_DELAY) == pdTRUE ? 0 : 1;
+}
+
+void w5500_http_dbc_unlock(void) {
+  if (g_w5500_dbc_mutex != NULL) {
+    (void)xSemaphoreGive(g_w5500_dbc_mutex);
+  }
+}
+
+int w5500_http_load_active_dbc(void) {
+  if (w5500_http_dbc_lock() != 0) {
+    return 1;
+  }
+  const int result = w5500_http_load_active_dbc_unlocked();
+  w5500_http_dbc_unlock();
+  return result;
 }
 
 const DbcDatabase *w5500_http_active_dbc_snapshot(void) {
@@ -951,6 +977,13 @@ int w5500_bringup_run(void) {
 
   const W5500Result result = w5500_port_init(&g_w5500_port, &config);
   g_w5500_init_result = (uint32_t)result;
+  if (g_w5500_dbc_mutex == NULL) {
+    g_w5500_dbc_mutex = xSemaphoreCreateMutex();
+  }
+  if (g_w5500_dbc_mutex == NULL) {
+    g_w5500_init_result = 1u;
+    return 1;
+  }
   w5500_capture_status(&g_w5500_port);
 
   if (result == W5500_OK) {

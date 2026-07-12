@@ -120,9 +120,13 @@ static void capture_can2_status(void) {
 }
 
 static void decode_can2_frame(const CanFrame *rx, bool tx_self_test) {
-  const DbcDatabase *db = w5500_http_active_dbc_snapshot();
   SignalCache *signal_cache = tx_self_test ? &g_can2_tx_self_test_signal_cache : &g_can2_signal_cache;
+  if (w5500_http_dbc_lock() != 0) {
+    return;
+  }
+  const DbcDatabase *db = w5500_http_active_dbc_snapshot();
   if (db == NULL) {
+    w5500_http_dbc_unlock();
     return;
   }
 
@@ -147,6 +151,7 @@ static void decode_can2_frame(const CanFrame *rx, bool tx_self_test) {
   if (updated != message->signal_count) {
     ++g_can2_dbc_decode_error_count;
   }
+  w5500_http_dbc_unlock();
 }
 
 static void record_rx(const CanFrame *rx, bool external) {

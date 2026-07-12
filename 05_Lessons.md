@@ -32,4 +32,6 @@
 - L-030：单槽 QSPI 配置在擦除到读回完成之间无法保留恢复副本。最小双槽做法是固定 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，v2 记录加入 sequence；每次只擦写非当前有效槽，读回匹配后才把它视为最新。升级时必须兼容既有 v1 主槽，首次 v2 写入备用槽；验收必须覆盖两次交替保存、每次复位加载、无效保存不擦除、最新槽损坏回退和两槽无效默认保留。若需人为制造损坏，只能用验证固件中的显式受限入口，完成后必须删除并重新烧录正式固件。
 - L-031：若既有 `can2_analyzer_poll()` 同时承担周期发送和 FIFO 接收，不能直接把整个函数从 1 s 改为 50 ms，否则会把诊断发送频率放大 20 倍。应抽取只接收、解码和采集状态的函数，由 50 ms CAN 任务调用，同时保持原 1 s 发送节奏；验收需连续对比任务循环、poll、外部 RX 与 DBC 解码计数。
 - L-032：把 bring-up 的永久循环移交给新任务前，先核对 `FreeRTOSConfig.h` 的 `INCLUDE_vTaskDelete`；若要用 `vTaskDelete(NULL)` 回收原任务栈，必须启用该可选 API，并在 ELF 中确认创建新任务后确实跳转到 `vTaskDelete`。
+- L-033：运行态 DBC 双槽不能只保护 active 指针赋值；加载可能覆盖下一槽，而 CAN 解码仍持有旧指针。加载解析/槽切换和解码查表/写缓存必须共用同一 mutex；本轮未引入独立 DbcTask 或队列。
+- L-034：DBC mutex 验收必须分开记录 active reload、TX self-test 和外部 RX；本轮 reload `generation/load=2/2`、TX decode errors=0，但没有持续外部 CAN 输入，外部 RX 必须记为“未验证”。
 - L-033：ST-Link 配置诊断入口必须把 pending 候选与 RuleTask 当前运行态参数分开。ConfigTask 先复制候选并调用 QSPI 保存；只有保存及读回比较成功，才一次性提交运行态参数并请求 reload。无效或失败候选可保留在 pending 供诊断，但不得改变当前 active 参数、RuleTask generation 或继电器输出。

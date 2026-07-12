@@ -82,6 +82,8 @@ int w25q128_rule_config_save(uint32_t on_threshold,
                               uint32_t timeout_ms);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
+int w5500_http_dbc_lock(void);
+void w5500_http_dbc_unlock(void);
 int w5500_http_load_active_dbc(void);
 const DbcDatabase *w5500_http_active_dbc_snapshot(void);
 int w5500_http_status_poll(void);
