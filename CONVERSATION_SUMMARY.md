@@ -1782,3 +1782,12 @@
 - 现场证据：启动 `runtime result/valid/generation/load=0/1/1/1`；`POST /api/dbc/active` 返回 HTTP 200、`errors=0/activated=true/runtimeGeneration=2`，随后读到 `result/valid/generation/load=0/1/2/2`，CAN decode/matched/updates=`24/24/48`、decode errors=`0`。`ping` 为 2/2，`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200，W5500/TF/QSPI 状态正常。
 - 验证边界：本轮没有持续外部 CAN 输入，最终 `can2.rx=0`、signals 为空；外部 RX 明确记为“未验证”，未用 TX self-test 代替。OpenOCD 已释放，`pgrep -af '[o]penocd'` 无输出。
 - 已同步 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 和本记录；未扩展 HTTP/CRUD/多规则/队列/独立 DBC 任务。
+
+## 2026-07-13 阶段 12 稳定性基线（已完成）
+
+- 用户要求对已推送基线 `9773e97 Protect DBC runtime with mutex` 执行阶段 12 稳定性基线，不修改固件功能。已通过 OpenOCD/ST-Link 对 `build/stm32h750/can_bus_gateway_stm32h750.hex` 执行 `program verify reset`，真实输出为 `Programming Finished`、`Verified OK`，目标电压 `3.251976 V`。
+- 两次 ST-Link 运行态读取均显示任务持续运行：第一次 `LogTask loop=0x32/started=1`、`ConfigTask loop=0x72/started=1`、`MonitorTask loop=5/started=1`、`HttpTask loop=0x72/started=1`、`W5500Task loop=0x72/started=1`；第二次分别增长到 `0x77`、`0xee`、`0x0b`、`0xee`、`0xee`。关键状态保持 `CAN2=0`、`W5500=0`、`TF=0`、`W25Q128=0`；CAN 错误/TEC/REC/bus-off 均为 0，TX self-test 计数由 6 增至 12。两次读数中的外部 CAN RX 仍为 0，本轮外部 RX 未验证。
+- 调试安全边界：首次 API 尝试时发现目标曾因调试读取未保持运行而导致 HTTP 超时/拒绝连接；该失败未归因于固件。随后结束 GDB/OpenOCD、重新复位运行并确认 OpenOCD 已释放后，再执行最终网络回归。
+- 最终网络回归严格按 socket0 串行完成：`ping -c 2 -S 192.168.1.100 192.168.1.88` 为 `2/2`；`GET /api/status` 返回 `HTTP/1.1 200 OK`，字段为 `rtos.started=1/ready=1/loop=20`、`w5500.status=0/link=1/version=4/phycfgr=191`、`tf.status=0`、`qspi.status=0/jedec=15679512`；随后 `GET /api/can/status` 返回 `HTTP/1.1 200 OK`，字段为 `tx=24/rx=0/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=23`；最后 `GET /api/signals` 返回 `HTTP/1.1 200 OK`，`items=[]/count=0`。
+- 本轮只更新文档，没有源码改动，因此未重新编译或反汇编；OpenOCD 已通过 `shutdown` 释放，最终未保留调试服务。阶段 12 的本次稳定性基线通过，但外部 CAN RX 和 LogTask recovery 分支仍分别保持“未验证/待真实错误触发”。
+- CAN 现场补充边界：CANtest 开始发送前，用户观察到未收到开发板数据；该现象没有被当作代码修复结论。CANtest 开始发送后，根会话连续两次 HTTP 读取为 `tx=53/rx=240/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=52`，约 2 秒后为 `tx=68/rx=397/errors=0/busOff=0/tec=0/rec=0/sendResult=0/poll=67`，因此当前板端证据支持周期 TX 已发送、总线有 ACK/外部 RX 且无 CAN 错误。整个补充过程无源码修改。

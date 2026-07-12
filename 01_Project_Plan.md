@@ -28,6 +28,7 @@
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX 和 `/api/signals` 已上板验证；LogTask 默认路径批量写已验证。默认读失败时的 recovery 选择已编译/单测，但本次未触发，仍待现场覆盖；规则待实现 |
+| 12 | 稳定性基线 | [部分客观已验证] | 当前固件已完成重新烧录、两次任务/状态读取、ping 和三个只读 API 串行回归；CANtest 开始发送后板端 `tx=53→68`、`rx=240→397` 且 `errors/tec/rec/busOff=0`、`sendResult=0`，开始发送前未观察到接收但不作为代码修复；LogTask recovery 分支仍待真实错误触发 |
 
 ## 非目标
 
