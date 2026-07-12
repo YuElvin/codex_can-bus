@@ -112,6 +112,10 @@ volatile uint32_t g_rule_task_config_on_threshold = 42434u;
 volatile uint32_t g_rule_task_config_off_threshold = 42432u;
 volatile uint32_t g_rule_task_config_delay_ms = 1000u;
 volatile uint32_t g_rule_task_config_timeout_ms = 1500u;
+volatile uint32_t g_rule_task_config_pending_on_threshold = 42434u;
+volatile uint32_t g_rule_task_config_pending_off_threshold = 42432u;
+volatile uint32_t g_rule_task_config_pending_delay_ms = 1000u;
+volatile uint32_t g_rule_task_config_pending_timeout_ms = 1500u;
 volatile uint32_t g_rule_task_config_reload;
 volatile uint32_t g_rule_task_config_result = 0xffffffffu;
 volatile uint32_t g_rule_task_config_load_count;
@@ -532,14 +536,22 @@ static void config_task(void *argument)
       bringup_print_status("w25q128_diag");
     }
     if (g_rule_task_config_save_request != 0u) {
+      const uint32_t on_threshold = g_rule_task_config_pending_on_threshold;
+      const uint32_t off_threshold = g_rule_task_config_pending_off_threshold;
+      const uint32_t delay_ms = g_rule_task_config_pending_delay_ms;
+      const uint32_t timeout_ms = g_rule_task_config_pending_timeout_ms;
       int save_result;
 
       g_rule_task_config_save_request = 0u;
-      save_result = w25q128_rule_config_save(g_rule_task_config_on_threshold,
-                                              g_rule_task_config_off_threshold,
-                                              g_rule_task_config_delay_ms,
-                                              g_rule_task_config_timeout_ms);
+      save_result = w25q128_rule_config_save(on_threshold,
+                                              off_threshold,
+                                              delay_ms,
+                                              timeout_ms);
       if (save_result == 0) {
+        g_rule_task_config_on_threshold = on_threshold;
+        g_rule_task_config_off_threshold = off_threshold;
+        g_rule_task_config_delay_ms = delay_ms;
+        g_rule_task_config_timeout_ms = timeout_ms;
         g_rule_task_config_reload = 1u;
       }
       bringup_print_status("rule_config_save");
@@ -567,6 +579,10 @@ static void bringup_default_task(void *argument)
       g_rule_task_config_off_threshold = off_threshold;
       g_rule_task_config_delay_ms = delay_ms;
       g_rule_task_config_timeout_ms = timeout_ms;
+      g_rule_task_config_pending_on_threshold = on_threshold;
+      g_rule_task_config_pending_off_threshold = off_threshold;
+      g_rule_task_config_pending_delay_ms = delay_ms;
+      g_rule_task_config_pending_timeout_ms = timeout_ms;
     }
   }
   bringup_print_status("w25q128");

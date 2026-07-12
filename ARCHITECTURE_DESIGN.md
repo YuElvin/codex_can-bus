@@ -82,6 +82,8 @@ TF 卡 + W25Q128 + FreeRTOS`。
 
 ### 4.2 目标任务拆分
 
+补充的已验证配置边界：ST-Link 只写独立 pending 候选，ConfigTask 收到保存请求后快照候选；只有 QSPI 双槽擦写、写入和读回比较全部成功，才提交 RuleTask 运行态参数并请求 reload。保存失败或非法候选不得替换旧 engine 或旧运行态参数。
+
 | 任务 | 优先级 | 栈建议 | 触发 | 职责 | 共享资源 |
 | --- | ---: | ---: | --- | --- | --- |
 | `CanRxTask` | 高 | 1024-1536 words | FDCAN2 RX 中断/semaphore | 从 RX FIFO 搬运帧，入 `can_rx_q`，统计错误 | `can_rx_q` |
