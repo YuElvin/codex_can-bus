@@ -34,6 +34,7 @@
 - L-055：板端格式化会清除 `/dbc/active.dbc`，即使 CAN RX 持续增长，`g_can2_dbc_rx_frame_count=0`、`/api/signals` 空、LogTask 也只会丢弃无信号样本。恢复标准 DBC 必须通过既有顺序 `POST /api/dbc/upload` 与 `POST /api/dbc/active`，确认 HTTP 200、SignalCache 有值后，再以连续 write/flush 和文件大小增长证明新格式化介质的默认日志写入。
 - L-056：当前 TF 即使经板端 FAT32 格式化、重新挂载、bring-up 和冷启动默认日志写入均成功，仍会在同一上电周期“真实拔出→默认读失败选 recovery→插回→原 append”时返回 `FR_DISK_ERR`。因此格式化不能证明或修复热插拔 recovery；需要 recovery success 时，唯一有效证据仍是 `path_mode=1/switch=1` 后同一轮 `last_result=0`、write 增长、recovery size 从 0 增长。失败后必须删除 gate 并重新烧录正式固件。
 - L-057：当硬件能力与产品需求不匹配时，应把真实验证结果固化为操作边界。当前板载简易 TF 卡座定义为仅支持下电后插拔；插卡冷启动默认日志持续写入是验收证据，运行中热插拔/recovery 不再作为功能目标。不得保留临时 gate、remount、CMD13 旁路或 PA8 检测代码。
+- L-058：默认日志的短时写入和文件大小增长不能替代分钟级稳定性证据。2026-07-13 在未热插拔、正式固件连续运行约 30 分钟时，任务、CAN 与网络仍正常，但 LogTask 最终出现 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`，failure/drop 增长；必须先按默认插卡路径定位，不能误归因于热插拔，也不能直接加入重试、remount 或状态旁路。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。

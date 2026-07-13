@@ -2064,3 +2064,18 @@
 ## 2026-07-13 派送执行约束确认
 
 - 用户再次明确：从后续每个新阶段或下一步开始，必须派送子智能体或新会话执行；主会话在派送前固定唯一目标、范围、非目标、成功标准、验证证据和失败可接受结论，不允许被派送方自行选择开发目标。阶段 F 尚未开始，本次只确认执行方式，未修改固件、未编译、未反汇编、未烧录。
+
+## 2026-07-13 阶段 F-1：30 分钟静态长跑基线（未通过）
+
+- 按用户指定的派送方式，主会话先固定唯一目标为“无 TF/CANtest 操作、无断网/bus-off/复位注入的 30 分钟静态长跑”，只验证正式已实现功能的持续运行，不把外部 RX 增长、TX self-test 或热插拔混作该项证据。只读子智能体审计确认此前稳定性证据只有数秒，不能称作长跑；因此本轮不改源码，按每步烧录约定重新烧录正式 `build/stm32h750/can_bus_gateway_stm32h750.hex`，OpenOCD 实际输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.250368 V`。
+- 起始约 10 秒读数：Rule/Config/HTTP/W5500/Log/Monitor/CanDecode 均 started，循环分别已有 `440/440/440/440/219/20/2198`；LogTask `write/flush/failure/drop=4/4/0/0`、默认文件 size=`29330`；CAN TX/RX 队列 enqueue/dequeue=`22/22`、`222/222` 且 drop 均 0，CAN errors/busOff/TEC/REC/sendResult 均 0，W5500 network/link=`1/1`。
+- 目标无调试写入或 halt 地连续运行满约 30 分钟；终态 Rule/Config/HTTP/W5500/Log/Monitor/CanDecode 循环为 `39682/39663/39682/39682/16038/1828/198408`，均严格增长；CAN TX/RX 队列为 `1985/1985`、`19662/19662` 且 drop 仍为 0，CAN errors/busOff/TEC/REC/sendResult 仍为 0，W5500 network/link 仍为 `1/1`。目标保持运行后，ping `192.168.1.88` 为 `2/2`；socket0 串行 `GET /api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200，CAN API 显示 `tx=2010/rx=19901/errors=0/busOff=0/tec=0/rec=0/sendResult=0`，DBC runtime loaded 且 errors=0。
+- 本子项未通过的唯一原因是默认日志持续写入故障：终态 LogTask size=`35490`、write/flush=`15/396`、failure/drop=`381/1526`、`g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`；SD 最近诊断为 DCOUNT=`512`、STA=`0x1000`、ErrorCode=`0x80000000`、HAL status=`3 (HAL_TIMEOUT)`。它发生在 TF 始终插卡、path mode=0 的默认路径，不能写成热插拔问题或本阶段通过。未改源码，因此未编译、未执行新增反汇编；烧录和现场 30 分钟验证已实际完成，OpenOCD 均 shutdown、无驻留监听。
+- 下一步已明确派送 F-2 只读审计：只定位默认插卡 LogTask `FR_DISK_ERR` 的失败点，提出最小区分验证；严禁直接实施重试、remount、状态旁路、热插拔、断网或 bus-off 方案。阶段 F 保持进行中，未提交为“通过”。
+
+## 2026-07-13 阶段 F-2：默认日志失败只读审计
+
+- 按已固定的派送范围，子智能体未改文件、未构建、未烧录、未接调试器，只审计 `signal_log_task()`、`stm32h750_tf_append_file_locked()` 与 SD/FatFs 链路。`signal_log_task` 每次 flush 只调用一次 append；返回非 0 后只累计 failure/drop 并清空缓冲，没有重试、恢复或路径切换。append 的可失败阶段为锁、`f_open`、`f_lseek/f_write`、`f_close` 或短写。
+- 现场 `flush=396/write=15/failure=381` 精确满足 `396-15=381`，因此当前证据表明仅前 15 次 flush 成功，之后持续失败；不能把 30 分钟终态误写为首次失败时刻。只读网络 API 期间没有其他 TF 写操作，故最后 `g_tf_csv_write_result=1` 与 `g_tf_write_open_result=1` 是 append 在 `f_open(...FA_OPEN_ALWAYS|FA_WRITE)` 记录到 `FR_DISK_ERR` 的最强证据。仍要注意该 TF 全局诊断被多个函数共享，当前版本未记录操作来源或 append 子阶段，不能把最近 HAL 读数与同一次 open 绝对绑定。
+- `g_tf_sd_last_hal_status=3`、`ErrorCode=0x80000000` 对应 HAL SD timeout；`STA=0x1000` 为数据通路活动、`DCOUNT=512` 表示采样时仍有一个块未完成。最小假设保持为三类：SDMMC 数据传输超时、文件/FAT 元数据增长边界，或共享诊断全局的来源不明；没有证据支持加入 retry/remount/状态旁路。
+- F-2 的下一固定验证不改源码：重新烧录同一正式 HEX，保持 TF 插卡及现有 CAN 输入、不要求用户操作 CANtest，约每 5 秒只读现有 LogTask/TF/SD 诊断，最迟 5 分钟内捕获首次 failure。若仍无法将失败阶段与 SD 操作来源对应，才单独派送最小诊断改动：只增加 `g_tf_sd_last_operation` 与 `g_tf_append_stage`，不改变 timeout、写入策略或恢复语义。

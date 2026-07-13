@@ -35,6 +35,7 @@
 ## 当前阻断项
 
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
+- 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`，SD 最近诊断为 `DCOUNT=512/STA=0x1000/ErrorCode=0x80000000/HAL status=3`。下一固定子任务只定位插卡正常运行时默认日志写失败，不触发热插拔、断网、bus-off 或复位场景。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
@@ -60,7 +61,7 @@
 
 ## 下一步建议
 
-阶段 C、D、E 已关闭。下一派送会话目标固定为阶段 F：先为稳定性/异常验收定义单一最小验证项及其明确时长、计数和恢复证据；不得同时开展断网、CAN bus-off、复位恢复等多个异常项目，也不得扩大 HTTP、规则或配置功能。
+阶段 C、D、E 已关闭；阶段 F 进行中但首个 30 分钟静态长跑因默认 LogTask 写失败未通过。下一派送任务固定为 F-2：仅定位插卡正常运行下的默认日志 `FR_DISK_ERR` 失败点并定义最小区分验证，不得开展热插拔、断网、CAN bus-off、复位恢复或任何恢复/重试方案，也不得扩大 HTTP、规则或配置功能。
 
 ## 阶段 C 实际快照
 

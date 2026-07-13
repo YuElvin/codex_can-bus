@@ -301,3 +301,9 @@ ConfigTask 现使用深度 2、元素大小 20 字节的 `ConfigCommand` 队列�
 `/config/rules-v3.conf` 是固定两槽 RuleFile：`version=3`、`ruleCount=2`，两个 slot 均保留 enabled、relay、threshold、action、delayMs、timeoutMs、safeState、priority 八字段；disabled 不装入 RuleEngine。启动按 v3→v2→v1→QSPI 回退，只有有效 v3 才停止回退，v3 缺失不自动创建。HTTP socket0 顺序接口固定为 GET 列表/详情、POST 创建 disabled 槽、PUT 完整替换、DELETE 禁用；写请求仅更新 pending，ConfigTask 单消费者执行 TF `.tmp`/`.prev` 原子替换，成功后才触发 RuleTask 原子 engine 复制与 generation 递增。
 
 最终固件的主机 CTest=`14/14`，FLASH=`85496 B`、RAM_D1=`239664 B`；目标板烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压 `3.250368 V`。真实验收：DELETE slot1 后 GDB rule_count=`1`，POST 恢复后 rule_count=`2`；PUT slot0 非默认 `42436/1100/1600` 跨复位保持；恢复 `42434/1000/1500` 后，非法 delay 大于 timeout 返回 HTTP 400 且 generation/current 不变；POST form `slot=2` 返回 HTTP 404 且最终两槽未改变。最后 ping 2/2、`/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200。初版曾在 ConfigTask 触发 HardFault：build-engine 的 3856 B 自动对象覆盖相邻 TCB；改为直接构造输出 engine 后反汇编栈帧为 120 B，并经相同实板链路复验通过。
+
+## 阶段 F 补充：30 分钟静态长跑发现默认日志写失败
+
+本轮没有修改源码。正式 `can_bus_gateway_stm32h750.hex` 重新烧录并输出 `Programming Finished`、`Verified OK`、`Resetting Target` 后，目标在无热插拔、无断网、无 bus-off 注入且无需用户改变 CANtest/TF 的条件下连续运行约 30 分钟。起始约 10 秒时各任务已启动，LogTask `write/flush/failure/drop=4/4/0/0`、默认文件 size=`29330`；终态 Rule/Config/HTTP/W5500/Log/Monitor/CanDecode 任务循环均严格增长，CAN TX/RX 队列无丢弃、errors/busOff/TEC/REC/sendResult 均为 0，W5500 network/link 均为 1，顺序 ping 与 `/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime` 均 HTTP 200。
+
+但默认 LogTask 未通过稳定性条件：终态文件 size=`35490`、write/flush=`15/396`，failure/drop=`381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`；SD 最近诊断为 `DCOUNT=512`、`STA=0x1000`、`ErrorCode=0x80000000`、HAL status=`3 (HAL_TIMEOUT)`。这不是热插拔 recovery 路径，也不能由网络/CAN 故障解释。阶段 F 的长跑子项因此失败，下一步只允许定位默认插卡路径的失败点和最小区分验证，不能直接加入重试、remount、状态旁路或扩大到其他异常场景。
