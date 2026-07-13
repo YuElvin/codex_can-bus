@@ -16,7 +16,7 @@
 | W5500 HTTP/API | [客观已验证] | 已烧录验证 `GET /api/status`、`GET /api/can/status`、`POST /api/dbc/upload` 返回 `HTTP/1.1 200 OK` JSON；未知路径返回 404 JSON |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
 | TF CSV 最小落盘 | [客观已验证] | 旧 bring-up 1 秒循环版本已验证：写入次数 `18→42`、文件大小 `4334→7070`、结果持续为 0；该直接写路径已被本轮 LogTask 源码替换 |
-| 最小 LogTask | [默认路径客观已验证，recovery 写入阻断] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件当前默认路径写入 `8→9`、大小 `375252→375812`、失败/丢弃为 0。真实拔卡已得到 `path_mode=1/switch_count=1`，但插回后同一上电周期 FATFS remount 连续 `FR_DISK_ERR`，未产生 recovery 写入 |
+| 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
 | TF 静态文件服务 | [部分客观已验证] | 已启用 FatFs mutex，缺省创建 `/www/index.html`；`GET /` 和 `GET /index.html` 返回 `text/html` 默认页；固件已改为按文件大小循环 512 字节分块读取并多次 socket 发送 |
@@ -34,7 +34,7 @@
 
 ## 当前阻断项
 
-- 阶段 D recovery 选择已在真实拔卡中触发：默认读取返回后 `path_mode=1/switch_count=1`。但三次同一上电周期的插回后重挂载（含 SDMMC reset 与仅 remount 窗口的 CMD13 旁路实验）均返回 `FR_DISK_ERR=1`，未进入任何 recovery sample/flush/write。2026-07-13 在用户确认 TF 插入和随后拔出时，ST-Link 非侵入读取 `GPIOA_IDR` 均为 `0x0000c180`，PA8 均为 `1`；该脚没有实物状态变化，按用户指示永久保持屏蔽。基于“高=插卡”的临时检测修改已撤回并重新烧录正式固件，默认日志回归通过；必须找到“读取失败但介质仍可正常挂载”的真实条件，或先取得硬件级 TF 热插拔/供电/检测方案，才可继续阶段 D，禁止人为破坏原文件。
+- 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭，下一固定阶段为 E：QSPI diagnostic `0xffffffff/erase_count=0` 失败复核。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
@@ -60,7 +60,7 @@
 
 ## 下一步建议
 
-阶段 C 已完成；阶段 D 已完成真实 recovery 选择但被 TF 热插回重挂载失败阻断。下一派送会话目标固定为：仅诊断并验证 TF 热插拔恢复的硬件/底层可行路径，或在真实“默认读失败而介质仍可挂载”条件下完成 recovery 写入；不得扩大为前端、鉴权、第三槽或并发 HTTP。
+阶段 C 与阶段 D 已关闭。下一派送会话目标固定为阶段 E：仅复现并定位 QSPI diagnostic `0xffffffff/erase_count=0` 的根因，或在不影响规则双槽的前提下恢复诊断读写；不得扩大为前端、鉴权、第三槽或并发 HTTP。
 
 ## 阶段 C 实际快照
 

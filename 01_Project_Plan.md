@@ -27,8 +27,8 @@
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | 已完成既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界；本轮 HTTP 规则保存复用 ConfigTask 队列并完成上板闭环，完整配置文件/多规则仍未做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
-| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；已由真实拔卡触发 recovery 选择，但热插回同一上电周期的 FATFS 重挂载连续返回 `FR_DISK_ERR`，未证明 recovery 写入；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
-| 12 | 稳定性基线 | [部分客观已验证] | 本轮正式固件重新烧录后，ping、`/api/status`、`/api/can/status`、`/api/signals` 串行回归通过，CAN status errors/bus-off/TEC/REC 为 0，默认 LogTask 写入与文件大小连续增长；TF 热插回 recovery 写入仍为阻断项 |
+| 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
+| 12 | 稳定性基线 | [部分客观已验证] | 本轮正式固件重新烧录后，ping、`/api/status`、`/api/can/status`、`/api/signals` 串行回归通过，CAN status errors/bus-off/TEC/REC 为 0，默认 LogTask 写入与文件大小连续增长；TF 仅在插卡状态下上电运行，运行中插拔为非支持操作 |
 
 ## 阶段 C 当前状态
 
@@ -49,7 +49,7 @@
 | 128KB Flash 空间紧张 | Web/DBC/日志放 TF，固件裁剪 HAL 和字符串 |
 | FreeRTOS 多任务后硬件功能回归 | CAN2/W5500 低风险周期任务已上板复核；再拆 TF/QSPI/HTTP 前必须先定义共享资源保护 |
 | W5500 网络服务阻塞 CAN | 当前 HTTP 仍是 socket0 单连接轮询；后续用单网络任务或 mutex 限制临界区 |
-| TF/FatFs 并发损坏或文件错误 | LogTask、HTTP、DBC 共用全局 `fs_mutex`；LogTask 单批失败仅丢弃并计数。真实拔卡已确认默认读取失败会选 recovery，但热插回后同一上电周期的 remount 连续 `FR_DISK_ERR`，恢复写入未通过；不得以临时 gate/状态旁路提交或宣称通过 |
+| TF/FatFs 并发损坏或文件错误 | LogTask、HTTP、DBC 共用全局 `fs_mutex`；LogTask 单批失败仅丢弃并计数。硬件操作边界固定为 TF 插拔前先下电，运行中不支持热插拔/recovery；不得以临时 gate/状态旁路提交 |
 | DBC 上传过大或半包 | 当前仅支持 1024 字节以内、单连接完整请求体；body 未收全时等待下一轮轮询，不作为完整上传系统；候选文件替换采用 `/dbc/upload.write.tmp` -> `/dbc/candidate.dbc`，旧候选备份为 `/dbc/candidate.prev.dbc` |
 | DBC 解码验证边界 | 当前 active DBC 已接入 CAN2 解码和 `SignalCache`；本轮 DBC mutex 下 active reload `generation/load=2/2`、TX self-test decode errors=0；外部 RX 本轮未验证，不能混写两类证据 |
 | DBC/缓存 RAM 占用 | 当前使用候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、单个 128 项 `SignalCache` 和 768 B 日志缓冲，RAM_D1 为 38.83%；扩大 parser 上限、缓存或日志前必须复查内存 |

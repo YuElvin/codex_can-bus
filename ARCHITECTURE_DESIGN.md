@@ -79,7 +79,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 8. 创建独立 CAN2 周期任务和 W5500 轮询任务
 9. 创建低优先级 `MonitorTask`，由其每秒打印状态；`bringup` 任务随后删除自身
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；当前现场默认路径已验证，recovery 分支待真实错误触发。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms ConfigTask 现把兼容的 ST-Link 诊断/规则保存请求转换为 `ConfigCommand`，经深度 2 队列由单消费者执行；规则候选在入队时快照。默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。该队列不包含 HTTP、TF 文件、CRUD、多规则或完整配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；插卡冷启动下默认路径已验证。TF 卡硬件操作边界为先下电再插拔，运行中热插拔/recovery 不支持。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms ConfigTask 现把兼容的 ST-Link 诊断/规则保存请求转换为 `ConfigCommand`，经深度 2 队列由单消费者执行；规则候选在入队时快照。默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。该队列不包含 HTTP、TF 文件、CRUD、多规则或完整配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
 
 ### 4.2 目标任务拆分
 
@@ -126,7 +126,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.5 日志
 
-当前源码由独立 `LogTask` 每 1 秒从 `SignalCache` 复制最多两项，CSV 列保持 `updated_ms,key,value,raw,unit,quality`；使用 768 B RAM 行缓冲，达到 512 B 或 5 秒后才在 FatFs mutex 下单批追加。初始化读取 `/log/signal.csv`：成功或 `FR_NO_FILE` 固定该路径，其他读取错误固定 `/log/signal-recovery.csv`；`g_log_path_mode/g_log_path_switch_count/g_log_active_file_size` 用于诊断。失败时记录 `g_log_failure_count/g_log_drop_count` 并清空本批，不实现重试、轮换、下载、HTTP 配置或队列。真实拔卡已验证 recovery 选择，但插回后的同一上电周期 FATFS 重挂载尚不能读盘；临时验证代码已移除，recovery 写入仍未通过实机验收。
+当前源码由独立 `LogTask` 每 1 秒从 `SignalCache` 复制最多两项，CSV 列保持 `updated_ms,key,value,raw,unit,quality`；使用 768 B RAM 行缓冲，达到 512 B 或 5 秒后才在 FatFs mutex 下单批追加。初始化读取 `/log/signal.csv`：成功或 `FR_NO_FILE` 固定该路径，其他读取错误固定 `/log/signal-recovery.csv`；`g_log_path_mode/g_log_path_switch_count/g_log_active_file_size` 用于诊断。失败时记录 `g_log_failure_count/g_log_drop_count` 并清空本批，不实现重试、轮换、下载、HTTP 配置或队列。TF 卡只能在开发板下电状态插拔；真实热插拔恢复不属于产品功能，临时验证代码已移除。
 
 ## 6. 共享资源与同步
 
@@ -252,7 +252,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
-| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；真实拔卡可选 recovery，但同一上电周期插回后的 FATFS 重挂载连续 `FR_DISK_ERR`，未能恢复写入。正式产品不保留临时重挂载或状态旁路；后续需硬件级热插拔方案或可挂载的真实读错误条件 |
+| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；TF 卡必须在开发板下电后插拔，运行中热插拔/recovery 不支持。当前插卡冷启动时格式化、重新挂载、bring-up 和默认日志连续写入均成功；正式产品不保留临时格式化、重挂载或状态旁路 |
 | W25Q128 诊断擦写正式数据 | 默认启动已不擦写；`0x00FFF000` 固定诊断保留区，ConfigTask/正式备份必须另选地址并串行化 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |
