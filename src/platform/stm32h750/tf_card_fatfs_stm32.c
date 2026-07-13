@@ -38,10 +38,12 @@ volatile uint32_t g_tf_sd_last_error;
 volatile uint32_t g_tf_sd_last_sta;
 volatile uint32_t g_tf_sd_last_dcount;
 volatile uint32_t g_tf_sd_last_clkcr;
+volatile uint32_t g_tf_sd_last_operation;
 volatile uint32_t g_tf_fs_mutex_ready;
 volatile uint32_t g_tf_fs_lock_result;
 volatile uint32_t g_tf_www_index_status = 0xffffffffu;
 volatile uint32_t g_tf_www_index_len;
+volatile uint32_t g_tf_append_stage;
 
 static SemaphoreHandle_t g_tf_fs_mutex;
 
@@ -112,17 +114,21 @@ uint8_t BSP_SD_Init(void) {
   }
   tf_sd_apply_bringup_config();
 
+  g_tf_sd_last_operation = 1u;
   status = HAL_SD_Init(&hsd1);
   tf_sd_record_diag(status);
   return status == HAL_OK ? MSD_OK : MSD_ERROR;
 }
 
 uint8_t BSP_SD_ReadBlocks_DMA(uint32_t *pData, uint32_t ReadAddr, uint32_t NumOfBlocks) {
-  HAL_StatusTypeDef status = HAL_SD_ReadBlocks(&hsd1,
-                                               (uint8_t *)pData,
-                                               ReadAddr,
-                                               NumOfBlocks,
-                                               TF_CARD_SD_OP_TIMEOUT_MS);
+  HAL_StatusTypeDef status;
+
+  g_tf_sd_last_operation = 2u;
+  status = HAL_SD_ReadBlocks(&hsd1,
+                             (uint8_t *)pData,
+                             ReadAddr,
+                             NumOfBlocks,
+                             TF_CARD_SD_OP_TIMEOUT_MS);
   tf_sd_record_diag(status);
   if (status != HAL_OK) {
     return MSD_ERROR;
@@ -132,11 +138,14 @@ uint8_t BSP_SD_ReadBlocks_DMA(uint32_t *pData, uint32_t ReadAddr, uint32_t NumOf
 }
 
 uint8_t BSP_SD_WriteBlocks_DMA(uint32_t *pData, uint32_t WriteAddr, uint32_t NumOfBlocks) {
-  HAL_StatusTypeDef status = HAL_SD_WriteBlocks(&hsd1,
-                                                (uint8_t *)pData,
-                                                WriteAddr,
-                                                NumOfBlocks,
-                                                TF_CARD_SD_OP_TIMEOUT_MS);
+  HAL_StatusTypeDef status;
+
+  g_tf_sd_last_operation = 3u;
+  status = HAL_SD_WriteBlocks(&hsd1,
+                              (uint8_t *)pData,
+                              WriteAddr,
+                              NumOfBlocks,
+                              TF_CARD_SD_OP_TIMEOUT_MS);
   tf_sd_record_diag(status);
   if (status != HAL_OK) {
     return MSD_ERROR;
@@ -334,31 +343,52 @@ int stm32h750_tf_append_file_locked(const char *path,
                                     size_t *file_size) {
   FIL file;
   UINT written = 0u;
+  uint32_t failure_stage = 0u;
   char full_path[64];
   const Stm32TfCardContext ctx = {
     .fs = NULL,
     .logical_drive = SDPath,
   };
 
+  g_tf_append_stage = 1u;
   if (path == NULL || data == NULL || len == 0u || file_size == NULL ||
       build_fatfs_path(&ctx, path, full_path, sizeof(full_path)) != TF_CARD_OK ||
       tf_fs_lock() != 0) {
     return 1;
   }
+  g_tf_append_stage = 2u;
   g_tf_write_open_result = f_open(&file, full_path, FA_OPEN_ALWAYS | FA_WRITE);
   if (g_tf_write_open_result != FR_OK) {
     tf_fs_unlock();
     return 1;
   }
+  g_tf_append_stage = 3u;
   g_tf_write_result = f_lseek(&file, f_size(&file));
-  if (g_tf_write_result == FR_OK) {
+  if (g_tf_write_result != FR_OK) {
+    failure_stage = 3u;
+  } else {
+    g_tf_append_stage = 4u;
     g_tf_write_result = f_write(&file, data, (UINT)len, &written);
+    if (g_tf_write_result != FR_OK || written != len) {
+      failure_stage = 4u;
+    }
   }
   *file_size = (size_t)f_size(&file);
   g_tf_write_len = written;
+  g_tf_append_stage = 5u;
   g_tf_write_close_result = f_close(&file);
+  if (g_tf_write_close_result != FR_OK) {
+    failure_stage = 5u;
+  }
   tf_fs_unlock();
-  return g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK && written == len ? 0 : 1;
+  if (g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK && written == len) {
+    g_tf_append_stage = 6u;
+    return 0;
+  }
+  if (failure_stage != 0u) {
+    g_tf_append_stage = failure_stage;
+  }
+  return 1;
 }
 
 static int tf_replace_file_locked(const char *tmp_path,

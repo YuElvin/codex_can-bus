@@ -28,6 +28,7 @@
 | ADR-007 | CSV 首步复用监控循环、SignalCache 快照和 FatFs mutex，不先创建 LogTask/队列 | 已接受 |
 | ADR-008 | 用独立最小 LogTask 替换监控循环直接 CSV 写入，并在启动时一次性选择日志路径 | 已接受；运行中热插拔不支持 |
 | ADR-021 | TF 卡插拔只能在开发板下电状态进行 | 已接受 |
+| ADR-022 | 默认日志失败只增加 SD 操作与 append 阶段诊断 | 已接受；不改变写入策略 |
 | ADR-009 | RuleTask 复用 portable rule_engine，仅从短临界区外部 RX SignalCache 快照集中驱动 PE7/PE8 | 已接受，最小 marker、固定延时/高滞回、手动优先级与单规则 reload 已上板验证 |
 | ADR-010 | 最小 ConfigTask 仅串行执行既有 W25Q128 显式诊断请求 | 已接受，默认零擦写、显式请求擦写读回与任务运行均已上板验证 |
 | ADR-011 | 单规则配置使用 QSPI 双槽做最小持久化 | 已接受，v1 兼容、交替保存、读回校验、损坏最新槽回退、两槽无效默认保留和复位加载均已上板验证 |
@@ -63,6 +64,10 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 ### ADR-021：TF 下电插拔边界
 
 板载简易 TF 卡座没有可用的运行时插卡检测，真实热插回后的 SDMMC/FatFs append 已多次返回 `FR_DISK_ERR`，而插卡冷启动后的默认日志路径可持续写入。系统因此明确要求：拔出或插入 TF 卡前必须先关闭开发板电源；重新插卡后再上电，TfTask 负责正常 mount 与默认文件初始化。运行中拔插、自动重挂载、recovery 文件持续写入不属于产品功能或验收承诺。
+
+### ADR-022：默认日志失败只增加来源诊断
+
+阶段 F 的默认插卡长跑中，LogTask 首次 `FR_DISK_ERR` 前后只有共享的“最近 SD 状态”，不能把底层错误严谨归属到 append 的具体步骤。为缩小诊断证据缺口，只新增 `g_tf_sd_last_operation`（1=init、2=read、3=write）和 `g_tf_append_stage`（1=lock、2=open、3=lseek、4=write、5=close、6=ok）。它们只在既有 HAL SD 调用前和 `stm32h750_tf_append_file_locked()` 原调用顺序中赋值，失败保留阶段；不改变 timeout、重试、挂载、缓存、文件策略或返回值。烧录后首次失败实际为 stage=2/operation=2/open result=1，故下一轮只审计 SD read 路径。
 
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
