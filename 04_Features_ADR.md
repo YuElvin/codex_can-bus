@@ -101,7 +101,7 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 
 ### ADR-018：ConfigTask 使用固定深度命令队列
 
-为完成阶段 7 的最小配置任务通信边界，保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内转换为 `ConfigCommand`，投递到深度 2 队列，再由同一 ConfigTask 单消费者执行 QSPI 诊断或单规则保存。命令包含规则候选快照，避免消费时读取变化中的 pending 字段；队列满只计数丢弃并保留原请求。已烧录验证两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存结果为 0。该 ADR 不定义多记录配置文件、HTTP API、CRUD 或通用消息总线；本轮底层 QSPI 诊断返回失败，不能将其计为诊断功能成功。
+为完成阶段 7 的最小配置任务通信边界，保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内转换为 `ConfigCommand`，投递到深度 2 队列，再由同一 ConfigTask 单消费者执行 QSPI 诊断或单规则保存。命令包含规则候选快照，避免消费时读取变化中的 pending 字段；队列满只计数丢弃并保留原请求。规则保存已烧录验证。历史 `0xffffffff/erase_count=0` 只代表未完成诊断的初始化哨兵值；2026-07-13 当前正式 ELF 的精确地址单次请求已验证 `enqueue/dequeue=1/1`、`result=0`、`erase_count=1`、`test_addr=0x00FFF000`，且规则双槽 `0x00FFE000/0x00FFD000` 未受影响。该 ADR 不定义多记录配置文件、HTTP API、CRUD 或通用消息总线。
 
 ### ADR-019：单规则 HTTP 配置复用 ConfigTask 保存边界
 

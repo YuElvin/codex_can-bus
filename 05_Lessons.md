@@ -51,7 +51,7 @@
 - L-039：在当前 64 KB FreeRTOS heap 和既有任务栈预算下，CAN TX 队列可复用现有 `CanDecodeTask` 消费，不新增任务；用深度 1 `CanFrame` 队列即可验证入队、出队和发送边界。必须把 TX self-test 解码放在实际 `can_port_send` 成功之后，并同时读取 TX/RX 队列 drop 计数。
 - L-040：通用配置队列的最小边界可以保留既有 ST-Link 请求标志作为兼容入口，在 ConfigTask 内快照为固定 `ConfigCommand` 后投递到深度 2 队列，再由单消费者执行诊断或规则保存；验收必须同时读取 `ready/enqueue/dequeue/drop` 和实际命令结果。本轮两类命令累计 `enqueue=2/dequeue=2/drop=0`，规则保存成功，但不能把队列消费成功表述为 QSPI diagnostic 成功。
 - L-041：ELF 没有 debug symbols 时，GDB 直接 `set var` 可能只得到 `unknown type` 且不改变目标内存；必须使用 ELF 的精确符号地址和 `set *(unsigned int*)address=value`，并在每次 halt 读取后显式 `monitor resume`。本轮第一次 diagnostic 请求因此未生效，第二次精确地址写入才证明队列入队/出队。
-- L-042：配置队列与底层存储结果必须分层记录。本轮 `g_config_queue_ready=1`、两类命令均入队/出队且 drop=0；规则保存 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`save_result=0`；但 diagnostic 命令被消费后仍返回 `0xffffffff`、`g_w25q128_erase_count=0`，该 QSPI diagnostic 底层失败待后续独立复核，禁止伪装成已验证。
+- L-042：配置队列与底层存储结果必须分层记录。`g_w25q128_diagnostic_result` 的上电值 `0xffffffff` 是初始化哨兵，不是 `w25q128_diagnostic_run()` 的合法返回码；只有同次读取到请求清零、队列入/出增长、`diagnostic_count` 增长和实际 result 后，才能判断诊断结论。2026-07-13 以当前 ELF 精确地址单次请求实测 `result=0/erase_count=1/test_addr=0x00FFF000`，同时双槽配置地址与 sequence 不变。
 - L-043：HTTP 配置写入应复用已有 pending/ConfigTask/RuleTask 边界。板端验证必须同时看 HTTP 200、ConfigTask enqueue/dequeue/drop、QSPI save result/count、RuleTask generation/reload 和复位后的 load result；仅返回 HTTP 200 不能证明持久化完成。当前单连接 socket0 下，GET/POST 请求必须顺序执行。
 - L-044：TF RuleFile v1 的有效输入必须先落到独立候选，再通过既有 RuleTask reload 边界生效；解析失败、读取失败或超容量都不能覆盖 QSPI/编译默认安全配置。缺失文件创建必须在 `fs_mutex` 下显式确保 `/config` 存在，并使用 `FA_CREATE_NEW`，不能以 `FA_OPEN_ALWAYS` 覆盖已有文件。
 - L-045：RuleFile v2 缺失时，`v2_created=1/load_result=1` 只证明 `FA_CREATE_NEW` 创建成功，不能视为本次启动已加载；本次启动必须继续使用已加载的 v1/QSPI，只有下一次复位读取并完整 reload 成功后才记录 `load_result=0`。

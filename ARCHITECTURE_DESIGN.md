@@ -294,7 +294,7 @@ ConfigTask 现使用深度 2、元素大小 20 字节的 `ConfigCommand` 队列�
 
 现场 GDB 使用精确 ELF 地址写入后，配置队列 `ready=1`，两类命令累计 `enqueue=2/dequeue=2/drop=0/command=2`；规则保存结果为 `g_rule_task_config_result=0`、`g_w25q128_config_save_count=1`、`g_w25q128_config_save_result=0`，因此“配置队列/规则保存”完成。第一次 GDB 直接写变量因 ELF 无 debug symbols 只得到 `unknown type`，没有作为证据；第二次使用无类型地址写入后才纳入结论。
 
-必须分开记录底层结果：diagnostic 命令确实入队并被消费，但本轮 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0`，因此 QSPI diagnostic 命令底层失败，待后续独立复核，不能将其写成诊断功能已通过。GDB 读取后已恢复运行；随后 ping 为 2/2，顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200，CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors、bus-off、TEC、REC 和 sendResult 均为 0。该验证未人为破坏 TF 文件，也未触发 LogTask recovery。
+必须分开记录底层结果：历史现场的 `g_w25q128_diagnostic_result=0xffffffff`、`g_w25q128_erase_count=0` 当时不能证明诊断执行，且 `0xffffffff` 是初始化哨兵，不是诊断函数的返回码。2026-07-13 使用当前正式 ELF 的精确地址只写一次请求并等待擦除窗口后，实读 `last_command=1`、队列 `enqueue/dequeue=1/1/drop=0`、`diagnostic_count=1`、`diagnostic_result=0`、`erase_count=1`、`test_addr=0x00FFF000`、JEDEC=`0x00EF4018`；规则双槽 `config_addr=0x00FFE000/sequence=7`、save/load count 均不变。由此关闭 QSPI diagnostic 失败复核，不把诊断区用于正式配置。GDB 读取后已恢复运行；随后 ping 为 2/2，顺序 `/api/status`、`/api/can/status`、`/api/signals` 均 HTTP 200，CAN 两次读数由 `tx/rx=48/469` 增长到 `55/537`，errors、bus-off、TEC、REC 和 sendResult 均为 0。该验证未人为破坏 TF 文件，也未触发 LogTask recovery。
 
 ## 本轮验证补充：RuleFile v3 受限双槽 CRUD
 

@@ -22,7 +22,7 @@
 | 2 | TF 卡 SDMMC + FatFs | [客观已验证] | smoke test 写读通过 |
 | 3 | W5500 SPI bring-up | [客观已验证] | `VERSIONR=0x04`、网络参数回读、主机 ping `192.168.1.88` 通过 |
 | 4 | FDCAN2 外部 CAN 收发 | [客观已验证] | Windows CANtest 可收开发板帧，开发板可收 Windows 发帧 |
-| 5 | W25Q128 QSPI | [客观已验证] | 默认启动只读 JEDEC ID；`0x00FFF000` 保留诊断区仅显式触发擦除、写入、读回匹配 |
+| 5 | W25Q128 QSPI | [客观已验证] | 默认启动只读 JEDEC ID；`0x00FFF000` 保留诊断区仅显式触发擦除、写入、读回匹配。2026-07-13 已复核历史 `0xffffffff/erase_count=0` 为未触发诊断的初始化哨兵值，正式单次请求 `result=0/erase_count=1` |
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
 | 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | 已完成既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界；本轮 HTTP 规则保存复用 ConfigTask 队列并完成上板闭环，完整配置文件/多规则仍未做 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
