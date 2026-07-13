@@ -2079,3 +2079,9 @@
 - 现场 `flush=396/write=15/failure=381` 精确满足 `396-15=381`，因此当前证据表明仅前 15 次 flush 成功，之后持续失败；不能把 30 分钟终态误写为首次失败时刻。只读网络 API 期间没有其他 TF 写操作，故最后 `g_tf_csv_write_result=1` 与 `g_tf_write_open_result=1` 是 append 在 `f_open(...FA_OPEN_ALWAYS|FA_WRITE)` 记录到 `FR_DISK_ERR` 的最强证据。仍要注意该 TF 全局诊断被多个函数共享，当前版本未记录操作来源或 append 子阶段，不能把最近 HAL 读数与同一次 open 绝对绑定。
 - `g_tf_sd_last_hal_status=3`、`ErrorCode=0x80000000` 对应 HAL SD timeout；`STA=0x1000` 为数据通路活动、`DCOUNT=512` 表示采样时仍有一个块未完成。最小假设保持为三类：SDMMC 数据传输超时、文件/FAT 元数据增长边界，或共享诊断全局的来源不明；没有证据支持加入 retry/remount/状态旁路。
 - F-2 的下一固定验证不改源码：重新烧录同一正式 HEX，保持 TF 插卡及现有 CAN 输入、不要求用户操作 CANtest，约每 5 秒只读现有 LogTask/TF/SD 诊断，最迟 5 分钟内捕获首次 failure。若仍无法将失败阶段与 SD 操作来源对应，才单独派送最小诊断改动：只增加 `g_tf_sd_last_operation` 与 `g_tf_append_stage`，不改变 timeout、写入策略或恢复语义。
+
+## 2026-07-13 阶段 F-2：默认日志首次失败捕获（已完成，仍未定位根因）
+
+- 按 F-2 固定范围，重新烧录同一正式 HEX（OpenOCD `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.250368 V`），保持 TF 插卡及现有 CAN 输入，未要求用户操作 CANtest/TF，未热插拔、未复位、未调用任何 TF 写 API。自动每 5 秒通过独立 OpenOCD 只读 `g_log_*`、`g_tf_*` 与 SD 最近诊断，最多 5 分钟；首次主机解析错误地把地址后的第一个状态字丢弃，误将成功 write count 当作 failure。该脚本从未写 MCU，发现后立即修正并重新开始，错误采样不作为结论。
+- 修正后起始为 size=`40512`、path mode=`0`、last/csv result=`0/0`、LogTask `bufferSamples/bufferLen/drop/failure/write/flush=2/224/0/0/9/9`。35 秒首次失败：size=`43872`、path mode=`0`、last/csv result=`1/1`、`bufferSamples/bufferLen/drop/failure/write/flush=4/448/5/1/15/16`；即默认 `/log/signal.csv` 在 6 次新增成功 flush 后出现首个 `FR_DISK_ERR`，无需等到 30 分钟才可复现。随后不复位的补读为 size=`43872`、failure/drop=`4/18`、write/flush=`15/20`、`g_tf_write_open_result=1`、write/close result=`0/0`，证明失败持续且最后记录的 open 为 `FR_DISK_ERR`。
+- 首次失败附近的 SD 最近诊断为 `CLKCR=16/DCOUNT=448/STA=0x29000/ErrorCode=0x20/HAL status=1`；稍后为 `DCOUNT=512/STA=0x1000/ErrorCode=0x80000000/HAL status=3`。它们支持低层 SD 传输异常，但当前“最近”诊断被共享且无 operation/stage 来源，不能严谨地断言 `f_open` 与某一 HAL 错误为同一次调用。F-2 已完成“快速复现并确认需区分来源”的目标，未修改源码、未编译、未执行新增反汇编；下一固定 F-3 只增加 `g_tf_sd_last_operation` 与 `g_tf_append_stage` 诊断字段，严禁改变 timeout、重试、remount、热插拔或恢复行为。
