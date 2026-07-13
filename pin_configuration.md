@@ -10,7 +10,7 @@ LAN8720/RMII 切换为 W5500/SPI2；CAN 外部收发器实际验证链路使用
 | --- | --- | --- | --- |
 | W5500 | SPI2 + GPIO | 已验证 | 固定 IP `192.168.1.88`，MAC `02:00:00:12:34:56`，主机 ping 已通过 |
 | CAN 收发器 | FDCAN2 | 已验证 | `PB6_TX/PB5_RX` 经 MCP2562FD 接 USBCAN-2E-U，Windows CANtest 收发已通过 |
-| TF 卡 | SDMMC1 | 已验证 | 固件跳过 PA8 检卡，使用保守 1-bit/低速初始化后 smoke test 通过 |
+| TF 卡 | SDMMC1 | 已验证 | 固件跳过 PA8 检卡，使用保守 1-bit/低速初始化后 smoke test 通过；PA8 在实物插卡/拔卡时均读高，不能作为检测依据 |
 | W25Q128 | QUADSPI | 已验证 | JEDEC ID `EF4018`，最后 4KB 扇区擦写读回通过 |
 | USART2 | UART | 可用但 macOS 曾出现乱码 | 固件参数为 `115200 8N1`，Windows 侧读取正常 |
 | FreeRTOS | SysTick/SVC/PendSV | 已接入源码并编译验证 | 不占用额外外设引脚 |
@@ -70,7 +70,7 @@ W5500 使用 SPI2 和独立 GPIO 控制脚。
 ## TF 卡，SDMMC1
 
 CubeMX 仍保留 PA8 检卡输入，但当前固件覆盖 `BSP_SD_IsDetected()`，实际跳过
-PA8 检卡，避免卡座检测脚不可靠影响验证。
+PA8 检卡；原理图虽然将其经 R5 接 `SWITCH`，但实物插卡/拔卡均读高，故检测脚当前不可用。
 
 | MCU 引脚 | CubeMX 信号 | 外部连接 | 方向 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ PA8 检卡，避免卡座检测脚不可靠影响验证。
 | PC11 | SDMMC1_D3 | TF DAT3 | 双向 | CubeMX 配置为 4-bit，总线脚保留 |
 | PC12 | SDMMC1_CK | TF CLK | MCU 输出 | 当前 `.ioc` `ClockDiv=2`，固件 bring-up 中改为更保守配置 |
 | PD2 | SDMMC1_CMD | TF CMD | 双向 | 上拉 |
-| PA8 | GPIO_Input | SD_DETECT | MCU 输入 | CubeMX 保留；当前固件跳过该检测 |
+| PA8 | GPIO_Input | SD_DETECT | MCU 输入 | CubeMX 保留；当前固件跳过该检测。2026-07-13 插卡和用户确认拔卡后均实读为高电平，不能用于热插拔恢复 |
 
 ## W25Q128，板载 QSPI Flash
 

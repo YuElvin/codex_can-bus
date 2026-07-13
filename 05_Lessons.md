@@ -28,6 +28,7 @@
 - L-023：最小 CSV 可复用同一 `can2_signal_cache_copy()` 快照和 FatFs mutex；空文件只写一次表头，后续在 `f_lseek(f_size())` 后追加。验收必须连续读取 `g_tf_csv_write_count/g_tf_csv_write_result/g_tf_csv_write_len/g_tf_csv_file_size`，同时确认 CAN RX、匹配和信号更新继续增长。
 - L-024：LogTask 首次检查 `/log/signal.csv` 时，`FR_NO_FILE` 仅表示新卡/首启，应以文件大小 0 继续并写表头；其他 FatFs 返回码不能伪装为首启。2026-07-10 曾现场读到 `FR_DISK_ERR=1`，但最终恢复固件启动时同一路径读取成功；因此错误可能间歇，不能人为破坏文件复现。
 - L-025：隔离 append probe 可用于一次性区分“原文件”与“介质”问题，但最终产品必须移除其代码和全局。最终恢复策略应在 LogTask 初始化只选择一次：默认大小读取成功或 `FR_NO_FILE` 用默认路径，其他错误用固定 recovery 路径；不得循环切换或自动修复。recovery 分支只有在真实读取失败时才能声称已验证。
+- L-052：真实 TF 拔卡能使默认 `f_open` 在约数十秒后返回并选 recovery，但本板同一上电周期插回后 FATFS remount 连续 `FR_DISK_ERR`；`HAL_SD_Init` 成功、`hsd1.State=READY` 不能单独证明 FATFS 已可读。SDMMC reset 和仅 remount 窗口跳过第二次 CMD13均未恢复写入，所有临时 gate/旁路必须删除并重新烧录正式固件。2026-07-13 ST-Link 在用户确认 TF 插入和随后拔出时均读取 `GPIOA_IDR=0x0000c180`、PA8=`1`，故不论原理图标注如何，当前实物检测脚没有可用状态变化；基于高=插卡的临时修改必须撤回。后续必须以 recovery 文件写计数和大小增长作为成功证据，不能以 path_mode、mount init 或 PA8 电平代替。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。

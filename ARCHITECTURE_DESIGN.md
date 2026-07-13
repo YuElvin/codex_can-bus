@@ -126,7 +126,7 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 ### 5.5 日志
 
-当前源码由独立 `LogTask` 每 1 秒从 `SignalCache` 复制最多两项，CSV 列保持 `updated_ms,key,value,raw,unit,quality`；使用 768 B RAM 行缓冲，达到 512 B 或 5 秒后才在 FatFs mutex 下单批追加。初始化读取 `/log/signal.csv`：成功或 `FR_NO_FILE` 固定该路径，其他读取错误固定 `/log/signal-recovery.csv`；`g_log_path_mode/g_log_path_switch_count/g_log_active_file_size` 用于诊断。失败时记录 `g_log_failure_count/g_log_drop_count` 并清空本批，不实现重试、轮换、下载、HTTP 配置或队列。当前默认路径已持续写入；recovery 分支待实机验证。
+当前源码由独立 `LogTask` 每 1 秒从 `SignalCache` 复制最多两项，CSV 列保持 `updated_ms,key,value,raw,unit,quality`；使用 768 B RAM 行缓冲，达到 512 B 或 5 秒后才在 FatFs mutex 下单批追加。初始化读取 `/log/signal.csv`：成功或 `FR_NO_FILE` 固定该路径，其他读取错误固定 `/log/signal-recovery.csv`；`g_log_path_mode/g_log_path_switch_count/g_log_active_file_size` 用于诊断。失败时记录 `g_log_failure_count/g_log_drop_count` 并清空本批，不实现重试、轮换、下载、HTTP 配置或队列。真实拔卡已验证 recovery 选择，但插回后的同一上电周期 FATFS 重挂载尚不能读盘；临时验证代码已移除，recovery 写入仍未通过实机验收。
 
 ## 6. 共享资源与同步
 
@@ -252,7 +252,7 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
-| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；曾读到 CSV `FR_DISK_ERR=1`，最终默认路径运行已恢复成功；不自动修复，保留一次性 recovery 选择和失败/丢弃诊断 |
+| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；真实拔卡可选 recovery，但同一上电周期插回后的 FATFS 重挂载连续 `FR_DISK_ERR`，未能恢复写入。正式产品不保留临时重挂载或状态旁路；后续需硬件级热插拔方案或可挂载的真实读错误条件 |
 | W25Q128 诊断擦写正式数据 | 默认启动已不擦写；`0x00FFF000` 固定诊断保留区，ConfigTask/正式备份必须另选地址并串行化 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |
