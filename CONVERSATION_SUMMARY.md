@@ -2060,3 +2060,7 @@
 - 用户已将 TF 运行中热插拔排除出范围后，本轮按固定阶段 E 只复核 `g_w25q128_diagnostic_result=0xffffffff/erase_count=0`，不修改固件源码、不触碰规则双槽 `0x00FFE000/0x00FFD000`，也不要求用户操作 CANtest 或 TF。开始前只读审计确认 `ConfigTask` 单消费者收到 `g_w25q128_diagnostic_request` 后只调用 `w25q128_diagnostic_run()`，其诊断地址固定为 `0x00FFF000`，合法返回只有 `0/1/3/4/5`；`0xffffffff` 仅为上电初始化哨兵值。
 - 用当前正式 ELF 的精确地址 `0x2401eb34` 通过独立 OpenOCD/ST-Link 仅写入一次请求 `1`，等待 7 秒覆盖擦除窗口后读取现场：`last_command=1`、ConfigTask `command/enqueue/dequeue/drop=1/1/1/0`、`diagnostic_request=0`、`diagnostic_count=1`、`diagnostic_result=0`、`erase_count=1`、`test_addr=0x00FFF000`、`last_hal_status=0`、`status_reg1=0`、JEDEC=`0x00EF4018`。同时配置双槽 `config_addr=0x00FFE000`、sequence=`7`、load/save count=`1/0` 未变化，证明诊断擦写未影响规则配置。
 - 结论：历史 `0xffffffff/erase_count=0` 没有构成当前诊断函数的失败证据，应记录为未实际触发/未完成诊断时的初始状态；当前正式固件的 QSPI diagnostic 已在保留扇区成功完成。此轮未修改源码、未执行编译或新增反汇编；为满足每一步烧录验证，已将同一正式 `build/stm32h750/can_bus_gateway_stm32h750.hex` 重新烧录，OpenOCD 输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.251976 V`，复位后重复同一请求仍得到 `result=0/erase_count=1`。已同步 `01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md` 与最终验收合同；下一固定阶段为 F，先定义单一稳定性/异常验证项再执行。
+
+## 2026-07-13 派送执行约束确认
+
+- 用户再次明确：从后续每个新阶段或下一步开始，必须派送子智能体或新会话执行；主会话在派送前固定唯一目标、范围、非目标、成功标准、验证证据和失败可接受结论，不允许被派送方自行选择开发目标。阶段 F 尚未开始，本次只确认执行方式，未修改固件、未编译、未反汇编、未烧录。
