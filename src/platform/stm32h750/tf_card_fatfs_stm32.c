@@ -39,6 +39,26 @@ volatile uint32_t g_tf_sd_last_sta;
 volatile uint32_t g_tf_sd_last_dcount;
 volatile uint32_t g_tf_sd_last_clkcr;
 volatile uint32_t g_tf_sd_last_operation;
+volatile uint32_t g_tf_sd_read_call_count;
+volatile uint32_t g_tf_sd_read_failure_count;
+volatile uint32_t g_tf_sd_read_last_lba;
+volatile uint32_t g_tf_sd_read_last_blocks;
+volatile uint32_t g_tf_sd_read_before_state;
+volatile uint32_t g_tf_sd_read_before_context;
+volatile uint32_t g_tf_sd_read_before_error;
+volatile uint32_t g_tf_sd_read_before_sta;
+volatile uint32_t g_tf_sd_read_before_dcount;
+volatile uint32_t g_tf_sd_read_before_mask;
+volatile uint32_t g_tf_sd_read_before_dctrl;
+volatile uint32_t g_tf_sd_read_before_clkcr;
+volatile uint32_t g_tf_sd_read_after_state;
+volatile uint32_t g_tf_sd_read_after_context;
+volatile uint32_t g_tf_sd_read_after_error;
+volatile uint32_t g_tf_sd_read_after_sta;
+volatile uint32_t g_tf_sd_read_after_dcount;
+volatile uint32_t g_tf_sd_read_after_mask;
+volatile uint32_t g_tf_sd_read_after_dctrl;
+volatile uint32_t g_tf_sd_read_after_clkcr;
 volatile uint32_t g_tf_fs_mutex_ready;
 volatile uint32_t g_tf_fs_lock_result;
 volatile uint32_t g_tf_www_index_status = 0xffffffffu;
@@ -124,11 +144,49 @@ uint8_t BSP_SD_ReadBlocks_DMA(uint32_t *pData, uint32_t ReadAddr, uint32_t NumOf
   HAL_StatusTypeDef status;
 
   g_tf_sd_last_operation = 2u;
+  g_tf_sd_read_call_count++;
+  g_tf_sd_read_last_lba = ReadAddr;
+  g_tf_sd_read_last_blocks = NumOfBlocks;
+  g_tf_sd_read_before_state = (uint32_t)hsd1.State;
+  g_tf_sd_read_before_context = hsd1.Context;
+  g_tf_sd_read_before_error = hsd1.ErrorCode;
+  if (hsd1.Instance != NULL) {
+    g_tf_sd_read_before_sta = hsd1.Instance->STA;
+    g_tf_sd_read_before_dcount = hsd1.Instance->DCOUNT;
+    g_tf_sd_read_before_mask = hsd1.Instance->MASK;
+    g_tf_sd_read_before_dctrl = hsd1.Instance->DCTRL;
+    g_tf_sd_read_before_clkcr = hsd1.Instance->CLKCR;
+  } else {
+    g_tf_sd_read_before_sta = 0u;
+    g_tf_sd_read_before_dcount = 0u;
+    g_tf_sd_read_before_mask = 0u;
+    g_tf_sd_read_before_dctrl = 0u;
+    g_tf_sd_read_before_clkcr = 0u;
+  }
   status = HAL_SD_ReadBlocks(&hsd1,
                              (uint8_t *)pData,
                              ReadAddr,
                              NumOfBlocks,
                              TF_CARD_SD_OP_TIMEOUT_MS);
+  g_tf_sd_read_after_state = (uint32_t)hsd1.State;
+  g_tf_sd_read_after_context = hsd1.Context;
+  g_tf_sd_read_after_error = hsd1.ErrorCode;
+  if (hsd1.Instance != NULL) {
+    g_tf_sd_read_after_sta = hsd1.Instance->STA;
+    g_tf_sd_read_after_dcount = hsd1.Instance->DCOUNT;
+    g_tf_sd_read_after_mask = hsd1.Instance->MASK;
+    g_tf_sd_read_after_dctrl = hsd1.Instance->DCTRL;
+    g_tf_sd_read_after_clkcr = hsd1.Instance->CLKCR;
+  } else {
+    g_tf_sd_read_after_sta = 0u;
+    g_tf_sd_read_after_dcount = 0u;
+    g_tf_sd_read_after_mask = 0u;
+    g_tf_sd_read_after_dctrl = 0u;
+    g_tf_sd_read_after_clkcr = 0u;
+  }
+  if (status != HAL_OK) {
+    g_tf_sd_read_failure_count++;
+  }
   tf_sd_record_diag(status);
   if (status != HAL_OK) {
     return MSD_ERROR;

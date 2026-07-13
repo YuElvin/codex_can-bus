@@ -2098,3 +2098,10 @@
 - 子智能体按固定范围只读审计，未修改、构建、烧录或连接硬件。append stage=2 的 `f_open(...FA_OPEN_ALWAYS|FA_WRITE)` 经 FatFs `find_volume/follow_path/dir_find/move_window` 进行 `disk_read`；`SD_read` 调项目 `BSP_SD_ReadBlocks_DMA`，其实际是阻塞轮询 `HAL_SD_ReadBlocks(..., 1000 ms)`，不是 HAL DMA。HAL read 返回 `HAL_ERROR=1` 后经 `MSD_ERROR→RES_ERROR` 映射为现场 `FR_DISK_ERR=1`，与 F-3 读数一致。
 - `ErrorCode=0x20` 精确为 `HAL_SD_ERROR_RX_OVERRUN`；`DCOUNT=448`、`STA=0x29000`（`DPSMACT|RXFIFOHF|RXFIFOF`）与 512 B 单扇区接收 FIFO overrun 相容。当前证据只证明这一失败机制，不能推断卡损坏、信号质量、CAN 负载、某个 IRQ 或 timeout 为根因；另一次 `HAL_TIMEOUT` 读数也不能反向绑定到本次 overrun。
 - F-4 确认无可直接证明的错误映射或返回值吞没；“DMA”命名与实际 polling 调用不一致是事实但不能单独定为根因。下一固定 F-5 只添加每次 SD read 的 LBA、块数、调用/失败计数以及 HAL 前后 State/Context/ErrorCode/STA/DCOUNT/MASK/DCTRL/CLKCR 快照；严禁修改 timeout、模式、重试、remount、格式化、IRQ 或热插拔策略。
+
+## 2026-07-13 阶段 F-5：SD read 请求/寄存器快照（已实现，等待冷启动首错）
+
+- 子智能体按固定范围只修改 `src/platform/stm32h750/tf_card_fatfs_stm32.c`，新增 20 个 `g_tf_sd_read_*` 字段。`BSP_SD_ReadBlocks_DMA` 在原 `HAL_SD_ReadBlocks` 前记录 call、LBA、blocks、State/Context/ErrorCode 与 STA/DCOUNT/MASK/DCTRL/CLKCR，调用后记录同样快照，非 HAL_OK 时递增 failure；没有改 timeout、调用参数、传输方式、锁、挂载、缓存或返回分支。
+- `git diff --check`、`./scripts/verify.sh` 均通过，host CTest=`14/14`；ELF FLASH=`85880 B / 128 KB = 65.52%`、RAM_D1=`239752 B / 512 KB = 45.73%`。`nm` 确认所有新符号，`objdump` 确认读调用前后快照和失败计数围绕原 `HAL_SD_ReadBlocks(...,1000)`，随后仍调用 `tf_sd_record_diag` 和原返回分支。OpenOCD/ST-Link V2 已烧录 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.251976 V`。
+- 重烧录后约 5 秒，默认 LogTask 已处于连续失败：path=`0`、last/csv result=`1/1`、append stage/op=`2/2`、LogTask failure/drop=`5/22`；最新 read request 为 LBA=`3826`、blocks=`1`、call/failure=`54/4`，before/after 同为 State=`1`、Context=`0`、ErrorCode=`0x80000000`、DCOUNT=`512`、STA=`0x45000`、MASK=`0`、DCTRL=`0x90`、CLKCR=`16`。该结果证实快照功能已工作，但说明 MCU reset/reflash 没有恢复到干净 SD 状态；不能把 LBA 3826 误写为首错触发点。
+- 下一步需要用户保持 TF 卡插入，开发板主电源断开至少 10 秒再上电；无需停止或改变 CANtest。用户确认上电后，主会话将按派送 F-6 只读采样冷启动首错快照，不更改任何 SD 参数或恢复策略。此时暂停等待现场操作。
