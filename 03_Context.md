@@ -35,7 +35,7 @@
 ## 当前阻断项
 
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
-- 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-3 最小诊断字段已烧录验证：重烧录后 50 秒首现 `last/csv result=1`、`failure=1`、`write/flush=15/16`，同时 `g_tf_append_stage=2 (open)`、`g_tf_sd_last_operation=2 (read)`、`g_tf_write_open_result=1`，SD 为 `DCOUNT=448/STA=0x29000/ErrorCode=0x20/HAL status=1`。因此故障已归属为默认 append `f_open` 引发的底层读失败，不是写阶段、热插拔或网络/CAN 故障；下一固定子任务只审计该 SD read 失败路径。
+- 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-3/F-4 已将首次失败归属为默认 append `f_open` 的单扇区底层 read：`ErrorCode=0x20 (HAL_SD_ERROR_RX_OVERRUN)`、`DCOUNT=448`、`STA=0x29000` 与接收 FIFO 未及时取走相容。BSP 的 `BSP_SD_ReadBlocks_DMA` 实际调用轮询 `HAL_SD_ReadBlocks`；未证明卡损坏、CAN 负载、IRQ 优先级或根因。下一固定子任务只补充读请求/寄存器快照。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
@@ -61,7 +61,7 @@
 
 ## 下一步建议
 
-阶段 C、D、E 已关闭；阶段 F 进行中但首个 30 分钟静态长跑因默认 LogTask 失败未通过。F-3 已将故障归属到 append open 的 SD read，下一派送任务固定为 F-4：只读审计 `HAL_SD_ReadBlocks`/`sd_diskio` 的默认插卡读失败链路与最小可区分假设；不得开展热插拔、断网、CAN bus-off、复位恢复、重试、remount 或任何恢复/旁路方案，也不得扩大 HTTP、规则或配置功能。
+阶段 C、D、E 已关闭；阶段 F 进行中但首个 30 分钟静态长跑因默认 LogTask 失败未通过。F-4 已确认 RX overrun 机制，下一派送任务固定为 F-5：只增加 SD read 请求/寄存器诊断快照以区分触发条件；不得开展热插拔、断网、CAN bus-off、复位恢复、重试、remount、DMA 切换、超时或 IRQ 优先级修改，也不得扩大 HTTP、规则或配置功能。
 
 ## 阶段 C 实际快照
 
