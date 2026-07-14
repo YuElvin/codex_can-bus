@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-15（F-25 已完成真实 CAN bus-off 的不复位自动恢复验证；F-26 已固定 TF CSV 下电内容复查协议；阶段 F 的剩余验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
+更新时间：2026-07-15（F-25 已完成真实 CAN bus-off 的不复位自动恢复验证；F-26 已完成 TF CSV 下电内容复查；下一步为最终全量复验）
 
 ## 当前仓库
 
@@ -88,7 +88,7 @@ F-21 只读审计完成：FDCAN2 为自动重传，软件约每秒提交一帧�
 
 F-21 现场已形成并验证真实bus-off：错误比特率下 `PSR=0x7e7(BO=1)`、`ECR=0xfff8`、`IR=0x2b800801(BO bit25=1)`、HTTP `busOff=1`；用户恢复 CANtest normal active/500k/原帧后，观察窗口超过60秒（CAN poll `972→1107`）仍为 `CCCR=0x1001/ECR=0xfff8/PSR=0x7e7/TXBRP=0xF`，CANtest发送失败且无新信号。这是当前固件无恢复路径的客观失败，不能写为bus-off恢复通过。已派送 F-24 只读审计，唯一目标是定义可回退的最小 FDCAN2 STOP/START 恢复状态机；审计完成前不盲改源码。
 
-F-25 已在 `can_bringup.c` 实现并烧录最小 bus-off 恢复：持续 BO 时按 1 秒限流逐位 Abort `TXBRP`，再 Stop，Stop 成功才 Start；不执行 DeInit/Init，不改变位率、过滤器、任务周期或队列。`verify.sh`/CTest=`14/14`、定向反汇编、OpenOCD `Verified OK` 均已完成。正常500k基线外部 RX=320、signals=42434/4660；错误250k现场形成真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`；恢复500k后外部 RX=`1305→2292`、TEC=`95→0`、最终 CAN tx/rx=`352/2292`、errors/busOff/sendResult=0，用户确认信号正常收发。F-26 只读审计确认当前 HTTP 无 CSV 下载路由，最小最终内容验收固定为：正常外部 CAN 输入与两次写入/flush/size 增长后，用户完全下电取卡，主机只读核对当前路径 CSV 的单表头、marker=`42434`、sequence=`4660`、六字段 `quality=ok` 和字节数相等；详细操作门槛见 `PROJECT_FINAL_ACCEPTANCE.md`，此项尚未执行。
+F-25 已在 `can_bringup.c` 实现并烧录最小 bus-off 恢复：持续 BO 时按 1 秒限流逐位 Abort `TXBRP`，再 Stop，Stop 成功才 Start；不执行 DeInit/Init，不改变位率、过滤器、任务周期或队列。`verify.sh`/CTest=`14/14`、定向反汇编、OpenOCD `Verified OK` 均已完成。正常500k基线外部 RX=320、signals=42434/4660；错误250k现场形成真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`；恢复500k后外部 RX=`1305→2292`、TEC=`95→0`、最终 CAN tx/rx=`352/2292`、errors/busOff/sendResult=0，用户确认信号正常收发。F-26 已完成：正常外部 CAN 与两次 LogTask/TF 计数增长后完全下电取卡，主机只读 `/log/signal.csv` 为`971532 B`、16975行、唯一表头、零字段错误、7024组 marker=`42434`/sequence=`4660` 同时间戳 `quality=ok` 记录，尾部完整。其大小高于最近板端 `968052 B` 3480 B，符合人工下电间隔继续日志的完整追加；绝对相等无法与人工断电原子采样，验收采用“不小于最近读数且完整成对尾部”规则。下一固定阶段为最终全量复验。
 
 ## 阶段 C 实际快照
 

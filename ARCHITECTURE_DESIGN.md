@@ -241,9 +241,9 @@ SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志�
 | 7 | FreeRTOS 多任务拆分 | 部分已验证 | 既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界已烧录验证；单规则 HTTP 配置已复用 ConfigTask 完成闭环；完整配置服务仍待实现 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
 | 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
-| 10 | 实时解码和日志 | 部分已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写已烧录验证。运行中 recovery/热插拔非目标；最终待下电取卡只读核对 CSV 物理内容 |
+| 10 | 实时解码和日志 | 已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写和 F-26 下电取卡 CSV 内容均已验证。运行中 recovery/热插拔非目标 |
 | 11 | 规则/继电器 | 部分已验证 | 固定高滞回、延时、超时、单规则 QSPI 双槽和 RuleTask reload 已验证；新增 `GET/POST /api/rule/config` 已验证 HTTP→ConfigTask→QSPI→RuleTask→复位加载；RuleFile v1 有效/缺失路径已板端验证，非法板端输入未注入；多规则仍待做 |
-| 12 | 稳定性测试 | 进行中 | F-12 插卡日志长跑、F-14 物理断网恢复、F-17 HTTP 优雅断开、F-19 冷启动恢复、F-25 CAN bus-off 恢复已验证；待 F-26 CSV 物理内容和最终全量复验 |
+| 12 | 稳定性测试 | 进行中 | F-12 插卡日志长跑、F-14 物理断网恢复、F-17 HTTP 优雅断开、F-19 冷启动恢复、F-25 CAN bus-off 恢复、F-26 CSV 物理内容已验证；待最终全量复验 |
 
 ## 13. 风险与规避
 
@@ -336,4 +336,4 @@ F-17 修复了 CAN错误被动恢复后观察到的 socket0 HTTP RST：正常响
 
 F-25 在 `capture_can2_status()` 的真实 BO 分支加入最小恢复状态机：逐位 Abort 已挂起的 `TXBRP` 请求后 `HAL_FDCAN_Stop()`，且仅 Stop 成功时 `HAL_FDCAN_Start()`；首次立即、持续 BO 每1000ms最多一次，正常状态清除私有 latch。不采用 DeInit/Init，不改 CAN 参数、过滤器、任务或队列。错误250k现场实测真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`，恢复500k后外部 RX 与 SignalCache 持续更新、TEC降至0，完成不复位 bus-off 恢复验证。
 
-F-26 只读审计确认静态文件服务只映射 `/` 和 `/index.html`，没有 `/log/*` 或 CSV 下载 API；不为最终验收扩大 HTTP 范围。最终 CSV 内容证据固定为外部 CAN 正常输入、两次 LogTask write/flush/size 增长后完全下电取卡，主机只读核对当前日志文件单表头、两条 marker/sequence 行、六字段 `quality=ok` 与最后记录的文件大小相等。该证据不覆盖热插拔、在线下载或并发文件服务。
+F-26 只读审计确认静态文件服务只映射 `/` 和 `/index.html`，没有 `/log/*` 或 CSV 下载 API；不为最终验收扩大 HTTP 范围。外部 CAN 正常输入、两次 LogTask write/flush/size 增长后，用户完全下电取卡；主机只读 `/log/signal.csv` 为 `971532 B/16975`行，唯一表头、零字段错误、7024组 marker/sequence 同时间戳 `quality=ok` 记录并以完整对结束。文件比最近板端 `968052 B` 多3480 B，符合人工断电间隔的继续追加；由于读数和人工断电不可原子同步，验收采用“文件不小于最近读数且完整成对尾部”，不强求绝对相等。该证据不覆盖热插拔、在线下载或并发文件服务。

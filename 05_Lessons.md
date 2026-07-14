@@ -4,7 +4,7 @@
 - L-074：CAN 无ACK现场不能替代真实 bus-off 注入。F-16 的 `TEC=128/EP=1/BO=0/LEC=ACK error/TXBRP=0xF` 表明节点错误被动且4个硬件发送请求未完成；自动重传和加快应用发送都不会构成 `PSR.BO=1` 证据。bus-off 验收必须使用外部物理 bit/stuff/form/CRC 类错误并同时观测 `PSR.BO=1`、HTTP `busOff=1`，不能用软件、loopback或调试器伪造。
 - L-075：真实 bus-off 形成不等于恢复。错误比特率现场已读到 `PSR.BO=1` 与 HTTP `busOff=1`；恢复外部500k后超过60秒仍为 `CCCR.INIT=1`、`PSR.BO=1`、`TXBRP=0xF`，CANtest会因开发板不ACK显示发送失败，SignalCache不再有新输入。不得把CANtest发送失败或旧缓存误写为恢复；必须用明确、可回退的FDCAN停止/启动恢复状态机并重新现场验证。
 - L-076：FDCAN bus-off 恢复必须只在真实 `bus_off` 快照下执行，并先释放硬件 `TXBRP` 请求。F-25 的 Abort→Stop→Start 以首次立即、持续 BO 每1000ms一次限流运行，实测错误250k后的 BO 在不复位条件下退出；恢复500k后外部 RX、SignalCache 与 TEC 均恢复。不得用 DeInit/Init、调试器改状态或普通 ACK 错误被动代替该证据。
-- L-077：LogTask 写入计数、文件大小和 `/api/signals` 不能证明 CSV 的物理内容。当前产品不含日志下载 API；最终内容验收应在外部 CAN 和两次运行态增长通过后完全下电取卡，在主机只读核对当前路径的单表头、目标信号行、字段合同与字节数。此证据不能外推为热插拔、在线下载或并发文件服务。
+- L-077：LogTask 写入计数、文件大小和 `/api/signals` 不能证明 CSV 的物理内容。当前产品不含日志下载 API；最终内容验收应在外部 CAN 和两次运行态增长通过后完全下电取卡，在主机只读核对当前路径的单表头、目标信号行、字段合同、完整成对尾部与不小于最近板端值的字节数。人工下电不能与 MCU 计数原子同步，禁止把之后继续正常追加造成的更大文件误判为失败；此证据不能外推为热插拔、在线下载或并发文件服务。
 
 - L-001：硬件状态以最新上电或复位后的实际读数为准，不沿用旧日志结论。
 - L-002：`/Users/elvin/Desktop/project/can_bus` 可能是指向 `/Users/elvin/Desktop/project/can_bus_W5500` 的符号链接，执行前先用 `pwd` 或 `git rev-parse --show-toplevel` 归一化路径。
