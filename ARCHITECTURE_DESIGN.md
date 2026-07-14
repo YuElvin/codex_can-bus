@@ -325,3 +325,5 @@ F-8 的 `taskENTER_CRITICAL→HAL_SD_ReadBlocks→taskEXIT_CRITICAL` 已构建�
 F-9 在外部 CANtest 持续 `0x321`/marker=`42434` 后实际进入连续日志 append；前 17 次 write 成功，read call 从 46 增至 120，随后 LogTask failure=`6`、read failure=`5`，最新 `LBA=3826/blocks=1` 读前后为 `ErrorCode=0x80000000/STA=0x45000/DCOUNT=512`，operation=`2`、append stage=`2`。它越过 F-6 的 call=102 仍失败，故仅抑制任务切换不能消除 SD 错误。F-9 已删除并重新构建、反汇编、烧录正式 F-5 路径；下一步只审计 SD 时钟、总线宽度、硬件 flow control 与 HAL polling 配置的证据，不直接修改。
 
 F-10 审计结果：BSP 在 `HAL_SD_Init` 前固定 `ClockEdge=RISING`、`ClockPowerSave=DISABLE`、`BusWide=1-bit`、`HardwareFlowControl=DISABLE`、`ClockDiv=16`；HSI64/PLL1Q=100MHz 和 HAL 公式给出 CK≈3.125MHz。F-6 的 `CLKCR=0x10` 正是该设置，`DCTRL=0x90→0x92` 是 512 B polling read 的预期配置。下一单字段实验是只开启 HardwareFlowControl；若无错误只能证明其对 FIFO 节流有帮助，不能代替稳定性完整验收或定论根因。
+
+F-11 只将 `HardwareFlowControl` 改为 ENABLE；构建、反汇编和烧录后，冷启动板端 `CLKCR=0x20010`。在外部 CANtest `0x321` 持续输入下，read call 从 31 增至 150、LogTask write/flush 从 1/1 增至 25/25、failure 保持 0，且 ping、`/api/status`、`/api/can/status`、`/api/signals` 同次通过。该结果允许保留 HWFC 配置并进入 30 分钟无现场操作的 F-12 耐久；尚未证明长期稳定或根因，F-12 若失败不得以本结果声称修复。

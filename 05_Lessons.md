@@ -44,6 +44,7 @@
 - L-065：不能用 `taskENTER_CRITICAL()` 包裹依赖 `HAL_GetTick()` 超时的 polling HAL 调用。F-8 现场任务循环冻结、PC 位于 `HAL_SD_ReadBlocks`，说明临界区屏蔽 tick 后会让实验自身停滞；此结果只否定该实验方法，不证明任务切换是否为 RX overrun 根因。
 - L-066：在不中断 SysTick/外设 IRQ 的前提下，`vTaskSuspendAll/xTaskResumeAll` 不能阻止当前默认日志 SD 故障。F-9 外部 CAN 输入下越过原首错 call=102 后仍出现 `HAL_TIMEOUT` 与 read failures；因此不能把任务切换写成根因，调度挂起代码必须撤回。
 - L-067：SDMMC 最终运行配置必须以 BSP 覆盖和 `CLKCR` 现场读数为准，而不是 `.ioc` 初始值。当前为1-bit、约3.125MHz、无HWFC；低速窄总线仍 RX overrun，若验证硬件流控必须只改变该位并用 `CLKCR=0x20010` 与既有首错快照验收。
+- L-068：HWFC 单字段验证必须同时验证源码、ELF、板端 `CLKCR` 和受外部 CAN 驱动的日志路径。F-11 仅把 HWFC 置 ENABLE 后，`CLKCR=0x20010`、read call 越过历史首错阈值 `102` 至 `150` 且 LogTask failure=0，说明短时路径有效；它不能替代 30 分钟耐久，也不能据此把 FIFO overrun 根因归为某一单点。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。

@@ -28,7 +28,7 @@
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
-| 12 | 稳定性基线 | [进行中；30 分钟子项未通过] | 短时任务/API/CAN 基线已通过；2026-07-13 正式固件 30 分钟插卡静态长跑中 CAN/W5500/API 正常，但默认 LogTask 终态 `last_result=1`、failure/drop=`381/1526`。F-6 冷启动首错为 `LBA=3826` polling read 的 `HAL_SD_ERROR_RX_OVERRUN=0x20`；F-7/F-8/F-9 已排除 DMA/IRQ/调度解释。F-10 确认实际为1-bit/3.125MHz/无HWFC；下一步只验证启用硬件流控。TF 运行中插拔仍为非支持操作 |
+| 12 | 稳定性基线 | [进行中；30 分钟子项待重验] | 历史 30 分钟插卡静态长跑中 CAN/W5500/API 正常但 LogTask failure/drop=`381/1526`；F-6 冷启动首错为 `LBA=3826` polling read 的 `HAL_SD_ERROR_RX_OVERRUN=0x20`，F-7/F-8/F-9 未支持 DMA/IRQ/调度解释。F-11 仅开启 HWFC 后板端 `CLKCR=0x20010`、read call `31→420`、LogTask write/flush `1/1→79/79`、failure=0，且 ping/API/CAN 回归正常；尚需当前固件 30 分钟静态耐久重验，不能写成已稳定。TF 运行中插拔仍为非支持操作 |
 
 ## 阶段 C 当前状态
 

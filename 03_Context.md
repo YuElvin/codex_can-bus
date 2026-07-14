@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-13（阶段 C 已客观验证受限双槽 RuleFile v3 HTTP CRUD、TF 原子保存、RuleTask reload 与跨复位持久化；阶段 B 的首次 v2 缺失创建仍未观察；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
+更新时间：2026-07-14（阶段 F-11 已完成 HWFC 单字段烧录与短时板端验证；阶段 F 的 30 分钟静态耐久仍待验；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
 
 ## 当前仓库
 
@@ -37,6 +37,7 @@
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
 - 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 曾保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-6 已在 TF 保持插入、板级断电至少 10 秒再上电的干净基线捕获首次错误：约 32 秒，read failure `0→1`、call `51→102`，append stage/op=`2/2`，单扇区 `LBA=3826`；调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0`，调用后 `State=1/Context=0/ErrorCode=0x20/HAL_SD_ERROR_RX_OVERRUN/STA=0x29000/DCOUNT=448`。F-7 只读审计确认该调用实际为 CPU polling `HAL_SD_ReadBlocks`（非 DMA/IDMA），故障时 `MASK=0`，不依赖 SDMMC IRQ；FDCAN2 没有 NVIC 接收中断且任务轮询，不能归因于 FDCAN2 ISR。F-8 的关中断实验会冻结 HAL tick，已撤回；F-9 的 `vTaskSuspendAll/xTaskResumeAll` 保留 tick/中断但在外部 `0x321` 输入下越过 F-6 call=102 后仍出现 read failure，终态 call/failure=`120/5`、LogTask failure=`6`、`HAL_TIMEOUT`，同样已撤回并重烧录正式 F-5 路径。任务切换不是已证实的充分原因；下一步只能只读审计 SD 传输/轮询参数与 HAL 机制，不直接改参数。其后网络回归未通过：主机 en2 对 `192.168.1.88` ARP 为 incomplete，ping/HTTP 均超时；但精确 ELF 读数 `bringup=0/VERSIONR=4/PHYCFGR=0xBF/link=1/network_configured=1` 且任务循环递增，不能写成固件或 SD 因果回归。
 - 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 曾保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-6 已在 TF 保持插入、板级断电至少 10 秒再上电的干净基线捕获首次错误：约 32 秒，read failure `0→1`、call `51→102`，append stage/op=`2/2`，单扇区 `LBA=3826`；调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0`，调用后 `State=1/Context=0/ErrorCode=0x20/HAL_SD_ERROR_RX_OVERRUN/STA=0x29000/DCOUNT=448`。F-7/F-8/F-9 已排除 DMA/IRQ/任务调度为充分解释。F-10 只读审计确认最终运行配置为 1-bit、上升沿、无 power-save、无硬件流控、`ClockDiv=16`，由 `PLL1Q=100MHz` 推得数据 CK≈3.125MHz；F-6 `CLKCR=0x10/DCTRL=0x90→0x92` 与其精确一致。CubeMX 4-bit/25MHz 已被 BSP 覆盖，不能归因于“总线过快”。下一步固定 F-11 只开启 HardwareFlowControl，预期 `CLKCR=0x20010`，不改频率、宽度、timeout 或其他参数。其后网络回归未通过：主机 en2 对 `192.168.1.88` ARP 为 incomplete，ping/HTTP 均超时；但精确 ELF 读数 `bringup=0/VERSIONR=4/PHYCFGR=0xBF/link=1/network_configured=1` 且任务循环递增，不能写成固件或 SD 因果回归。
+- F-11 已只将 HWFC 从 DISABLE 改为 ENABLE 并烧录。当前冷启动外部 CAN 条件下，板端 `CLKCR=0x20010`，read call=`31→420`、LogTask write/flush=`1/1→79/79`、read/LogTask failure 均为 `0`，并越过 F-6 的 call=`102`；ping 2/2、`/api/status`、`/api/can/status`、`/api/signals` 同次正常。该证据支持“HWFC 对当前 polling FIFO 路径有短时缓解”，不证明根因，也不替代 30 分钟稳定性验收。下一固定 F-12 是不改源码、不重烧录的 30 分钟连续静态耐久：保持当前插卡、上电、CANtest 既有帧不变，不做插拔/断电/参数切换；每分钟只读采样 read failure、LogTask write/flush/failure/drop、文件大小和关键快照，结束后复查 ping 与三个只读 API。任何 failure 增长即记录失败并停止把 F-11 写为有效稳定性修复。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
@@ -62,7 +63,7 @@
 
 ## 下一步建议
 
-阶段 C、D、E 已关闭；阶段 F 进行中且首个 30 分钟静态长跑因默认 LogTask 失败未通过。F-6 已完成干净首错采集；下一派送 F-7 只读审计 SDMMC polling-read、FIFO/IRQ/FreeRTOS 中断优先级与缓存维护实现，输出证据、反证与一个最小可烧录假设，不修改 DMA、timeout、IRQ、重试、remount、热插拔或恢复策略，也不得扩大 HTTP、规则或配置功能。
+阶段 C、D、E 已关闭；阶段 F 进行中。F-11 已在 HWFC=`ENABLE` 下完成短时板端成功证据，但首个 30 分钟静态长跑的原失败尚未被替代。下一派送 F-12 只能执行当前烧录固件的 30 分钟只读耐久采样，不改代码、不重烧录、不操作 TF/CAN；按每分钟的 read/LogTask/文件增长数据和结束网络 API 形成明确通过或失败结论。
 
 ## 阶段 C 实际快照
 
