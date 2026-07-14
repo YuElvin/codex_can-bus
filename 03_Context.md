@@ -78,6 +78,8 @@ F-16 已完成正常CAN基线，但暂停等待用户“已离线”：三次等
 
 F-16 已在用户确认CANtest离线后得到受控失败边界：20秒无ACK使 TEC=`128`、错误增长且发送入FIFO失败，但 `busOff=0/PSR.BO=0`，故未形成 bus-off，不能验证恢复；同时HTTP连接重置，原因未定。现在暂停等待用户恢复 CANtest 500k、ACK与外部 `0x321` 后确认，才可读取错误被动后的收发恢复；连续三次等待未确认，禁止自行复位、烧录或模拟ACK。
 
+F-16 用户恢复后 CAN 已从错误被动回到 `TEC=0/PSR.BO=0`，TX/RX/任务增长；但主机HTTP持续 `Recv failure: Connection reset by peer`，而板端 W5500 link/PHY/socket监听/任务与HTTP status/error仍表面正常，故完整CAN异常回归失败且不能归因。下一派送 F-17 只读审计 socket0 接收→发送→关闭链路和诊断缺口，固定最小修复假设；不得改代码、烧录、重启、访问板端网络或让用户操作。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
