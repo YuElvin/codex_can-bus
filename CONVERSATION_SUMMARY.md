@@ -2220,3 +2220,10 @@
 - 已按上述固定范围派送 F-25：只改 `firmware/bringup/can_bringup.c` 实现该状态机和两个诊断符号，禁止构建/烧录/现场访问。根会话收到后将依次执行 diff检查、`verify.sh`、ELF反汇编、烧录和真实错误比特率进入/恢复现场验证；失败只允许回退该唯一提交。本条仅记录派送，未编译或反汇编。
 - F-25 仅改 `can_bringup.c`，实现TXBRP逐位Abort→Stop→Start、1秒BO限流和attempt/result诊断。`git diff --check`、`verify.sh`通过，CTest=14/14，FLASH=86216B、RAM_D1=239768B；反汇编确认仅BO分支调用Abort/Stop/Start且无DeInit/Init或调度变化。HEX烧录 `Programming Finished/Verified OK`。正常500k基线RX=320、signals=42434/4660、BO/TEC/REC=0；错误250k下attempt=44/result=0、IR保留BO、CCCR.INIT=0/BO=0/TXBRP=0；恢复500k后外部RX=1305→1331→2292、signals持续更新、BO=0、attempt=56/result=0，TEC=95→70→22→0，最终 tx/rx=352/2292、errors=0、sendResult=0。用户确认信号正常收发。结论：真实bus-off进入与不复位恢复均通过。
 - F-23d 仅更新最终验收合同：修正v2/v3两规则和TF规则文件已验证的状态，明确无限规则管理非目标；F-25 bus-off恢复已验证，RX overrun根因、TF CSV内容及最终复验仍未完成。本轮未改源码、未编译或反汇编。
+
+## 2026-07-15 阶段 F-26：TF CSV 物理内容验收协议（待现场执行）
+
+- 按用户“每个新阶段必须明确派送”的约束，已派送唯一只读目标：审计现有固件是否已有 CSV 内容读取路径，并确定不扩大产品范围的最终内容验收方式。子任务未编辑、构建、反汇编、烧录、访问网络或硬件。
+- 审计确认 `signal_log_task()` 固定写当前路径 `/log/signal.csv`（只有启动默认 size-read 的非 `FR_NO_FILE` 失败才选择 `/log/signal-recovery.csv`）；CSV 合同为 `updated_ms,key,value,raw,unit,quality`，最多两项。已有 `stm32h750_tf_file_size_locked()` 与按 offset 读取的 helper，但 HTTP 静态路由仅映射 `/`、`/index.html` 到 `/www/index.html`，不存在 `/log/*`、CSV 下载或通用文件读取。`/api/signals` 只能证明当前缓存，不能替代文件内容。
+- 结论和固定协议：不新增下载 API。保持标准外部 CAN 输入，先确认 marker=`42434`、sequence=`4660` 与 CAN 无错误；两次间隔至少6秒读取运行态计数，要求 path_mode=0、LogTask write/flush/TF CSV size 均增长且 log failure/CSV write result/读失败为0。随后暂停等待用户完全下电取卡；主机只读挂载核对 `/log/signal.csv` 单表头、至少一组 marker/sequence 六字段 `quality=ok` 行，且主机字节数等于下电前 size。若 path_mode=1 改查 recovery 文件。该证据仅覆盖下电关闭前落盘，不覆盖热插拔、在线下载或并发服务。
+- 本轮同步 `PROJECT_FINAL_ACCEPTANCE.md`、`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md`：F-25 已验证，F-26 现场内容复查待执行。仅文档/治理修改，未修改固件源码，因此未编译，也未执行反汇编检查、烧录或硬件操作。

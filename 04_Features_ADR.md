@@ -171,3 +171,11 @@ timeoutMs=<uint32 十进制>
 HTTP 固定为 socket0 顺序服务：GET 列表/详情；POST 仅启用 disabled 槽；PUT 完整替换指定槽；DELETE 仅禁用 enabled 槽。POST/PUT 使用完整 URL-encoded 表单，非法为 400、无槽为 404、状态冲突为 409、保存/reload 失败为 500。首次写入只由当前有效 v2/v3 形成候选；HTTP 不直接修改运行 engine。ConfigTask 快照候选后使用 TF tmp/prev 原子替换，成功才提交 current/pending 并请求 RuleTask reload；HTTP 等待 save 和 generation 变化后才返回成功。实测 CRUD、复位持久化、默认恢复及非法 PUT 不变性均通过。
 
 实现中发现 `rule_file_v3_build_engine()` 的 3856 B 自动 `RuleEngine` 在 1024-word ConfigTask 栈上造成真实 TCB 覆盖和 FreeRTOS HardFault；函数现直接构造调用方提供的 engine，最终 ELF 栈帧 120 B。该 ADR 不增加第三槽、前端、鉴权、并发请求、通用配置事务或 QSPI 多规则。
+
+### ADR-023：bus-off 仅在真实 BO 状态下限流 Stop/Start 恢复
+
+F-25 在既有 `capture_can2_status()` 读取到真实 `bus_off` 时，先逐位 Abort `TXBRP` 中的挂起请求，再调用 `HAL_FDCAN_Stop()`；只有 Stop 成功时才 `HAL_FDCAN_Start()`。私有 latch/tick 使首次 BO 立即尝试、持续 BO 每1000ms最多一次，正常状态清 latch；公开 attempt/result 仅供诊断。不得调用 DeInit/Init，不改位率、过滤器、任务周期、队列或正常状态路径。错误250k形成 BO 后该路径已实测恢复，恢复500k后外部 RX、SignalCache 与 TEC=0 均复原。
+
+### ADR-024：CSV 内容验收保持下电取卡的只读边界
+
+最终 CSV 内容复查不增加 `/log/*`、下载 API、路径参数化或并发文件服务。先以外部 CAN 与 LogTask write/flush/size 增长证明运行态写入正常，再完全下电取卡并在主机只读检查当前日志文件的单表头、marker/sequence 行、字段数、`quality=ok` 和字节数。该证据只覆盖下电关闭前内容，不定义热插拔、在线读取或 recovery 运行时恢复。

@@ -22,10 +22,10 @@
 | 硬件与启动 | ST-Link 可烧录/读数；W5500、TF、FDCAN2、W25Q128 启动状态正常 | OpenOCD `Verified OK`；精确变量；ping 与状态 API | 已有基线，后续每次回归 |
 | CAN 与 DBC | 外部 CANtest RX、周期 TX、DBC 上传/激活、解码到 SignalCache 持续正确 | CANtest 与板端 RX/TX/error 计数；`/api/signals`；`/api/dbc/runtime` | 主要完成，需稳定性回归 |
 | 网络/API | socket0 顺序 GET/POST 语义、错误码、请求体完整性正确 | 顺序 curl；HTTP 200/400/500 行为；W5500 诊断 | 受限最小实现已完成；F-20 已验证非法规则400后的 `+0/+50/+100/+250/+500 ms` 独立短连接均为200 |
-| TF 与日志 | TF 卡在插入状态下上电后默认 CSV 路径连续落盘；运行中插拔明确不支持，必须先下电 | TF 文件大小/内容、LogTask write/flush/failure、插卡冷启动状态 | 默认路径已验证；运行中 recovery 不作为交付条件 |
+| TF 与日志 | TF 卡在插入状态下上电后默认 CSV 路径连续落盘；运行中插拔明确不支持，必须先下电 | TF 文件大小/内容、LogTask write/flush/failure、插卡冷启动状态 | 写入计数与大小增长已验证；CSV 物理内容复查待按第4节 F-26协议执行；运行中 recovery 不作为交付条件 |
 | 配置持久化 | 双槽保存、读回、断电/复位加载、坏槽回退；HTTP 不绕过 ConfigTask | QSPI save/load/sequence 读数；复位后 API；配置队列读数 | 单规则完成 |
 | 规则管理 | 规则模型、文件格式、HTTP CRUD、多规则执行/优先级/安全态均定义并现场验证 | 文件读写、HTTP 请求、RuleTask generation、继电器 GPIO、异常输入 | v2/v3 两规则和 TF 规则文件已验证；通用无限规则管理非目标 |
-| 故障与稳定性 | 长跑、断网、CAN bus-off/恢复、插卡冷启动后配置/DBC/日志恢复 | 连续计数、错误计数、恢复证据和明确的未通过项 | 进行中；F-12长跑、F-14物理断网恢复、F-17 HTTP优雅关闭修复、F-19冷启动DBC/v3规则/日志恢复、F-25 CAN bus-off 恢复均已验证；RX overrun 根因、TF CSV 内容和最终复验仍未完成 |
+| 故障与稳定性 | 长跑、断网、CAN bus-off/恢复、插卡冷启动后配置/DBC/日志恢复 | 连续计数、错误计数、恢复证据和明确的未通过项 | 进行中；F-12长跑、F-14物理断网恢复、F-17 HTTP优雅关闭修复、F-19冷启动DBC/v3规则/日志恢复、F-25 CAN bus-off 恢复均已验证；TF CSV 内容和最终全量复验仍未完成，RX overrun 仅保留为历史根因未定事项 |
 | 发布完整性 | 工作树干净、分支已推送；所有状态文档与最终固件一致 | `git status`、远端哈希、`verify.sh`、ELF 反汇编、最终烧录记录 | 每阶段执行；最终待审计 |
 
 ## 3. 统一验收门槛
@@ -56,6 +56,12 @@
 | G | 最终全量审计 | 按本文件第2节逐项复验，汇总最终固件哈希、提交哈希、未完成项；所有项通过才可标记项目完成 | 以历史聊天或源码存在代替复验 |
 
 阶段 A 开始前，必须先在 `04_Features_ADR.md` 固化规则文件的字段、版本、容量上限、非法输入行为和与 W25Q128 单规则备份的关系；不能由派送会话自行假设格式。
+
+### F-26：默认 CSV 物理内容复查（待执行）
+
+现有 HTTP 只提供 `/`、`/index.html` 和 API 路由，不提供 `/log/*` 或 CSV 下载；不得为本项临时增加下载 API。现场必须保持外部 CANtest 标准 `500 kbit/s` 输入，先证明 `/api/signals` 的外部缓存为 marker=`42434`、sequence=`4660` 且 CAN 无错误；再间隔至少 6 秒读取两次现有 LogTask/TF 状态，要求 `g_log_path_mode=0`、`g_log_write_count`、`g_log_flush_count`、`g_tf_csv_file_size` 均增长，`g_log_failure_count=0`、`g_tf_csv_write_result=0` 且读失败不增长。
+
+随后必须由用户将开发板完全下电，才可取出 TF 卡。主机只读挂载后读取 `/log/signal.csv`，不格式化、不改写：文件只能有一行表头 `updated_ms,key,value,raw,unit,quality`；至少一组同一采样周期的两行必须包含 `Can2Data.marker,42434.000000,42434` 与 sequence 的 `4660.000000,4660`，每行六字段且 `quality=ok`；主机取得的字节数必须等于下电前最后一次 `g_tf_csv_file_size`。若现场为 `g_log_path_mode=1`，改查 `/log/signal-recovery.csv`，不得把默认文件冒充当前日志。本协议只证明下电关闭前的落盘内容，不证明热插拔、在线下载或并发文件服务。
 
 ## 5. 派送协议
 

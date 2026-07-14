@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-15（阶段 F-19 已完成真实冷启动下的 DBC/v3规则/外部CAN/默认日志联合恢复验证；阶段 F 的剩余异常项与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
+更新时间：2026-07-15（F-25 已完成真实 CAN bus-off 的不复位自动恢复验证；F-26 已固定 TF CSV 下电内容复查协议；阶段 F 的剩余验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
 
 ## 当前仓库
 
@@ -87,6 +87,8 @@ F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和
 F-21 只读审计完成：FDCAN2 为自动重传，软件约每秒提交一帧，而硬件 TX FIFO 只有4个元素；F-16 的 `TEC=128/PSR.EP=1/PSR.BO=0/LEC=ACK error/TXBRP=0xF` 客观证明已进入错误被动且四个请求未完成。无ACK继续等待或加快发送不会形成可验收的真实bus-off，不能用软件、loopback或调试器伪造。下一现场步骤仅允许让 CANtest normal active 以错误比特率产生物理时序错误，并且必须以 `PSR.BO=1` 与 HTTP `busOff=1` 同时判定；若仍只有ACK error/TEC=128，停止实验并记录 CANtest 不具备足够错误注入能力，不能改代码掩盖。
 
 F-21 现场已形成并验证真实bus-off：错误比特率下 `PSR=0x7e7(BO=1)`、`ECR=0xfff8`、`IR=0x2b800801(BO bit25=1)`、HTTP `busOff=1`；用户恢复 CANtest normal active/500k/原帧后，观察窗口超过60秒（CAN poll `972→1107`）仍为 `CCCR=0x1001/ECR=0xfff8/PSR=0x7e7/TXBRP=0xF`，CANtest发送失败且无新信号。这是当前固件无恢复路径的客观失败，不能写为bus-off恢复通过。已派送 F-24 只读审计，唯一目标是定义可回退的最小 FDCAN2 STOP/START 恢复状态机；审计完成前不盲改源码。
+
+F-25 已在 `can_bringup.c` 实现并烧录最小 bus-off 恢复：持续 BO 时按 1 秒限流逐位 Abort `TXBRP`，再 Stop，Stop 成功才 Start；不执行 DeInit/Init，不改变位率、过滤器、任务周期或队列。`verify.sh`/CTest=`14/14`、定向反汇编、OpenOCD `Verified OK` 均已完成。正常500k基线外部 RX=320、signals=42434/4660；错误250k现场形成真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`；恢复500k后外部 RX=`1305→2292`、TEC=`95→0`、最终 CAN tx/rx=`352/2292`、errors/busOff/sendResult=0，用户确认信号正常收发。F-26 只读审计确认当前 HTTP 无 CSV 下载路由，最小最终内容验收固定为：正常外部 CAN 输入与两次写入/flush/size 增长后，用户完全下电取卡，主机只读核对当前路径 CSV 的单表头、marker=`42434`、sequence=`4660`、六字段 `quality=ok` 和字节数相等；详细操作门槛见 `PROJECT_FINAL_ACCEPTANCE.md`，此项尚未执行。
 
 ## 阶段 C 实际快照
 
