@@ -321,3 +321,5 @@ F-6 已在用户完成板级断电至少 10 秒、再上电的条件下只读采
 F-7 的只读实现审计确认：`BSP_SD_ReadBlocks_DMA` 名称虽保留，实际调用 `HAL_SD_ReadBlocks(..., 1000ms)`；HAL 轮询 `RXFIFOHF` 后由 CPU 读取 32 B FIFO，`RXOVERR` 即清标志并返回 `HAL_ERROR`。故障时 `MASK=0`，不依赖 `SDMMC1_IRQn`；最终运行参数为 1-bit、上升沿、无硬件流控、`ClockDiv=16`，不是 CubeMX 初始 4-bit/`ClockDiv=2`。FDCAN2 未启用 NVIC 通知，接收由任务轮询；项目未见 DCache/MPU 或 SD DMA cache-maintenance 启用。故下一步唯一实验是临时临界区包裹原 read，比较冷启动首错，不改变 timeout、DMA 或扇区语义。
 
 F-8 的 `taskENTER_CRITICAL→HAL_SD_ReadBlocks→taskEXIT_CRITICAL` 已构建、反汇编和烧录，但冷启动后 LogTask 停在 HAL：连续 30 秒诊断不变，暂停 PC=`0x08009c54` 位于 `HAL_SD_ReadBlocks`，任务循环冻结。原因是该临界区屏蔽 tick，破坏 HAL polling timeout；实验代码已撤回，正式 F-5 HEX 重新烧录 Verify。F-9 若实施，只能以 `vTaskSuspendAll/xTaskResumeAll` 防止任务切换而不屏蔽 SysTick，仍保持原 timeout、参数和快照。
+
+F-9 在外部 CANtest 持续 `0x321`/marker=`42434` 后实际进入连续日志 append；前 17 次 write 成功，read call 从 46 增至 120，随后 LogTask failure=`6`、read failure=`5`，最新 `LBA=3826/blocks=1` 读前后为 `ErrorCode=0x80000000/STA=0x45000/DCOUNT=512`，operation=`2`、append stage=`2`。它越过 F-6 的 call=102 仍失败，故仅抑制任务切换不能消除 SD 错误。F-9 已删除并重新构建、反汇编、烧录正式 F-5 路径；下一步只审计 SD 时钟、总线宽度、硬件 flow control 与 HAL polling 配置的证据，不直接修改。
