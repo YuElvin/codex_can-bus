@@ -85,6 +85,10 @@ F-8 已实际证明 `taskENTER_CRITICAL()` 不适用于包裹 `HAL_SD_ReadBlocks
 
 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 包住原 read，保持所有中断、HAL tick、1000 ms timeout、F-5 快照和调用参数。外部 CANtest `0x321` 使 LogTask 实际连续 append；成功读调用越过 F-6 的 `call=102` 后，仍在 call=`120` 见到 read failure=`5`、LogTask failure=`6`，最新 read 为 `LBA=3826/blocks=1`、`HAL_TIMEOUT`。故任务切换不是足以解释故障的原因；实验代码已撤回，下一步先审计 SD clock/bus/flow-control/polling 配置。
 
+### ADR-027：先单独验证 SDMMC 硬件流控
+
+F-10 只读审计确认最终生效配置为 `ClockDiv=16`、1-bit、上升沿、PowerSave/HWFC 均关闭，实际数据 CK≈3.125MHz；F-6 `CLKCR=0x10` 和读 `DCTRL=0x90→0x92` 与源码/HAL polling 机制一致。低速1-bit已仍出现 RX FIFO overrun，故不回退 CubeMX 4-bit/25MHz。下一实验仅将 `HardwareFlowControl` 置 ENABLE，预期 CK 不变而 `CLKCR` 增加 bit17=`0x20000`；结果只能说明 FIFO 节流是否缓解当前路径，不能单独证明根因。
+
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
 不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固定高滞回为 `Can2Data.marker on=42434/off=42432`：Relay1 高、Relay2 固定低、1000 ms 连续匹配延时、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的手动覆盖和单规则配置槽；reload 先将候选装入独立 engine，只有阈值/延时校验成功才替换当前 engine，失败保留旧有效规则。实机已验证 42434 置位、42433 保持、42432 释放，以及 reload 失配生效、恢复默认后延时高态、非法候选保留旧高态；不增加 HTTP、文件保存、多规则或持久化。

@@ -2139,3 +2139,9 @@
 - 用户随后在 CANtest 持续发送标准 `0x321`、DLC=8、`C2 A5 34 12 00 00 00 00`。板端 `rx=178`、外部 DBC decode/match/updates 均增长，LogTask 从 write/flush=`4/4` 连续成功到 `17/17`，file size 增长，read failure 维持 0；45 秒后 read call=`81`，需继续越过 F-6 call=`102` 才可比较。
 - 继续采样后 call=`102` 仍成功，但随后首次观察到 LogTask failure；最终 call/failure=`120/5`、LogTask failure=`6`、write/flush=`17/23`、默认路径 last/csv result=`1/1`、append stage=`2`、operation=`2`。最新 request=`LBA 3826/blocks 1`，before/after `ErrorCode=0x80000000/STA=0x45000/DCOUNT=512`、HAL status=`3`，为 timeout；另一次采样在 failure 首次出现时 stage=`4`，所以不能把 F-9 的第一项日志失败绝对归于单一读调用。结论限于保持 tick/IRQ 的调度挂起没有防止后续 SD 失败。
 - 已使用 `apply_patch` 删除 `task.h` 和 `vTaskSuspendAll/xTaskResumeAll`。恢复正式路径后 `git diff --check`、`./scripts/verify.sh` 通过，host CTest=`14/14`，ELF FLASH=`85880 B / 128KB = 65.52%`、RAM_D1=`239752 B / 512KB = 45.73%`；反汇编确认仅保留原 `HAL_SD_ReadBlocks(...,1000)`。OpenOCD/ST-Link V2 重烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.256913 V`。F-9 不是可提交功能，下一固定 F-10 只读审计 SD 时钟/总线宽度/hardware flow control 与 HAL polling 配置，不直接改参数。
+
+## 2026-07-14 阶段 F-10：SDMMC 运行配置与 polling 机制审计（已完成）
+
+- 子智能体按固定范围只读检查，基线 `ede4ff4`；未改、未编、未烧录、未接硬件、未访问网络。`tf_sd_apply_bringup_config()` 和正式 ELF 的 `BSP_SD_Init` 均固定 `ClockEdge=RISING`、PowerSave=DISABLE、BusWide=1-bit、HardwareFlowControl=DISABLE、ClockDiv=`16`；PLL1Q=`100MHz`，按 HAL 公式数据 CK≈`3.125MHz`。CubeMX `.ioc`/生成源仍为4-bit、ClockDiv=2/≈25MHz，但已被 BSP 显式覆盖。
+- F-6 `CLKCR=0x10` 对应上述配置；`DCTRL=0x90` 是512B、未启数据通路，read 后 `0x92` 仅加 DTDIR。HAL polling 在 `RXFIFOHF` 时由 CPU 读取32B FIFO，`STA=0x29000` 的 RXOVERR/RXFIFOHF/RXFIFOF 与该路径一致。F-9 没有独立寄存器采样，不能把 F-6 的实测值写成 F-9 现场读数；但 F-9 源码只改调度包裹，配置不变。
+- 当前低速、1-bit已出现 overrun，所以没有证据把总线过快/4-bit写为根因。两个最小候选中优先 F-11：仅 HardwareFlowControl 从 DISABLE 改 ENABLE，预期 `CLKCR 0x10→0x20010`，不改变 CK/宽度/timeout；若首错显著推迟或30分钟无 read failure，只支持“硬件 FIFO 节流缓解”而不证明卡、信号或软件根因。备选才是 ClockDiv 16→32 的降速实验，不在本步实施。
