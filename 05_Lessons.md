@@ -1,6 +1,7 @@
 # 经验教训
 
 - L-073：规则表单的 `enabled` 只接受十进制 `0/1`；`enabled=true` 正确返回 `HTTP 400 invalid_rule`，并在两次 `SENDOK` 后沿用 F-17 的 pending `DISCON` 路径，不存在400专属强制 `CLOSE`。现场独立短连接在收到完整400后的 `+0/+50/+100/+250/+500 ms` 均返回200、最终 socket=`LISTEN`/pending/error=`0/0`，只能证明该顺序流程，不可据此宣称支持并发。
+- L-074：CAN 无ACK现场不能替代真实 bus-off 注入。F-16 的 `TEC=128/EP=1/BO=0/LEC=ACK error/TXBRP=0xF` 表明节点错误被动且4个硬件发送请求未完成；自动重传和加快应用发送都不会构成 `PSR.BO=1` 证据。bus-off 验收必须使用外部物理 bit/stuff/form/CRC 类错误并同时观测 `PSR.BO=1`、HTTP `busOff=1`，不能用软件、loopback或调试器伪造。
 
 - L-001：硬件状态以最新上电或复位后的实际读数为准，不沿用旧日志结论。
 - L-002：`/Users/elvin/Desktop/project/can_bus` 可能是指向 `/Users/elvin/Desktop/project/can_bus_W5500` 的符号链接，执行前先用 `pwd` 或 `git rev-parse --show-toplevel` 归一化路径。

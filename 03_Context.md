@@ -84,6 +84,8 @@ F-17 已以最小 socket0 状态机修复并烧录通过：正常响应只发 `D
 
 F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和 CANtest 不变，开发板下电至少10秒再上电。启动后 `/api/status`、`/api/dbc/runtime`、`/api/rules`、`/api/can/status`、`/api/signals` 均为 HTTP 200；DBC=`151 B/3 lines/1 message/2 signals/errors=0`，v3 两槽规则保持默认语义，CAN `rx=1022/errors/busOff/tec/rec/sendResult=0`，外部 marker/sequence=`42434/4660`。ST-Link 为 DBC valid/result=`1/0`、v3 load_result=`0`、rule_count/read_len/size=`2/312/312`、RuleTask started=`1`；LogTask 默认 path、write/flush=`15/15→19/19`、文件 `0x9f648→0x9ff30`、failure/read_failure=`0/0`。F-20 随后通过错误响应现场时序：非法 `enabled=true` 正确返回400且规则不变，curl完成后新的 `/api/rules` 连接在 `+0/+50/+100/+250/+500 ms` 均200；最终 socket=`0x14`、pending/error=`0/0`、last code=`200`。这一证据只覆盖该独立短连接流程，仍不宣称并发服务。阶段 F 仍未形成真实 CAN bus-off。
 
+F-21 只读审计完成：FDCAN2 为自动重传，软件约每秒提交一帧，而硬件 TX FIFO 只有4个元素；F-16 的 `TEC=128/PSR.EP=1/PSR.BO=0/LEC=ACK error/TXBRP=0xF` 客观证明已进入错误被动且四个请求未完成。无ACK继续等待或加快发送不会形成可验收的真实bus-off，不能用软件、loopback或调试器伪造。下一现场步骤仅允许让 CANtest normal active 以错误比特率产生物理时序错误，并且必须以 `PSR.BO=1` 与 HTTP `busOff=1` 同时判定；若仍只有ACK error/TEC=128，停止实验并记录 CANtest 不具备足够错误注入能力，不能改代码掩盖。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
