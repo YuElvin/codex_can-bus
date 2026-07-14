@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-14（阶段 F-11 已完成 HWFC 单字段烧录与短时板端验证；阶段 F 的 30 分钟静态耐久仍待验；后续阶段与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
+更新时间：2026-07-15（阶段 F-19 已完成真实冷启动下的 DBC/v3规则/外部CAN/默认日志联合恢复验证；阶段 F 的剩余异常项与最终验收见 `PROJECT_FINAL_ACCEPTANCE.md`）
 
 ## 当前仓库
 
@@ -30,7 +30,7 @@
 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask：固定 1000 ms 延时、1500 ms 超时安全低、ST-Link 手动 OFF 覆盖优先、固定高滞回均已验证；单规则配置 reload 与 QSPI 显式保存、读回和复位加载均已实测；新增 HTTP GET/POST 单规则配置闭环并跨复位验证 |
 | 最小 QSPI 规则配置备份 | [客观已验证] | v1 单槽记录兼容；v2 使用 `0x00FFE000` 主槽和 `0x00FFD000` 备用槽，含 sequence、参数和 checksum。ConfigTask 两次交替保存、读回、复位加载、无效请求拒绝及候选/运行态隔离均已 ST-Link 实测 |
 | TF RuleFile v1 | [客观已验证；非法板端输入未注入] | 首次启动 TF `status=0` 时缺失文件 `load_result=1/created=1`；复位后读取 `75` 字节有效文件，`load_result=0/read_len=75`，RuleTask `generation=2/reload=0`，有效文件把此前 HTTP 写入的 QSPI `42435/42433/1100/1600` 覆盖回 `42434/42432/1000/1500`；纯解析主机测试覆盖缺字段、非法阈值和非法时序且候选不变 |
-| TF RuleFile v3 / 受限规则 CRUD | [客观已验证] | `/config/rules-v3.conf` 固定两槽、640 B 严格文本格式；顺序 HTTP `GET`、DELETE 禁用、POST 恢复、PUT、非法 PUT、重启持久化和默认恢复均已烧录验证。写入经 ConfigTask TF tmp/prev 原子替换，成功后 RuleTask 原子 reload；v3 构造函数已消除 3.8 KiB 栈对象导致的实测 HardFault。 |
+| TF RuleFile v3 / 受限规则 CRUD | [客观已验证] | `/config/rules-v3.conf` 固定两槽、640 B 严格文本格式；顺序 HTTP `GET`、DELETE 禁用、POST 恢复、PUT、非法 PUT、重启持久化和默认恢复均已烧录验证。F-19 第二次真实冷启动后再验证 `source="v3"`、两槽默认语义和 ST-Link `load_result=0/rule_count=2/read_len=size=312`。写入经 ConfigTask TF tmp/prev 原子替换，成功后 RuleTask 原子 reload；v3 构造函数已消除 3.8 KiB 栈对象导致的实测 HardFault。 |
 
 ## 当前阻断项
 
@@ -81,6 +81,8 @@ F-16 已在用户确认CANtest离线后得到受控失败边界：20秒无ACK使
 F-16 用户恢复后 CAN 已从错误被动回到 `TEC=0/PSR.BO=0`，TX/RX/任务增长；但主机HTTP持续 `Recv failure: Connection reset by peer`，而板端 W5500 link/PHY/socket监听/任务与HTTP status/error仍表面正常，故完整CAN异常回归失败且不能归因。下一派送 F-17 只读审计 socket0 接收→发送→关闭链路和诊断缺口，固定最小修复假设；不得改代码、烧录、重启、访问板端网络或让用户操作。
 
 F-17 已以最小 socket0 状态机修复并烧录通过：正常响应只发 `DISCON` 并等待后续 `CLOSED/INIT` 再监听，不再同轮强制 `CLOSE`。当前 CAN恢复后在每个短连接间留250ms，三轮 status/can/signals 共9次均HTTP200且无RST；最终 listener/任务/HTTP error/CAN错误均正常。当前HTTP为50ms单 socket轮询，零等待连续连接仍可能在重新监听窗口被拒绝，非并发服务。阶段 F 的 bus-off 本身仍未形成，且复位后DBC/规则/日志恢复仍待验；下一派送 F-18 只读审计冷/软件复位后各持久状态的现有证据与最小现场协议。
+
+F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和 CANtest 不变，开发板下电至少10秒再上电。启动后 `/api/status`、`/api/dbc/runtime`、`/api/rules`、`/api/can/status`、`/api/signals` 均为 HTTP 200；DBC=`151 B/3 lines/1 message/2 signals/errors=0`，v3 两槽规则保持默认语义，CAN `rx=1022/errors/busOff/tec/rec/sendResult=0`，外部 marker/sequence=`42434/4660`。ST-Link 为 DBC valid/result=`1/0`、v3 load_result=`0`、rule_count/read_len/size=`2/312/312`、RuleTask started=`1`；LogTask 默认 path、write/flush=`15/15→19/19`、文件 `0x9f648→0x9ff30`、failure/read_failure=`0/0`。阶段 F 仍未形成真实 CAN bus-off；F-20 只读审计确认非法规则表单的完整 HTTP 400 与200成功响应共用同一优雅断开路径，下一步仅做错误响应后的现场 socket 时序定界，禁止据此盲改代码。
 
 ## 阶段 C 实际快照
 
