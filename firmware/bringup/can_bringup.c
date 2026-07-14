@@ -58,6 +58,8 @@ volatile uint32_t g_can2_tx_queue_ready;
 volatile uint32_t g_can2_tx_queue_enqueue_count;
 volatile uint32_t g_can2_tx_queue_drop_count;
 volatile uint32_t g_can2_tx_queue_dequeue_count;
+volatile uint32_t g_can2_bus_off_recovery_attempt_count;
+volatile uint32_t g_can2_bus_off_recovery_result;
 
 static Stm32FdcanContext g_can2_ctx;
 static CanPort g_can2_port;
@@ -65,6 +67,8 @@ static SignalCache g_can2_signal_cache;
 static SignalCache g_can2_tx_self_test_signal_cache;
 static QueueHandle_t g_can2_rx_queue;
 static QueueHandle_t g_can2_tx_queue;
+static uint32_t g_can2_bus_off_recovery_latched;
+static uint32_t g_can2_bus_off_recovery_last_attempt_tick;
 
 static const CanFrame k_fd_probe_frame = {
   .id = 0x18ff50e5u,
@@ -120,6 +124,43 @@ static void capture_external_status(CanPort *can) {
   }
 }
 
+static void recover_can2_from_bus_off(void) {
+  uint32_t result = 0u;
+  uint32_t tx_request_pending = hfdcan2.Instance->TXBRP;
+
+  while (tx_request_pending != 0u) {
+    const uint32_t tx_request = tx_request_pending & (0u - tx_request_pending);
+    if (HAL_FDCAN_AbortTxRequest(&hfdcan2, tx_request) != HAL_OK) {
+      result |= 1u;
+    }
+    tx_request_pending &= ~tx_request;
+  }
+
+  if (HAL_FDCAN_Stop(&hfdcan2) != HAL_OK) {
+    result |= 2u;
+  } else if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK) {
+    result |= 4u;
+  }
+
+  g_can2_bus_off_recovery_result = result;
+  ++g_can2_bus_off_recovery_attempt_count;
+}
+
+static void service_can2_bus_off_recovery(bool bus_off) {
+  if (!bus_off) {
+    g_can2_bus_off_recovery_latched = 0u;
+    return;
+  }
+
+  const uint32_t now = HAL_GetTick();
+  if (g_can2_bus_off_recovery_latched == 0u ||
+      (uint32_t)(now - g_can2_bus_off_recovery_last_attempt_tick) >= 1000u) {
+    g_can2_bus_off_recovery_latched = 1u;
+    g_can2_bus_off_recovery_last_attempt_tick = now;
+    recover_can2_from_bus_off();
+  }
+}
+
 static void capture_can2_status(void) {
   CanPortStatus status;
   if (can_port_get_status(&g_can2_port, &status) == CAN_PORT_OK) {
@@ -129,6 +170,7 @@ static void capture_can2_status(void) {
     g_can2_bus_off = status.bus_off ? 1u : 0u;
     g_can2_tec = status.tec;
     g_can2_rec = status.rec;
+    service_can2_bus_off_recovery(status.bus_off);
   }
 }
 
