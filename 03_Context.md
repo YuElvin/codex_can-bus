@@ -86,6 +86,8 @@ F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和
 
 F-21 只读审计完成：FDCAN2 为自动重传，软件约每秒提交一帧，而硬件 TX FIFO 只有4个元素；F-16 的 `TEC=128/PSR.EP=1/PSR.BO=0/LEC=ACK error/TXBRP=0xF` 客观证明已进入错误被动且四个请求未完成。无ACK继续等待或加快发送不会形成可验收的真实bus-off，不能用软件、loopback或调试器伪造。下一现场步骤仅允许让 CANtest normal active 以错误比特率产生物理时序错误，并且必须以 `PSR.BO=1` 与 HTTP `busOff=1` 同时判定；若仍只有ACK error/TEC=128，停止实验并记录 CANtest 不具备足够错误注入能力，不能改代码掩盖。
 
+F-21 现场已形成并验证真实bus-off：错误比特率下 `PSR=0x7e7(BO=1)`、`ECR=0xfff8`、`IR=0x2b800801(BO bit25=1)`、HTTP `busOff=1`；用户恢复 CANtest normal active/500k/原帧后，观察窗口超过60秒（CAN poll `972→1107`）仍为 `CCCR=0x1001/ECR=0xfff8/PSR=0x7e7/TXBRP=0xF`，CANtest发送失败且无新信号。这是当前固件无恢复路径的客观失败，不能写为bus-off恢复通过。已派送 F-24 只读审计，唯一目标是定义可回退的最小 FDCAN2 STOP/START 恢复状态机；审计完成前不盲改源码。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
