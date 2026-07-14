@@ -77,6 +77,10 @@ F-5 的 MCU reset 后读数已处于连续失败，不能作为首错。F-6 因�
 
 F-7 证实项目的 `BSP_SD_ReadBlocks_DMA` 实际调用 `HAL_SD_ReadBlocks(..., 1000ms)`；故障时 `MASK=0`，HAL polling 循环由当前任务读取 FIFO，未使用 SDMMC IRQ、DMA/IDMA 或 DMA cache maintenance。FDCAN2 亦无 NVIC RX IRQ。下一验证只允许在这一既有 HAL 调用外加临时 FreeRTOS 临界区，并以 F-5 既有 request/寄存器快照在同样断电冷启动下比较首错；这是判定任务切换假设的实验，不是长期架构方案。
 
+### ADR-025：关中断临界区会破坏 HAL polling-read 的超时基准
+
+F-8 已实际证明 `taskENTER_CRITICAL()` 不适用于包裹 `HAL_SD_ReadBlocks`：冷启动后任务计数连续不变，暂停读取 PC 位于 `HAL_SD_ReadBlocks`。该临界区掩蔽 tick，而 HAL 的超时依赖 tick，故实验本身造成停滞，不能用于支持或反驳任务切换假设；代码已撤回并重新烧录正式 F-5 路径。若继续验证，只能使用 `vTaskSuspendAll/xTaskResumeAll`，保留 SysTick 和 HAL timeout。
+
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
 不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固定高滞回为 `Can2Data.marker on=42434/off=42432`：Relay1 高、Relay2 固定低、1000 ms 连续匹配延时、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的手动覆盖和单规则配置槽；reload 先将候选装入独立 engine，只有阈值/延时校验成功才替换当前 engine，失败保留旧有效规则。实机已验证 42434 置位、42433 保持、42432 释放，以及 reload 失配生效、恢复默认后延时高态、非法候选保留旧高态；不增加 HTTP、文件保存、多规则或持久化。

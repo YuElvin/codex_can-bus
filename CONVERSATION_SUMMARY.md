@@ -2120,3 +2120,12 @@
 - HAL polling read 按 32 B FIFO 轮询 `RXFIFOHF` 由 CPU 读取；若见 `RXOVERR` 则清标志、置 `HAL_SD_ERROR_RX_OVERRUN`、返回 `HAL_ERROR`。F-6 的 `STA=0x29000` 同时含 `DPSMACT|RXFIFOHF|RXFIFOF|RXOVERR`，与该机制一致。
 - 实际 TF bring-up 运行参数为 1-bit、上升沿、无硬件流控、`ClockDiv=16`，与 F-6 `CLKCR=16` 一致；CubeMX 初始 4-bit/`ClockDiv=2` 不是本次读的最终配置。故障时 `MASK=0`，polling FIFO 不依赖 SDMMC IRQ；FDCAN2 未配置 NVIC RX 通知、任务轮询接收，且项目未使用 SD DMA/IDMA 或 DMA cache maintenance。因此不能把本次 overrun 直接归为 DMA 缓存、SDMMC IRQ 或 FDCAN2 ISR。
 - F-7 提供的最小下一假设为“read 期间任务切换使 CPU 未及时排空 FIFO”。F-8 唯一允许的源码实验是用 FreeRTOS 临界区包裹原 `HAL_SD_ReadBlocks`，保持 F-5 快照，断电冷启动后比较首错时间、LBA、`ErrorCode/STA/DCOUNT`；不改 timeout、扇区、DMA、重试、remount、热插拔或恢复语义。该临界区仅为可回退的判别实验，不是已接受的长期方案。
+
+## 2026-07-14 阶段 F-8：polling read 任务切换假设（失败并已撤回）
+
+- 子智能体按固定范围只改 `src/platform/stm32h750/tf_card_fatfs_stm32.c`：新增必要的 `task.h`，并只在原 `HAL_SD_ReadBlocks(&hsd1,...,TF_CARD_SD_OP_TIMEOUT_MS)` 外增加 `taskENTER_CRITICAL()` 与 `taskEXIT_CRITICAL()`。F-5 的请求、计数、before/after 快照、1000 ms timeout、参数、错误映射和后续返回路径未改；所有 return 均在 exit 之后。
+- 根会话复查 `git diff --check` 通过，`./scripts/verify.sh` 通过，host CTest=`14/14`；最终 ELF `build/stm32h750/can_bus_gateway_stm32h750.elf` 为 FLASH=`85888 B / 128 KB = 65.53%`、RAM_D1=`239752 B / 512 KB = 45.73%`。`nm/objdump` 确认 `BSP_SD_ReadBlocks_DMA` 保留全部 F-5 快照，在原 HAL 调用前后精确为 `vPortEnterCritical → HAL_SD_ReadBlocks(...,1000) → vPortExitCritical`，exit 在所有结果处理与返回前。
+- 已通过 OpenOCD/ST-Link V2 烧录该 HEX，真实输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.249799 V`；用户随后按要求断电上电。初始 read failure=`0`、call=`71`，但 LogTask 后续出现一次 failure。一次采样脚本错误地把 OpenOCD 的 stderr 输出过滤掉，未写目标且不作为结论；重读使用当前 ELF 精确映射。
+- 连续六次、约 30 秒的只读采样中，LogTask/SD 诊断字完全不变；一次 halt 后立即 resume，PC=`0x08009c54` 位于 `HAL_SD_ReadBlocks`，Monitor/W5500/HTTP/FreeRTOS 任务循环值均冻结。原因是 `taskENTER_CRITICAL` 抑制 tick，而 HAL polling read 的超时依赖 tick；故该实验自身使 HAL 无法超时，不能判定任务切换根因。
+- 已使用 `apply_patch` 删除仅有的 `task.h` 和 enter/exit 代码。复查 `git diff --check`、`./scripts/verify.sh` 通过，host CTest=`14/14`；恢复 ELF FLASH=`85880 B / 128 KB = 65.52%`、RAM_D1=`239752 B / 512 KB = 45.73%`。反汇编确认恢复为原 `HAL_SD_ReadBlocks(...,1000)`，不含 `vPortEnterCritical/vPortExitCritical`。恢复 HEX 已再次 OpenOCD 烧录，真实输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.248193 V`，无残留 OpenOCD/3333/6666 监听。
+- F-8 结论为“关中断临界区方法不适用”，不是任务切换假设的肯定或否定。下一固定 F-9 如继续，只能采用 `vTaskSuspendAll/xTaskResumeAll` 保留 tick/中断并比较同样冷启动首错；不改 SD 参数、DMA、重试、remount、热插拔或恢复语义。
