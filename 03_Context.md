@@ -76,6 +76,8 @@ F-15 已固定 F-16 协议：当前 FDCAN2 为500 kbit/s、自动重传，运行
 
 F-16 已完成正常CAN基线，但暂停等待用户“已离线”：三次等待没有实际确认，故未制造bus-off。当前基线 `busOff/tec/rec=0`、`CCCR.DAR=0`、`PSR.BO=0`、CAN tx/rx/poll增长；收到确认后才按固定20秒窗口观测。该暂停是外部条件阻断，不能把正常基线写为bus-off恢复通过。
 
+F-16 已在用户确认CANtest离线后得到受控失败边界：20秒无ACK使 TEC=`128`、错误增长且发送入FIFO失败，但 `busOff=0/PSR.BO=0`，故未形成 bus-off，不能验证恢复；同时HTTP连接重置，原因未定。现在暂停等待用户恢复 CANtest 500k、ACK与外部 `0x321` 后确认，才可读取错误被动后的收发恢复；连续三次等待未确认，禁止自行复位、烧录或模拟ACK。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
