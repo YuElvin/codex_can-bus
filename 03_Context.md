@@ -72,6 +72,8 @@ F-14 断网子判定后来已由用户“已拔出网线”确认后通过：两
 
 F-14 已完整通过：用户插回同一网线后，`link_up/PHY bit0` 两次为`1/1`，W5500/HTTP任务循环增长；ping=`2/2`、`/api/status`、`/api/can/status`、`/api/signals` 均200，HTTP request=`9→12`、error=`0`。该证据只覆盖物理网线断开恢复；阶段 F 仍待 CAN bus-off/恢复和复位后 DBC/规则/日志恢复。下一派送 F-15 只读审计当前 FDCAN2 bus-off、错误计数、恢复行为和可观测符号，形成固定现场验收协议；不得改代码、烧录、操作 CANtest 或自行制造 bus-off。
 
+F-15 已固定 F-16 协议：当前 FDCAN2 为500 kbit/s、自动重传，运行时无显式 bus-off恢复代码。必须以 CANtest真正离线造成无ACK，且同时观察 HTTP `busOff=1` 与原始 `PSR.BO=1` 才能开始恢复验证；仅停止发送不成立。下一步 F-16 先等待用户使 CANtest停止发送并关闭/离线后确认；不得先行自行改CAN、断开开发板侧线、重启、烧录或改变TF。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
