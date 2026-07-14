@@ -329,3 +329,5 @@ F-10 审计结果：BSP 在 `HAL_SD_Init` 前固定 `ClockEdge=RISING`、`ClockP
 F-11 只将 `HardwareFlowControl` 改为 ENABLE；构建、反汇编和烧录后，冷启动板端 `CLKCR=0x20010`。在外部 CANtest `0x321` 持续输入下，read call 从 31 增至 150、LogTask write/flush 从 1/1 增至 25/25、failure 保持 0，且 ping、`/api/status`、`/api/can/status`、`/api/signals` 同次通过。该结果允许保留 HWFC 配置并进入 30 分钟无现场操作的 F-12 耐久；尚未证明长期稳定或根因，F-12 若失败不得以本结果声称修复。
 
 F-12 在同一已烧录 HWFC 固件上完成 `30分17秒` 无现场操作耐久。read failure/call=`0/595→0/2407`，LogTask failure/write/flush=`0/114/114→0/477/477`，文件 `167828→377524 B`，write close/result 持续为0；结束 ping 2/2，HTTP status/can/signals 与外部 `42434/4660` 信号均正常。故当前架构将 HWFC=`ENABLE` 作为正式运行配置，阶段 F 的静态插卡日志长跑子项通过；剩余稳定性项目仍是网络断开恢复、CAN bus-off 恢复及复位后状态恢复。
+
+F-14 已完成 W5500 物理网线断开恢复：用户拔线后两次 `link_up=0/PHYCFGR=0xBA`、HTTP 超时而任务继续；插回后两次 `link_up=1/PHYCFGR=0xBF`，ping 2/2、三个只读 API 200，HTTP request `9→12` 且 error=0。该结果关闭“物理网线断开恢复”子项，不覆盖其他网络异常；阶段 F 接着只审计并验收 CAN bus-off 恢复与复位后的 DBC/规则/日志状态。

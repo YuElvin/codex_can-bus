@@ -46,6 +46,7 @@
 - L-067：SDMMC 最终运行配置必须以 BSP 覆盖和 `CLKCR` 现场读数为准，而不是 `.ioc` 初始值。当前为1-bit、约3.125MHz、无HWFC；低速窄总线仍 RX overrun，若验证硬件流控必须只改变该位并用 `CLKCR=0x20010` 与既有首错快照验收。
 - L-068：HWFC 单字段验证必须同时验证源码、ELF、板端 `CLKCR` 和受外部 CAN 驱动的日志路径。F-11 仅把 HWFC 置 ENABLE 后，`CLKCR=0x20010`、read call 越过历史首错阈值 `102` 至 `150` 且 LogTask failure=0，说明短时路径有效；它不能替代 30 分钟耐久，也不能据此把 FIFO overrun 根因归为某一单点。
 - L-069：30分钟静态耐久必须采用连续的可比较输入，并同时验证存储与网络。F-12 在 HWFC 固件、TF 插卡和外部 `0x321` 输入下运行30分17秒，read failure/log failure 保持0，read/write/flush/文件持续增长，结束 ping/API/CAN/SignalCache 通过；`g_log_drop_count=6` 全程不变且其源码含义包括“无快照”，不能脱离 `g_log_failure_count` 单独解释为存储故障。一个分钟样本若输出筛选漏字段，只能记为不完整，不能虚构完整独立读数。
+- L-070：W5500 物理链路恢复不能用启动配置状态代替。F-14 只有同时观察到 `g_w5500_link_up/PHYCFGR bit0` 的 `1→0→1`、W5500/HTTP任务循环持续增长、断网 curl 超时、恢复后的 ping/API成功和 HTTP request 增长/error不增，才可写为网线断开恢复通过；`network_configured=1`、`init_result=0` 与 `last_code=200` 单独均不足以证明恢复。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。
