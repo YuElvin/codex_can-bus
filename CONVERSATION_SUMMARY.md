@@ -2105,3 +2105,11 @@
 - `git diff --check`、`./scripts/verify.sh` 均通过，host CTest=`14/14`；ELF FLASH=`85880 B / 128 KB = 65.52%`、RAM_D1=`239752 B / 512 KB = 45.73%`。`nm` 确认所有新符号，`objdump` 确认读调用前后快照和失败计数围绕原 `HAL_SD_ReadBlocks(...,1000)`，随后仍调用 `tf_sd_record_diag` 和原返回分支。OpenOCD/ST-Link V2 已烧录 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.251976 V`。
 - 重烧录后约 5 秒，默认 LogTask 已处于连续失败：path=`0`、last/csv result=`1/1`、append stage/op=`2/2`、LogTask failure/drop=`5/22`；最新 read request 为 LBA=`3826`、blocks=`1`、call/failure=`54/4`，before/after 同为 State=`1`、Context=`0`、ErrorCode=`0x80000000`、DCOUNT=`512`、STA=`0x45000`、MASK=`0`、DCTRL=`0x90`、CLKCR=`16`。该结果证实快照功能已工作，但说明 MCU reset/reflash 没有恢复到干净 SD 状态；不能把 LBA 3826 误写为首错触发点。
 - 下一步需要用户保持 TF 卡插入，开发板主电源断开至少 10 秒再上电；无需停止或改变 CANtest。用户确认上电后，主会话将按派送 F-6 只读采样冷启动首错快照，不更改任何 SD 参数或恢复策略。此时暂停等待现场操作。
+
+## 2026-07-14 阶段 F-6：断电冷启动首个 SD read 错误（已完成）
+
+- 子智能体的固定任务只定义验收判据：基线必须 `failure=0`，之后首次变为 `1`，且 read call 递增并保留同一次 before/after 快照；未修改代码、未连接硬件、未自行选择下一阶段。
+- 用户确认 TF 已插入并完成开发板主电源断开至少 10 秒后再上电；不需要改变 CANtest。主会话只读 OpenOCD 采样，冷启动基线为 `g_tf_sd_read_failure_count=0`、call=`51`、最近请求 `LBA=4018/blocks=1`，append stage=`6`、operation=`3`，无 read 错误。
+- 约 32 秒后捕获第一个 failure：failure `0→1`、call `51→102`，默认路径 last/csv result=`1/1`，LogTask failure=`1`，append stage=`2(open)`、operation=`2(read)`；请求为单扇区 `LBA=3826/blocks=1`。同一次调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0/MASK=0/DCTRL=0x90/CLKCR=16`，调用后 `State=1/Context=0/ErrorCode=0x20(HAL_SD_ERROR_RX_OVERRUN)/STA=0x29000/DCOUNT=448/MASK=0/DCTRL=0x92/CLKCR=16`。因此已客观证明默认 append 的 `f_open` 触发单扇区 polling read 首次 RX FIFO overrun；尚未证明卡、信号、CAN 负载、IRQ 优先级、缓存维护或 timeout 根因。
+- 首错后执行顺序网络回归失败：ping `192.168.1.88` 2/2 超时，四个 API 连接超时。为避免把暂停或旧 ELF 地址当作故障，重新执行 `./scripts/verify.sh`（无源码变更，host CTest=`14/14`，STM32 `ninja: no work to do`）并对当前 `build/stm32h750/can_bus_gateway_stm32h750.elf` 做 `nm/objdump`。反汇编确认 W5500 任务仍以 mutex 包围 `w5500_bringup_poll()`、每 50 ms 循环；精确板端读数 `g_w5500_bringup_status=0`、`VERSIONR=4`、`PHYCFGR=0xBF`、`init_result=0`、`network_configured=1`、`link_up=1`，W5500/HTTP/Monitor/FreeRTOS 任务循环均递增，HTTP error count=`0`。主机路由为 en2，`192.168.1.88` 的 ARP 为 incomplete；故本轮网络现象未通过回归，但不能归因于 SD 首错或固件，留作独立待复核项。
+- 本轮无源码修改、未产生新的 HEX 烧录；F-5 正式诊断 HEX 已在本轮冷启动板上运行。已执行当前 ELF 的反汇编核查；下一固定 F-7 仅做 SDMMC polling-read、FIFO/IRQ、FreeRTOS 中断优先级与缓存维护的只读审计，严禁直接改 DMA、timeout、重试、remount、热插拔或恢复策略。

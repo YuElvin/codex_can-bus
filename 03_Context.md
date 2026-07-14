@@ -35,7 +35,7 @@
 ## 当前阻断项
 
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
-- 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-3/F-4 已将首次失败归属为默认 append `f_open` 的单扇区底层 read：`ErrorCode=0x20 (HAL_SD_ERROR_RX_OVERRUN)`、`DCOUNT=448`、`STA=0x29000` 与接收 FIFO 未及时取走相容。F-5 的读快照已烧录；但 MCU 复位后 5 秒内已连续失败，最新 request=`LBA 3826/block 1`、read call/failure=`54/4`，前后均保留旧 `HAL_TIMEOUT`，不能作为干净首错证据。下一步需板级断电上电后再读。
+- 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 曾保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-6 已在 TF 保持插入、板级断电至少 10 秒再上电的干净基线捕获首次错误：约 32 秒，read failure `0→1`、call `51→102`，append stage/op=`2/2`，单扇区 `LBA=3826`；调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0`，调用后 `State=1/Context=0/ErrorCode=0x20/HAL_SD_ERROR_RX_OVERRUN/STA=0x29000/DCOUNT=448`。这证明默认 append `f_open` 的底层 polling read 发生 RX FIFO overrun，不证明卡、信号、CAN 负载、IRQ 优先级或 timeout 是根因。其后网络回归未通过：主机 en2 对 `192.168.1.88` ARP 为 incomplete，ping/HTTP 均超时；但精确 ELF 读数 `bringup=0/VERSIONR=4/PHYCFGR=0xBF/link=1/network_configured=1` 且任务循环递增，不能写成固件或 SD 因果回归。下一步固定为只读 F-7：审计 SDMMC polling-read、FIFO/IRQ/FreeRTOS 中断优先级与缓存维护的实际实现，提出可验证的最小假设，不直接改参数。
 - FreeRTOS 完整多任务架构仍未完成：DbcTask 已以 active DBC reload 窄命令独立运行并实机验证，TfTask 已接管一次性 TF 初始化，外部 CAN RX 已通过深度 8 队列交给独立 CanDecodeTask，CAN TX 已通过深度 1 队列交给现有 CanDecodeTask 发送；ConfigTask 深度 2 命令队列已验证，HTTP 单规则配置已复用该队列并完成保存、reload 和复位加载。HTTP 仍是 socket0 单连接最小实现；正式多记录/多规则配置服务仍未实现。
 - W25Q128 已将 `0x00FFF000` 固定为显式诊断保留区，`0x00FFE000`/`0x00FFD000` 固定为单规则配置双槽；默认 bring-up 不擦写。v2 已实测交替写入、读回、sequence 选择、最新槽损坏后回退到较旧槽，以及两槽均无效后保留默认配置；后续通用配置仍需另行定义多记录演进与命令来源。
 - 当前最小 RuleTask、固定 1000 ms 延时、固定高滞回、仅供 ST-Link 验收的手动优先级、单规则 reload、QSPI 保存成功后的自动 reload，以及 HTTP GET/POST 单规则配置已现场验证。阶段 C 另已完成固定两槽 RuleFile v3 HTTP CRUD 与 TF 持久化；它不是无界规则管理、第三槽、前端、鉴权或并发配置服务，不得扩大表述。
@@ -61,7 +61,7 @@
 
 ## 下一步建议
 
-阶段 C、D、E 已关闭；阶段 F 进行中但首个 30 分钟静态长跑因默认 LogTask 失败未通过。F-5 读快照已构建、烧录并可读，当前等待一次板级断电上电以捕获干净首错；上电确认后派送 F-6，只读取首次失败快照，不修改 DMA、timeout、IRQ、重试、remount、热插拔或恢复策略，也不得扩大 HTTP、规则或配置功能。
+阶段 C、D、E 已关闭；阶段 F 进行中且首个 30 分钟静态长跑因默认 LogTask 失败未通过。F-6 已完成干净首错采集；下一派送 F-7 只读审计 SDMMC polling-read、FIFO/IRQ/FreeRTOS 中断优先级与缓存维护实现，输出证据、反证与一个最小可烧录假设，不修改 DMA、timeout、IRQ、重试、remount、热插拔或恢复策略，也不得扩大 HTTP、规则或配置功能。
 
 ## 阶段 C 实际快照
 

@@ -69,6 +69,10 @@ CSV 首步只在 `bringup_default_task` 的约 1 秒监控循环中复制固定�
 
 阶段 F 的默认插卡长跑中，LogTask 首次 `FR_DISK_ERR` 前后只有共享的“最近 SD 状态”，不能把底层错误严谨归属到 append 的具体步骤。为缩小诊断证据缺口，只新增 `g_tf_sd_last_operation`（1=init、2=read、3=write）和 `g_tf_append_stage`（1=lock、2=open、3=lseek、4=write、5=close、6=ok）。它们只在既有 HAL SD 调用前和 `stm32h750_tf_append_file_locked()` 原调用顺序中赋值，失败保留阶段；不改变 timeout、重试、挂载、缓存、文件策略或返回值。烧录后首次失败实际为 stage=2/operation=2/open result=1，故下一轮只审计 SD read 路径。
 
+### ADR-023：首错先以板级冷启动快照定界，不据此直接改传输策略
+
+F-5 的 MCU reset 后读数已处于连续失败，不能作为首错。F-6 因此固定要求 TF 保持插入并执行板级断电至少 10 秒；首个 failure 在约 32 秒时出现，request 为 `LBA=3826/blocks=1`，调用前 `ErrorCode/STA/DCOUNT=0/0/0`，调用后为 `0x20/0x29000/448`，stage/op=`2/2`。这只把事实定界为默认 append `f_open` 的 polling read RX FIFO overrun；在没有 IRQ、缓存维护或时序证据前，不允许直接改 DMA、timeout、重试、remount 或热插拔策略。后续先做只读实现审计。
+
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
 不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固定高滞回为 `Can2Data.marker on=42434/off=42432`：Relay1 高、Relay2 固定低、1000 ms 连续匹配延时、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的手动覆盖和单规则配置槽；reload 先将候选装入独立 engine，只有阈值/延时校验成功才替换当前 engine，失败保留旧有效规则。实机已验证 42434 置位、42433 保持、42432 释放，以及 reload 失配生效、恢复默认后延时高态、非法候选保留旧高态；不增加 HTTP、文件保存、多规则或持久化。
