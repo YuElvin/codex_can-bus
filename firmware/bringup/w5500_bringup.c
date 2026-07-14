@@ -187,6 +187,7 @@ static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
 static DbcDatabase g_http_dbc_runtime_db[2];
 static const DbcDatabase *g_http_dbc_runtime_active_db;
+static uint8_t g_w5500_http_disconnect_pending;
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
   return w5500_port_read_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, value, 1u);
@@ -262,8 +263,20 @@ static W5500Result socket_buffer_write(uint8_t block, uint16_t ptr, const uint8_
 }
 
 static int http_close_socket(void) {
+  g_w5500_http_disconnect_pending = 0u;
   (void)s0_command(W5500_S0_CR_CLOSE);
   (void)s0_write_u8(W5500_S0_IR, 0x1fu);
+  return 0;
+}
+
+static int http_begin_graceful_disconnect(void) {
+  if (g_w5500_http_disconnect_pending != 0u) {
+    return 0;
+  }
+  if (s0_command(W5500_S0_CR_DISCON) != W5500_OK) {
+    return 1;
+  }
+  g_w5500_http_disconnect_pending = 1u;
   return 0;
 }
 
@@ -1514,6 +1527,15 @@ int w5500_http_status_poll(void) {
   }
   g_w5500_http_socket_sr = sr;
 
+  if (g_w5500_http_disconnect_pending != 0u) {
+    if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT) {
+      g_w5500_http_disconnect_pending = 0u;
+      return http_open_listener();
+    }
+    g_w5500_http_status = 0u;
+    return 0;
+  }
+
   if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT) {
     return http_open_listener();
   }
@@ -1539,9 +1561,22 @@ int w5500_http_status_poll(void) {
         (void)http_close_socket();
         return 1;
       }
+      if (http_begin_graceful_disconnect() != 0) {
+        g_w5500_http_status = 5u;
+        g_w5500_http_error_count++;
+        (void)http_close_socket();
+        return 1;
+      }
+      return 0;
     }
-    (void)s0_command(W5500_S0_CR_DISCON);
-    (void)http_close_socket();
+    if (sr == W5500_S0_SR_CLOSE_WAIT) {
+      if (http_begin_graceful_disconnect() != 0) {
+        g_w5500_http_status = 5u;
+        g_w5500_http_error_count++;
+        (void)http_close_socket();
+        return 1;
+      }
+    }
     return 0;
   }
 

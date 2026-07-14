@@ -2179,3 +2179,12 @@
 - 用户确认“已恢复”后，CAN 从错误被动实际回落：`TEC=128→78→46→0`，最终 `ECR=0/PSR=0x708(BO=0)`、sendResult=`0`、CAN tx/rx=`3375/34112` 后继续增至 `3471/34109+`、CAN任务循环增长。该路径证明无ACK后的错误被动可在恢复ACK后回到正常收发；因本次从未 `PSR.BO=1`，不能称为 bus-off恢复。
 - 但恢复后主机连续请求 `/api/status` 和 `/api/can/status` 均 `Recv failure: Connection reset by peer`（exit=56）。板端同时为 W5500 link=`1`、PHY=`0xBF`、socket0 SR=`0x14`、HTTP status/error=`0/0`、W5500/HTTP任务循环增长，内部 last code/path/request 仍为 `200/2/20`，说明 HTTP内部状态/最后代码不能证明真实响应送达。该HTTP回归失败与CAN已恢复并存，未能归因于CAN或HWFC；F-16 结论为“错误被动恢复的CAN收发通过，HTTP全回归失败”，不能关闭CAN异常验收。
 - 下一固定 F-17 只读审计 W5500 socket0 从接收请求到发送/关闭的源码和现有诊断，解释上述“内部200但主机RST”证据并提出唯一最小可烧录修复假设；禁止先改代码、重刷、重启、访问板端网络或要求用户操作。本次仅现场记录，未改固件、未编译或反汇编。
+- F-16 失败边界已提交并推送为 `755bbd2 Record CAN recovery HTTP regression`，随后派送 F-17 按固定范围只读审计 socket0 HTTP reset 链路；禁止改代码、构建、烧录、板端/网络访问或用户操作。F-17 尚未返回结论，本条仅记录派送，未编译或反汇编。
+
+## 2026-07-15 阶段 F-17：socket0 优雅断开最小修复（通过）
+
+- F-17 只读审计定位唯一假设：正常响应路径在同轮执行 `DISCON` 后立即 `CLOSE`，而 `s0_command()` 仅等待命令寄存器清零、不等待 socket 状态转换；因此即使 `SENDOK` 与内部 `last_code=200`，强制关闭仍可能让主机收到 RST。W5500 状态任务和HTTP任务共用 mutex，CAN不调用socket关闭函数，均不能支持“SPI并发”或“CAN直接关闭socket”的推断。
+- 仅修改 `firmware/bringup/w5500_bringup.c`：新增私有 `g_w5500_http_disconnect_pending` 和 `http_begin_graceful_disconnect()`；成功响应或无数据的 CLOSE_WAIT 只一次发送 `DISCON` 并置 pending，后续轮询仅读 `Sn_SR`，在 `CLOSED/INIT` 才清 pending 并调用既有 `http_open_listener()`。错误/未知状态仍走既有强制 `CLOSE`，没有改路由、响应、初始化、任务、mutex、CAN、TF 或重试参数。
+- `git diff --check`、`./scripts/verify.sh` 通过，host CTest=`14/14`；新 ELF 为 FLASH=`86048 B / 128KB = 65.65%`、RAM_D1=`239752 B / 512KB = 45.73%`。`nm/objdump` 确认 pending=`0x2401eb90`，helper 仅发 `DISCON(0x08)` 后置位，强制 close helper 才发 `CLOSE(0x10)` 并清 pending；`w5500_http_status_poll()` 在读到 CLOSED/INIT 前直接返回，不再在成功路径同轮 `DISCON→CLOSE`。OpenOCD/ST-Link V2 烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.258523 V`。
+- 首次九请求脚本误把 zsh 保留变量 `path` 用作循环变量，导致主机 PATH 被覆盖、`curl` exit=127；未向目标写入，不作为验收。改用 `endpoint` 后，零等待连续请求的前6次为200、随后两次为 connection refused，板端已是 socket=`LISTEN`/pending=0。该窗口来自单 socket 在 `DISCON` 完成到50ms HTTP轮询重新监听之间；不是 RST，也不代表响应发送失败。按既有单连接操作边界在每次短连接结束后等待250ms，三轮 `/api/status`、`/api/can/status`、`/api/signals` 共9次均 exit=0/HTTP200，未再出现 `Recv failure: Connection reset by peer`。
+- 最终板端 pending=`0`、socket/status/PHY/version/init=`0x14/0/0xBF/4/0`、HTTP error=`0`、last tx/rx/code/path/request=`263/85/200/1/17`、W5500/HTTP task loops均为`2094`且 mutex ready；CAN errors/REC/TEC/busOff/sendResult=`0`、rx/tx=`1041/106`、CAN任务与解码任务循环增长。结论：F-17 修复了F-16恢复后主机RST；当前单 socket/50ms轮询明确要求短连接请求间留至少一个轮询窗口（验收采用250ms），不宣称支持并发或零间隔多连接。

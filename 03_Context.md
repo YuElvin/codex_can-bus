@@ -80,6 +80,8 @@ F-16 已在用户确认CANtest离线后得到受控失败边界：20秒无ACK使
 
 F-16 用户恢复后 CAN 已从错误被动回到 `TEC=0/PSR.BO=0`，TX/RX/任务增长；但主机HTTP持续 `Recv failure: Connection reset by peer`，而板端 W5500 link/PHY/socket监听/任务与HTTP status/error仍表面正常，故完整CAN异常回归失败且不能归因。下一派送 F-17 只读审计 socket0 接收→发送→关闭链路和诊断缺口，固定最小修复假设；不得改代码、烧录、重启、访问板端网络或让用户操作。
 
+F-17 已以最小 socket0 状态机修复并烧录通过：正常响应只发 `DISCON` 并等待后续 `CLOSED/INIT` 再监听，不再同轮强制 `CLOSE`。当前 CAN恢复后在每个短连接间留250ms，三轮 status/can/signals 共9次均HTTP200且无RST；最终 listener/任务/HTTP error/CAN错误均正常。当前HTTP为50ms单 socket轮询，零等待连续连接仍可能在重新监听窗口被拒绝，非并发服务。阶段 F 的 bus-off 本身仍未形成，且复位后DBC/规则/日志恢复仍待验；下一派送 F-18 只读审计冷/软件复位后各持久状态的现有证据与最小现场协议。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
