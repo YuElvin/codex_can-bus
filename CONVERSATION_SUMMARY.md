@@ -2113,3 +2113,10 @@
 - 约 32 秒后捕获第一个 failure：failure `0→1`、call `51→102`，默认路径 last/csv result=`1/1`，LogTask failure=`1`，append stage=`2(open)`、operation=`2(read)`；请求为单扇区 `LBA=3826/blocks=1`。同一次调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0/MASK=0/DCTRL=0x90/CLKCR=16`，调用后 `State=1/Context=0/ErrorCode=0x20(HAL_SD_ERROR_RX_OVERRUN)/STA=0x29000/DCOUNT=448/MASK=0/DCTRL=0x92/CLKCR=16`。因此已客观证明默认 append 的 `f_open` 触发单扇区 polling read 首次 RX FIFO overrun；尚未证明卡、信号、CAN 负载、IRQ 优先级、缓存维护或 timeout 根因。
 - 首错后执行顺序网络回归失败：ping `192.168.1.88` 2/2 超时，四个 API 连接超时。为避免把暂停或旧 ELF 地址当作故障，重新执行 `./scripts/verify.sh`（无源码变更，host CTest=`14/14`，STM32 `ninja: no work to do`）并对当前 `build/stm32h750/can_bus_gateway_stm32h750.elf` 做 `nm/objdump`。反汇编确认 W5500 任务仍以 mutex 包围 `w5500_bringup_poll()`、每 50 ms 循环；精确板端读数 `g_w5500_bringup_status=0`、`VERSIONR=4`、`PHYCFGR=0xBF`、`init_result=0`、`network_configured=1`、`link_up=1`，W5500/HTTP/Monitor/FreeRTOS 任务循环均递增，HTTP error count=`0`。主机路由为 en2，`192.168.1.88` 的 ARP 为 incomplete；故本轮网络现象未通过回归，但不能归因于 SD 首错或固件，留作独立待复核项。
 - 本轮无源码修改、未产生新的 HEX 烧录；F-5 正式诊断 HEX 已在本轮冷启动板上运行。已执行当前 ELF 的反汇编核查；下一固定 F-7 仅做 SDMMC polling-read、FIFO/IRQ、FreeRTOS 中断优先级与缓存维护的只读审计，严禁直接改 DMA、timeout、重试、remount、热插拔或恢复策略。
+
+## 2026-07-14 阶段 F-7：SDMMC polling read 机制审计（已完成）
+
+- 子智能体固定为只读审计，基线 `ccb7f63`；未修改文件、未编译、未烧录、未连接硬件。审计链为 `f_open→find_volume/follow_path/dir_find/move_window→SD_read→BSP_SD_ReadBlocks_DMA→HAL_SD_ReadBlocks(...,1000ms)`。`DMA` 仅是保留名称，实际不是 `HAL_SD_ReadBlocks_DMA`。
+- HAL polling read 按 32 B FIFO 轮询 `RXFIFOHF` 由 CPU 读取；若见 `RXOVERR` 则清标志、置 `HAL_SD_ERROR_RX_OVERRUN`、返回 `HAL_ERROR`。F-6 的 `STA=0x29000` 同时含 `DPSMACT|RXFIFOHF|RXFIFOF|RXOVERR`，与该机制一致。
+- 实际 TF bring-up 运行参数为 1-bit、上升沿、无硬件流控、`ClockDiv=16`，与 F-6 `CLKCR=16` 一致；CubeMX 初始 4-bit/`ClockDiv=2` 不是本次读的最终配置。故障时 `MASK=0`，polling FIFO 不依赖 SDMMC IRQ；FDCAN2 未配置 NVIC RX 通知、任务轮询接收，且项目未使用 SD DMA/IDMA 或 DMA cache maintenance。因此不能把本次 overrun 直接归为 DMA 缓存、SDMMC IRQ 或 FDCAN2 ISR。
+- F-7 提供的最小下一假设为“read 期间任务切换使 CPU 未及时排空 FIFO”。F-8 唯一允许的源码实验是用 FreeRTOS 临界区包裹原 `HAL_SD_ReadBlocks`，保持 F-5 快照，断电冷启动后比较首错时间、LBA、`ErrorCode/STA/DCOUNT`；不改 timeout、扇区、DMA、重试、remount、热插拔或恢复语义。该临界区仅为可回退的判别实验，不是已接受的长期方案。

@@ -40,6 +40,7 @@
 - L-061：`FR_DISK_ERR` 必须继续沿 FatFs→diskio→BSP→HAL 逐层还原。当前 `f_open` 的单扇区读最终为 `HAL_SD_ERROR_RX_OVERRUN=0x20`，现场 `DCOUNT=448/STA=0x29000` 与 RX FIFO 溢出相容。`BSP_SD_ReadBlocks_DMA` 名称不等于 DMA 实现：当前实际调用轮询 `HAL_SD_ReadBlocks`；这只是机制事实，不足以直接归因于 IRQ、卡或总线，先记录请求/寄存器快照。
 - L-062：MCU reset/reflash 不能自动提供 SDMMC 的干净首错状态。F-5 重新烧录后 5 秒内已有 read failures，前后快照都携带旧 `HAL_TIMEOUT`；此时最后 LBA 仅说明持续失败时的请求，不能当作触发首错。要验证首错快照，需要保持 TF 插卡并执行板级断电上电。
 - L-063：冷启动首错必须同时满足 failure 从 0 首次变为 1、read call 递增，以及同一次前后快照由无错误变为错误。2026-07-14 的 F-6 首错为单扇区 `LBA=3826`、append stage/op=`2/2`，前 `ErrorCode/STA/DCOUNT=0/0/0`、后 `0x20/0x29000/448`；它证明 polling read 的 RX FIFO overrun，但不能单独证明卡、信号、CAN、IRQ 或 timeout 根因。
+- L-064：不要依据 `BSP_SD_ReadBlocks_DMA` 的名称判断实际传输方式。F-7 证实当前失败路径调用的是 `HAL_SD_ReadBlocks` polling；故障快照 `MASK=0` 也说明 FIFO 处理不依赖 SDMMC IRQ。排除 DMA/IDMA 与 FDCAN2 RX ISR 后，仍需用受控临界区实验验证任务切换假设，不能直接改 SD 参数。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。
