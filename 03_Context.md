@@ -74,6 +74,8 @@ F-14 已完整通过：用户插回同一网线后，`link_up/PHY bit0` 两次�
 
 F-15 已固定 F-16 协议：当前 FDCAN2 为500 kbit/s、自动重传，运行时无显式 bus-off恢复代码。必须以 CANtest真正离线造成无ACK，且同时观察 HTTP `busOff=1` 与原始 `PSR.BO=1` 才能开始恢复验证；仅停止发送不成立。下一步 F-16 先等待用户使 CANtest停止发送并关闭/离线后确认；不得先行自行改CAN、断开开发板侧线、重启、烧录或改变TF。
 
+F-16 已完成正常CAN基线，但暂停等待用户“已离线”：三次等待没有实际确认，故未制造bus-off。当前基线 `busOff/tec/rec=0`、`CCCR.DAR=0`、`PSR.BO=0`、CAN tx/rx/poll增长；收到确认后才按固定20秒窗口观测。该暂停是外部条件阻断，不能把正常基线写为bus-off恢复通过。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
