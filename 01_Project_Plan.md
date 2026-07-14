@@ -28,7 +28,7 @@
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
-| 12 | 稳定性基线 | [进行中；静态日志长跑已通过] | 历史 30 分钟长跑的 RX overrun 已以 F-11 HWFC 单字段改动重验：板端 `CLKCR=0x20010`；F-12 在无现场操作的30分17秒内 read failure=`0`、LogTask failure=`0`、read `595→2407`、write/flush `114→477`、文件 `167828→377524 B`，结束 ping/API/CAN/外部 signals 均通过。该结果不证明根因；断网恢复、CAN bus-off/恢复、复位后 DBC/规则/日志恢复仍待验。TF 运行中插拔仍为非支持操作 |
+| 12 | 稳定性基线 | [进行中；静态日志长跑已通过] | 历史 30 分钟长跑的 RX overrun 已以 F-11 HWFC 单字段改动重验：板端 `CLKCR=0x20010`；F-12 在无现场操作的30分17秒内 read failure=`0`、LogTask failure=`0`、read `595→2407`、write/flush `114→477`、文件 `167828→377524 B`，结束 ping/API/CAN/外部 signals 均通过。F-13 已固定无代码的 W5500 物理断网/恢复判据，F-14 等待用户网线操作；CAN bus-off/恢复、复位后 DBC/规则/日志恢复仍待验。TF 运行中插拔仍为非支持操作 |
 
 ## 阶段 C 当前状态
 
