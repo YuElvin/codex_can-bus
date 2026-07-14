@@ -82,7 +82,7 @@ F-16 用户恢复后 CAN 已从错误被动回到 `TEC=0/PSR.BO=0`，TX/RX/任�
 
 F-17 已以最小 socket0 状态机修复并烧录通过：正常响应只发 `DISCON` 并等待后续 `CLOSED/INIT` 再监听，不再同轮强制 `CLOSE`。当前 CAN恢复后在每个短连接间留250ms，三轮 status/can/signals 共9次均HTTP200且无RST；最终 listener/任务/HTTP error/CAN错误均正常。当前HTTP为50ms单 socket轮询，零等待连续连接仍可能在重新监听窗口被拒绝，非并发服务。阶段 F 的 bus-off 本身仍未形成，且复位后DBC/规则/日志恢复仍待验；下一派送 F-18 只读审计冷/软件复位后各持久状态的现有证据与最小现场协议。
 
-F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和 CANtest 不变，开发板下电至少10秒再上电。启动后 `/api/status`、`/api/dbc/runtime`、`/api/rules`、`/api/can/status`、`/api/signals` 均为 HTTP 200；DBC=`151 B/3 lines/1 message/2 signals/errors=0`，v3 两槽规则保持默认语义，CAN `rx=1022/errors/busOff/tec/rec/sendResult=0`，外部 marker/sequence=`42434/4660`。ST-Link 为 DBC valid/result=`1/0`、v3 load_result=`0`、rule_count/read_len/size=`2/312/312`、RuleTask started=`1`；LogTask 默认 path、write/flush=`15/15→19/19`、文件 `0x9f648→0x9ff30`、failure/read_failure=`0/0`。阶段 F 仍未形成真实 CAN bus-off；F-20 只读审计确认非法规则表单的完整 HTTP 400 与200成功响应共用同一优雅断开路径，下一步仅做错误响应后的现场 socket 时序定界，禁止据此盲改代码。
+F-19 已通过第二次真实冷启动联合验收：用户保持 TF、网线和 CANtest 不变，开发板下电至少10秒再上电。启动后 `/api/status`、`/api/dbc/runtime`、`/api/rules`、`/api/can/status`、`/api/signals` 均为 HTTP 200；DBC=`151 B/3 lines/1 message/2 signals/errors=0`，v3 两槽规则保持默认语义，CAN `rx=1022/errors/busOff/tec/rec/sendResult=0`，外部 marker/sequence=`42434/4660`。ST-Link 为 DBC valid/result=`1/0`、v3 load_result=`0`、rule_count/read_len/size=`2/312/312`、RuleTask started=`1`；LogTask 默认 path、write/flush=`15/15→19/19`、文件 `0x9f648→0x9ff30`、failure/read_failure=`0/0`。F-20 随后通过错误响应现场时序：非法 `enabled=true` 正确返回400且规则不变，curl完成后新的 `/api/rules` 连接在 `+0/+50/+100/+250/+500 ms` 均200；最终 socket=`0x14`、pending/error=`0/0`、last code=`200`。这一证据只覆盖该独立短连接流程，仍不宣称并发服务。阶段 F 仍未形成真实 CAN bus-off。
 
 ## 阶段 C 实际快照
 

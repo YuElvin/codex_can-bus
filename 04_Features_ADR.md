@@ -10,7 +10,7 @@
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；外部 CAN RX 已用深度 8 队列交给 CanDecodeTask，CAN TX 已用深度 1 队列交给现有 CanDecodeTask 发送；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 和 ConfigTask 两类命令均已有固定深度队列，完整配置服务仍待实现 |
-| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证；F-17 成功响应优雅断开、F-19 冷启动后五项顺序 API 已通过，错误400后的socket时序仍待定界 |
+| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证；F-17 成功响应优雅断开、F-19 冷启动后五项顺序 API、F-20 非法规则400后的独立短连接时序均已通过；仍是单socket非并发服务 |
 | F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
 | F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；F-19 冷启动后 v3 两规则、外部 CAN 解码与默认文件增长再次联合通过。TF 卡定义为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围；完整通用配置仍待实现 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |

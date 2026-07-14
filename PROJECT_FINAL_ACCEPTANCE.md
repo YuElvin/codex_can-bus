@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | 硬件与启动 | ST-Link 可烧录/读数；W5500、TF、FDCAN2、W25Q128 启动状态正常 | OpenOCD `Verified OK`；精确变量；ping 与状态 API | 已有基线，后续每次回归 |
 | CAN 与 DBC | 外部 CANtest RX、周期 TX、DBC 上传/激活、解码到 SignalCache 持续正确 | CANtest 与板端 RX/TX/error 计数；`/api/signals`；`/api/dbc/runtime` | 主要完成，需稳定性回归 |
-| 网络/API | socket0 顺序 GET/POST 语义、错误码、请求体完整性正确 | 顺序 curl；HTTP 200/400/500 行为；W5500 诊断 | 受限最小实现已完成 |
+| 网络/API | socket0 顺序 GET/POST 语义、错误码、请求体完整性正确 | 顺序 curl；HTTP 200/400/500 行为；W5500 诊断 | 受限最小实现已完成；F-20 已验证非法规则400后的 `+0/+50/+100/+250/+500 ms` 独立短连接均为200 |
 | TF 与日志 | TF 卡在插入状态下上电后默认 CSV 路径连续落盘；运行中插拔明确不支持，必须先下电 | TF 文件大小/内容、LogTask write/flush/failure、插卡冷启动状态 | 默认路径已验证；运行中 recovery 不作为交付条件 |
 | 配置持久化 | 双槽保存、读回、断电/复位加载、坏槽回退；HTTP 不绕过 ConfigTask | QSPI save/load/sequence 读数；复位后 API；配置队列读数 | 单规则完成 |
 | 规则管理 | 规则模型、文件格式、HTTP CRUD、多规则执行/优先级/安全态均定义并现场验证 | 文件读写、HTTP 请求、RuleTask generation、继电器 GPIO、异常输入 | 单规则 HTTP 完成；多规则/文件未完成 |

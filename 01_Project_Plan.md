@@ -28,7 +28,7 @@
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
 | 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
-| 12 | 稳定性基线 | [进行中；日志、断网、HTTP RST 与冷启动恢复已通过] | F-11/12 HWFC 固件已完成30分17秒插卡日志耐久；F-14 已验证 W5500 网线恢复；F-17 已修复成功响应后 `DISCON→CLOSE` 的主机RST；F-19 第二次真实冷启动已验证 DBC、v3两规则、外部CAN解码和默认日志恢复。F-16 仅验证错误被动恢复，未形成 bus-off；F-20 仍待错误 HTTP 400 后的现场时序定界。TF运行中插拔仍为非支持操作 |
+| 12 | 稳定性基线 | [进行中；日志、断网、HTTP RST、400错误响应与冷启动恢复已通过] | F-11/12 HWFC 固件已完成30分17秒插卡日志耐久；F-14 已验证 W5500 网线恢复；F-17 已修复成功响应后 `DISCON→CLOSE` 的主机RST；F-19 第二次真实冷启动已验证 DBC、v3两规则、外部CAN解码和默认日志恢复；F-20 已验证非法规则 HTTP 400 后 `+0/+50/+100/+250/+500 ms` 新连接均为200。F-16 仅验证错误被动恢复，未形成 bus-off。TF运行中插拔仍为非支持操作 |
 
 ## 阶段 C 当前状态
 

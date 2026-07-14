@@ -1,5 +1,7 @@
 # 经验教训
 
+- L-073：规则表单的 `enabled` 只接受十进制 `0/1`；`enabled=true` 正确返回 `HTTP 400 invalid_rule`，并在两次 `SENDOK` 后沿用 F-17 的 pending `DISCON` 路径，不存在400专属强制 `CLOSE`。现场独立短连接在收到完整400后的 `+0/+50/+100/+250/+500 ms` 均返回200、最终 socket=`LISTEN`/pending/error=`0/0`，只能证明该顺序流程，不可据此宣称支持并发。
+
 - L-001：硬件状态以最新上电或复位后的实际读数为准，不沿用旧日志结论。
 - L-002：`/Users/elvin/Desktop/project/can_bus` 可能是指向 `/Users/elvin/Desktop/project/can_bus_W5500` 的符号链接，执行前先用 `pwd` 或 `git rev-parse --show-toplevel` 归一化路径。
 - L-003：W5500 验证要同时看 SPI 寄存器、ST-Link 变量、主机路由/ping/ARP；串口单独不足以定论。
