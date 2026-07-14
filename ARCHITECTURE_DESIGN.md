@@ -327,3 +327,5 @@ F-9 在外部 CANtest 持续 `0x321`/marker=`42434` 后实际进入连续日志 
 F-10 审计结果：BSP 在 `HAL_SD_Init` 前固定 `ClockEdge=RISING`、`ClockPowerSave=DISABLE`、`BusWide=1-bit`、`HardwareFlowControl=DISABLE`、`ClockDiv=16`；HSI64/PLL1Q=100MHz 和 HAL 公式给出 CK≈3.125MHz。F-6 的 `CLKCR=0x10` 正是该设置，`DCTRL=0x90→0x92` 是 512 B polling read 的预期配置。下一单字段实验是只开启 HardwareFlowControl；若无错误只能证明其对 FIFO 节流有帮助，不能代替稳定性完整验收或定论根因。
 
 F-11 只将 `HardwareFlowControl` 改为 ENABLE；构建、反汇编和烧录后，冷启动板端 `CLKCR=0x20010`。在外部 CANtest `0x321` 持续输入下，read call 从 31 增至 150、LogTask write/flush 从 1/1 增至 25/25、failure 保持 0，且 ping、`/api/status`、`/api/can/status`、`/api/signals` 同次通过。该结果允许保留 HWFC 配置并进入 30 分钟无现场操作的 F-12 耐久；尚未证明长期稳定或根因，F-12 若失败不得以本结果声称修复。
+
+F-12 在同一已烧录 HWFC 固件上完成 `30分17秒` 无现场操作耐久。read failure/call=`0/595→0/2407`，LogTask failure/write/flush=`0/114/114→0/477/477`，文件 `167828→377524 B`，write close/result 持续为0；结束 ping 2/2，HTTP status/can/signals 与外部 `42434/4660` 信号均正常。故当前架构将 HWFC=`ENABLE` 作为正式运行配置，阶段 F 的静态插卡日志长跑子项通过；剩余稳定性项目仍是网络断开恢复、CAN bus-off 恢复及复位后状态恢复。

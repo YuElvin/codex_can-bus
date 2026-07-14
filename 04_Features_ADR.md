@@ -91,6 +91,8 @@ F-10 只读审计确认最终生效配置为 `ClockDiv=16`、1-bit、上升沿�
 
 F-11 已按上述单字段执行：烧录后冷启动实测 `CLKCR=0x20010`，外部 `0x321` 持续输入下 read call `31→150`、LogTask write/flush `1/1→25/25` 且 failure=0，并完成 ping/API/CAN 回归。决定暂时保留 HWFC=`ENABLE` 进入固定 F-12 30 分钟耐久；该短时证据不等价于根因已证实或阶段 F 已完成。若 F-12 出现 failure，必须以新快照记录失败，不得自动叠加降速、重试或恢复策略。
 
+F-12 已达到该耐久门槛：当前已烧录 HWFC 固件在30分17秒内 read failure/log failure 均为0，read、write、flush与文件大小持续增长，结束网络/CAN/外部 SignalCache 回归通过。因此 HWFC=`ENABLE` 保留为当前正式配置；决定依据仅为当前路径的实测稳定性，不把它提升为 RX overrun 的根因结论，也不扩大为热插拔、断网或 bus-off 恢复策略。
+
 ### ADR-009：最小 RuleTask 复用已有引擎与安全快照
 
 不重写 portable `rule_engine` 的延时、滞回、超时和手动优先级语义。CAN2 外部 RX 是供 HTTP、日志和规则消费的 `SignalCache` 唯一写者；TX self-test 复用解码器但写入独立缓存，不能刷新执行规则的输入。导出函数只在短 FreeRTOS 临界区内把外部缓存转换为 `SignalSnapshot`；50 ms RuleTask 不直接访问缓存，调用已有引擎后由唯一 `rule_apply_relays()` 写 PE7/PE8。当前固定高滞回为 `Can2Data.marker on=42434/off=42432`：Relay1 高、Relay2 固定低、1000 ms 连续匹配延时、1500 ms 无效/缺失输入安全低。另有默认关闭、仅供 ST-Link 诊断/验收写入的手动覆盖和单规则配置槽；reload 先将候选装入独立 engine，只有阈值/延时校验成功才替换当前 engine，失败保留旧有效规则。实机已验证 42434 置位、42433 保持、42432 释放，以及 reload 失配生效、恢复默认后延时高态、非法候选保留旧高态；不增加 HTTP、文件保存、多规则或持久化。
