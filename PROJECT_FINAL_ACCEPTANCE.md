@@ -57,7 +57,7 @@
 
 阶段 A 开始前，必须先在 `04_Features_ADR.md` 固化规则文件的字段、版本、容量上限、非法输入行为和与 W25Q128 单规则备份的关系；不能由派送会话自行假设格式。
 
-### F-26：默认 CSV 物理内容复查（待执行）
+### F-26：默认 CSV 物理内容复查（已完成）
 
 现有 HTTP 只提供 `/`、`/index.html` 和 API 路由，不提供 `/log/*` 或 CSV 下载；不得为本项临时增加下载 API。现场必须保持外部 CANtest 标准 `500 kbit/s` 输入，先证明 `/api/signals` 的外部缓存为 marker=`42434`、sequence=`4660` 且 CAN 无错误；再间隔至少 6 秒读取两次现有 LogTask/TF 状态，要求 `g_log_path_mode=0`、`g_log_write_count`、`g_log_flush_count`、`g_tf_csv_file_size` 均增长，`g_log_failure_count=0`、`g_tf_csv_write_result=0` 且读失败不增长。
 

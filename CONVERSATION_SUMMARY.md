@@ -2241,3 +2241,15 @@
 - 用户重新插入读卡器后，主机只读识别 `/dev/disk4`、FAT32 分区 `disk4s1`、挂载点 `/Volumes/NO NAME`；开发板始终保持下电。主会话只执行 `find`、`stat`、`wc`、`sed`、`tail`、`awk`、`rg` 与 `shasum`，未格式化、创建、修改、修复或挂载写入。挂载卷上可见 macOS 系统元数据目录；其是否为既有或系统自动创建不可由本次读取确定，且不影响已读取的 `/log/signal.csv` 内容结论。
 - `/log/signal.csv` 实读大小=`971532 B`、总行数=`16975`，表头 `updated_ms,key,value,raw,unit,quality` 精确出现一次；其后数据行字段数错误=`0`、schema/value 不匹配=`0`。文件首尾均含同一 `updated_ms` 的 `Can2Data.marker,42434.000000,42434,"count","ok"` 与 `Can2Data.sequence,4660.000000,4660,"count","ok"`；全文件有目标同时间戳成对记录=`7024`，尾部为完整成对记录。读取时 SHA-256=`772afce26b0d74767b90b1ad5a6547fd9795cbf7d4a31112faac99b3afe29a2d`。
 - 运行态最近板端 `g_tf_csv_file_size=968052 B`，而下电后文件大3480 B。这不是失败：在主会话采样与用户人工下电之间 LogTask 仍继续追加；这两个动作无法原子同步。为使验收可实际证明且不降低内容要求，最终条件修正为“文件大小不小于最近板端值，且新增部分完整成对结束”，当前满足。F-26 因此完成；仍不宣称热插拔、在线下载或并发文件服务。仅文档/验收状态更新，未改固件源码，未编译、反汇编或烧录。
+
+## 2026-07-15 阶段 F-27：最终发布缺口只读审计（已完成）
+
+- 按用户“新阶段须明确派送”的约束，F-27b 只读审计了最终验收表、最近提交、工作树和对话摘要；未编辑、构建、烧录、访问板端/网络或要求用户操作。工作树干净，最新 `7c573d3` 是 F-26 文档验收记录；后续最近提交均为文档/验收记录，现有资料没有 F-25 后再次修改固件源码的证据。
+- 审计结论：F-12/14/17/19/20/25/26 的各自功能证据不能替代最终发布级证据。最终表仍要求 CAN/DBC 稳定性回归、故障/稳定性最终全量复验和发布完整性；必须以最终源码重新执行 `git diff --check`、`./scripts/verify.sh`、关键 ELF `nm/objdump`、ELF/HEX 哈希、OpenOCD `Programming Finished/Verified OK` 与精确状态读数，再按单 socket 边界复验状态、DBC、规则、外部 CAN RX/TX 和已验证的 bus-off 恢复，才能进行项目完成判定。
+- 发现并修正 `PROJECT_FINAL_ACCEPTANCE.md` F-26 标题遗留“待执行”为“已完成”；它是状态文字残留，不是现场未通过。F-27 下一固定动作是上述唯一最终复验包，需先等待用户确认开发板已插回 TF 并上电。本轮仅治理文档更新，未改源码、编译、反汇编、烧录或硬件。
+
+## 2026-07-15 阶段 F-27：最终发布复验（进行中）
+
+- 用户确认 TF 已插回并上电。当前最终源码 `7c573d329648615507363c6f259893d7f686dafa` 先通过 `git diff --check`、`./scripts/verify.sh`，host CTest=`14/14`；ELF `text/data/bss=85896/308/239456`，SHA-256=`6c7e7ee956c71cdaeae813b5848a34ed486cbbaad90f2ea488d2a627ced395dc`，HEX SHA-256=`d57d4d39dae4946002db60bc3933ba568c46cd9a39f9c2a6d014ae84384caf47`。定向反汇编确认 LogTask 的1秒采样、512B/5秒 flush 与 append路径，CAN BO的逐位Abort→Stop→Start/1000ms限流，以及HTTP pending断开后重监听路径仍在最终ELF。
+- OpenOCD/ST-Link 已将最终 HEX 烧录，输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压=`3.281665 V`。冷启动后 ping=`2/2`；`/api/status` 为 RTOS ready、W5500 link、TF/QSPI status均正常；`/api/dbc/runtime` 为 active DBC `151 B/3 lines/1 message/2 signals/errors=0`；`/api/rules` 为 v3 两规则；`/api/can/status` 此时 `rx=0/errors=22/TEC=128/sendResult=1`，因为按上一步要求 CANtest 尚未开启，开发板周期发送无外部ACK。该无ACK读数不是固件失败；已暂停等待用户恢复500k normal-active CANtest、接收开发板帧并持续发送 F-26 标准外部帧后继续最终外部RX/TX与CAN恢复回归。
+- 随后连续三次目标自动续行均未收到用户“已发送”确认。主会话未自行改变 CANtest、CAN线路、位率或软件状态；最终固件已保持烧录，F-27 现因外部 CAN ACK/输入未确认而暂停，不是当前固件失败。收到确认后从外部 RX/TX、TEC归零、SignalCache与顺序API复验继续。本轮未改源码、编译、反汇编、烧录或硬件。
