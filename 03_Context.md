@@ -90,7 +90,11 @@ F-21 现场已形成并验证真实bus-off：错误比特率下 `PSR=0x7e7(BO=1)
 
 F-65 已完成 W5500 去扰动稳定性回归：F59 动态 `RX_RSR/TX_FSR` 稳定读取、F61 时序观测保留；F63 的Socket0快照诊断已删除，反汇编确认 `w5500_http_status_poll` 栈帧恢复268B。最新正式候选经 OpenOCD `Verified OK` 后，以257/271/283/307ms间隔完成五个独立20次 `/api/status` 压力轮，均为20/20；压力后 `/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime`、`/api/rules` 均200，ping=2/2。此前F61曾复现的延迟根因仍未单独证明，但该候选已满足当前单连接稳定性验收，不把它表述为并发HTTP能力。
 
+G-1 当前映像的联合耐久尚未通过：首次60秒空闲后的单GET曾在3秒无字节超时。随后F-67用户抓包中，同一“空闲后单GET”未复现超时，却量得GET后约202.573 ms才收到板端纯ACK、约2.204246 s才收到HTTP响应头，最终557 B body与FIN正常且无RST。该成功样本证明链路并非每次丢失请求，同时暴露接近客户端超时阈值的服务延迟；F-69已烧录最小端到端tick观测，覆盖poll间隔、SR/IR/RSR、请求RX读取、RX消费、status body及header SEND/SENDOK，并在连接结束输出独立短UART行。当前映像尚未用该字段完成用户同步抓包，不得将F65短连接压力结果扩大为G-1通过，也不得把任何候选路径写为根因。
+
 F-25 已在 `can_bringup.c` 实现并烧录最小 bus-off 恢复：持续 BO 时按 1 秒限流逐位 Abort `TXBRP`，再 Stop，Stop 成功才 Start；不执行 DeInit/Init，不改变位率、过滤器、任务周期或队列。`verify.sh`/CTest=`14/14`、定向反汇编、OpenOCD `Verified OK` 均已完成。正常500k基线外部 RX=320、signals=42434/4660；错误250k现场形成真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`；恢复500k后外部 RX=`1305→2292`、TEC=`95→0`、最终 CAN tx/rx=`352/2292`、errors/busOff/sendResult=0，用户确认信号正常收发。F-26 已完成：正常外部 CAN 与两次 LogTask/TF 计数增长后完全下电取卡，主机只读 `/log/signal.csv` 为`971532 B`、16975行、唯一表头、零字段错误、7024组 marker=`42434`/sequence=`4660` 同时间戳 `quality=ok` 记录，尾部完整。其大小高于最近板端 `968052 B` 3480 B，符合人工下电间隔继续日志的完整追加；绝对相等无法与人工断电原子采样，验收采用“不小于最近读数且完整成对尾部”规则。下一固定阶段为最终全量复验。
+
+F-69 已完成最小端到端HTTP时序观测并烧录验收：空闲60秒后的重采样中，GET到HTTP header=`6.677 ms`、到body=`10.329 ms`、curl首字节/总时长=`11.275/15.011 ms`，无RST或重传；完成态串口trace显示轮询、RX读取、请求读取、RECV、body构造和header进入均在tick `181468`，SEND已写入与SENDOK均为`181469`。这证明F-69能在连接完成后给出SEND阶段的时序，且本次未见长延迟；它不推翻F-67约2.20秒样本，G-1仍未通过，下一阶段必须单独复现或排除间歇延迟。
 
 ## 阶段 C 实际快照
 

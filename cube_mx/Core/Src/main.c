@@ -201,6 +201,7 @@ static RuleEngine g_rule_file_v3_candidate_engine;
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 static void bringup_print_status(const char *phase);
+static void bringup_print_http_trace(void);
 static void bringup_uart_write(const char *text);
 static void bringup_default_task(void *argument);
 static void can2_periodic_task(void *argument);
@@ -256,6 +257,23 @@ extern volatile uint32_t g_w5500_http_trace_disconnect_end_tick;
 extern volatile uint32_t g_w5500_http_trace_handle_wait_count;
 extern volatile uint32_t g_w5500_http_trace_handle_wait_first_tick;
 extern volatile uint32_t g_w5500_http_trace_handle_wait_last_rx_size;
+extern volatile uint32_t g_w5500_http_trace_poll_enter_tick;
+extern volatile uint32_t g_w5500_http_trace_poll_gap_ms;
+extern volatile uint32_t g_w5500_http_trace_sr_read_start_tick;
+extern volatile uint32_t g_w5500_http_trace_sr_read_end_tick;
+extern volatile uint32_t g_w5500_http_trace_ir_read_start_tick;
+extern volatile uint32_t g_w5500_http_trace_ir_read_end_tick;
+extern volatile uint32_t g_w5500_http_trace_rx_rsr_read_start_tick;
+extern volatile uint32_t g_w5500_http_trace_rx_rsr_read_end_tick;
+extern volatile uint32_t g_w5500_http_trace_request_read_start_tick;
+extern volatile uint32_t g_w5500_http_trace_request_read_end_tick;
+extern volatile uint32_t g_w5500_http_trace_rx_consume_start_tick;
+extern volatile uint32_t g_w5500_http_trace_rx_consume_end_tick;
+extern volatile uint32_t g_w5500_http_trace_status_body_start_tick;
+extern volatile uint32_t g_w5500_http_trace_status_body_end_tick;
+extern volatile uint32_t g_w5500_http_trace_header_send_enter_tick;
+extern volatile uint32_t g_w5500_http_trace_header_send_issued_tick;
+extern volatile uint32_t g_w5500_http_trace_header_sendok_tick;
 extern volatile uint32_t g_w5500_http_static_count;
 extern volatile uint32_t g_w5500_http_static_read_result;
 extern volatile uint32_t g_w25q128_jedec_id;
@@ -439,6 +457,41 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_w5500_http_trace_handle_wait_count,
                  (unsigned long)g_w5500_http_trace_handle_wait_first_tick,
                  (unsigned long)g_w5500_http_trace_handle_wait_last_rx_size);
+  bringup_uart_write(line);
+}
+
+static void bringup_print_http_trace(void)
+{
+  static uint32_t printed_seq;
+  char line[384];
+
+  if (g_w5500_http_trace_seq == 0u ||
+      g_w5500_http_trace_active != 0u ||
+      g_w5500_http_trace_seq == printed_seq) {
+    return;
+  }
+  (void)snprintf(line,
+                 sizeof(line),
+                 "[http-trace] seq=%lu p=%lu g=%lu ss=%lu se=%lu is=%lu ie=%lu rs=%lu re=%lu bs=%lu be=%lu cs=%lu ce=%lu us=%lu ue=%lu hs=%lu hi=%lu hk=%lu\r\n",
+                 (unsigned long)g_w5500_http_trace_seq,
+                 (unsigned long)g_w5500_http_trace_poll_enter_tick,
+                 (unsigned long)g_w5500_http_trace_poll_gap_ms,
+                 (unsigned long)g_w5500_http_trace_sr_read_start_tick,
+                 (unsigned long)g_w5500_http_trace_sr_read_end_tick,
+                 (unsigned long)g_w5500_http_trace_ir_read_start_tick,
+                 (unsigned long)g_w5500_http_trace_ir_read_end_tick,
+                 (unsigned long)g_w5500_http_trace_rx_rsr_read_start_tick,
+                 (unsigned long)g_w5500_http_trace_rx_rsr_read_end_tick,
+                 (unsigned long)g_w5500_http_trace_request_read_start_tick,
+                 (unsigned long)g_w5500_http_trace_request_read_end_tick,
+                 (unsigned long)g_w5500_http_trace_rx_consume_start_tick,
+                 (unsigned long)g_w5500_http_trace_rx_consume_end_tick,
+                 (unsigned long)g_w5500_http_trace_status_body_start_tick,
+                 (unsigned long)g_w5500_http_trace_status_body_end_tick,
+                 (unsigned long)g_w5500_http_trace_header_send_enter_tick,
+                 (unsigned long)g_w5500_http_trace_header_send_issued_tick,
+                 (unsigned long)g_w5500_http_trace_header_sendok_tick);
+  printed_seq = g_w5500_http_trace_seq;
   bringup_uart_write(line);
 }
 
@@ -957,6 +1010,7 @@ static void monitor_task(void *argument)
     ++g_freertos_loop_count;
     ++g_monitor_task_loop_count;
     bringup_print_status("run");
+    bringup_print_http_trace();
   }
 }
 

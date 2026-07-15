@@ -2434,3 +2434,61 @@
 - 用户曾直接发送系统密码，但主会话未记录、显示、使用或代填。为允许主会话仅使用已存在的授权会话启动抓包，已请求用户在本机终端执行`sudo -v`后回复确认；恢复后又连续三次未收到该确认。当前唯一阻断为用户本机管理员授权，不能绕过或猜测；未执行sudo、抓包、HTTP、CANtest、烧录或源码修改。
 - 用户确认授权后，主会话仅尝试 `sudo -n /usr/sbin/tcpdump ...`，结果为 `sudo: a password is required`；这证明用户交互终端的sudo票据不传递到自动化子进程。主会话未使用、记录或回显密码，未得到任何抓包。该命令原计划的后台延迟单GET已立即检查并取消；`pgrep`结果会匹配自身查询命令，不能把该PID输出当作后台curl仍运行的证据。为保证“空闲首请求”边界，后续必须由用户在交互终端直接执行F-67抓包与单GET，主会话只分析其输出；期间不再从自动化环境发送HTTP。
 - F-67 交互终端抓包又连续三次未收到输出；主会话不再尝试sudo或HTTP，当前唯一阻断仍为用户执行的pcap/curl证据。收到输出后恢复F-67，不重选或猜测修复方向。
+
+## 2026-07-15 阶段 F-67：空闲首请求抓包结果（成功但存在异常延迟）
+
+- 用户提供的`en2`完整十六进制抓包包含一条到`192.168.1.88:80`的单连接：GET `/api/status` 在`23:15:21.481991`发送；板端在`23:15:21.684564`回ACK（约`202.573 ms`），在`23:15:23.686237`发送HTTP 200头（约`2.204246 s`），随后`23:15:23.689089`发送完整557 B JSON body，双方FIN/ACK正常完成，报文中无RST。终端B的`curl --http1.0 --max-time 3`实际收到HTTP200与完整body；所以本样本没有复现此前60秒空闲后的超时，不能把它伪写为故障复现。
+- 该结果严格排除“这一次握手失败、GET未到板、板端未确认GET、RST中断或响应body缺失”；但它表明设备在已确认GET后到首个HTTP payload仍耗时约2.20秒，距3秒客户端期限很近。现有`httpTrace`为`seq=14/active=1`、mutex等待=`0`、RX就绪与handler进入tick均为`1442163`、RX长度=`85`；`recordTick/handlerReturnTick/handlerResult`为零值/默认值是该`/api/status`在`http_record_request()`和handler返回之前序列化自身trace的预期快照，不能据此断言卡在handler。
+- 当前trace没有RX消费、body构造、响应头发送或首/末payload发送的起止tick，不能仅凭该pcap把2.20秒归因给W5500互斥锁、RECV命令、`snprintf`或SEND轮询。F-68已明确派送只读代码路径审计，目标是列出唯一最小的端到端时序字段和插入点；在审计完成前禁止新增重试、调整任务优先级或改状态机。本次只更新文档，未修改固件、编译、反汇编、烧录、HTTP压力、CANtest或Git提交。
+
+## 2026-07-15 阶段 F-68：ACK后至HTTP响应头延迟路径审计（完成，未修改）
+
+- F-68只读审计确认抓包区间应分开判读：GET到板端TCP ACK约`202.6 ms`，该ACK由W5500 TCP卸载层在MCU调用`RX_RD/RECV`之前完成，不能归因到`http_consume_rx()`或`/api/status`处理；板端ACK到HTTP响应头首字节约`2.0017 s`，才是当前固件HTTP路径需要量化的区间。
+- 现有`mutexWaitMs=0`仅证明本次观察到非零`RX_RSR`的轮询没有等待W5500 mutex，不能证明ACK后HTTP任务立即得到调度；任务每轮50ms延迟、SR/IR/稳定RX_RSR读取、逐字节SPI读请求、`RX_RD+RECV`、状态JSON构造、TX缓冲写入/SEND/SENDOK都仍在该区间内。源码只可证明`RECV`显式delay最多约10ms，逐字节SPI的100ms HAL timeout可累计变长；没有现有时序字段可把约2秒归因给其中任一项。
+- `/api/status`的`build_status_body()`在`http_record_request()`和handler返回之前读取自身trace，所以本次响应里的`recordTick/handlerReturnTick`零值是预期采样时点，不是未处理的证据。F-69已明确派送为最小观测实现：记录poll间隔、RX寄存器读取、请求buffer读取、RX消费、status body构造和响应头的发送进入/SEND命令/SENDOK时间；其中“响应头SEND命令已发出”用于与pcap首个HTTP字节对齐。禁止改状态机、重试、SPI、任务优先级或协议。F-68未编辑、构建、反汇编、烧录、访问HTTP、操作CANtest或提交。
+
+## 2026-07-15 阶段 F-69：HTTP 单连接端到端时序观测（已烧录，待用户抓包）
+
+- F-69只增加最近连接的只读时序字段，不改W5500状态机、重试、SPI实现、任务优先级、路由或业务协议。新增：HTTP poll进入tick/与上次poll间隔，SR/IR/RX_RSR读取起止tick，请求RX读取起止tick，RX_RD+RECV消费起止tick，`/api/status` body构造起止tick，以及响应header发送进入、SEND命令已写入和SENDOK观察tick。原F61 trace序号、互斥锁、RX/handler/关闭/HANDLE_WAIT观测保持不变。
+- `/api/status` 新增紧凑 `w5500.httpTrace.t`：`p/g/ss/se/is/ie/rs/re/bs/be/cs/ce/us/ue/hs/hi/hk` 依次表示poll进入、poll间隔、SR起止、IR起止、RSR起止、请求读取起止、RX消费起止、status body构造起止、header发送进入、SEND已发出、SENDOK。当前请求在构造自身JSON时，后续的`be`、`hs`、`hi`、`hk`以及既有record/return仍可能为0；这是采样顺序，不得误判为异常。完整结果在连接结束后由独立`[http-trace]`短UART行一次性输出，原`[bringup]`长状态行未扩展。
+- `git diff --check`和`./scripts/verify.sh`通过，host CTest=`14/14`；STM32固件为`build/stm32h750/can_bus_gateway_stm32h750.elf/.hex`，FLASH=`89216 B/128 KB=68.07%`、RAM_D1=`240328 B/512 KB=45.84%`、`text/data/bss=88888/316/240008`。ELF/HEX SHA-256=`be4e69cdbdfb70fc8583a4b4167a01b539cb9c5181f09284882652ce563f4754`/`e345a3d460a8570acfb1767575f9b423b1723fc1a40ecf3a2abc2b3cf6a5355b`。
+- 定向反汇编确认：`w5500_http_status_poll`入口先取tick并计算间隔，在SR/IR/RX_RSR读前后各取tick，RX非零后初始化trace；`http_consume_rx`仅在原RX_RD写和RECV命令前后记录tick；`http_send_header`只在活动trace下记录进入tick并标记header阶段，`s0_command(SEND)`成功写入命令后记录`hi`，`SENDOK`分支记录`hk`；`bringup_print_http_trace`使用独立384B局部缓冲，仅在trace结束且新序号时一次性输出。未见新增写寄存器、命令、重试或状态分支。
+- 烧录前3333/6666无监听；OpenOCD/ST-Link V2烧录HEX后输出`Programming Finished`、`Verified OK`、`Resetting Target`，目标电压=`3.250368 V`。本阶段按边界未发送HTTP、未操作CANtest、未使用sudo或Git提交/推送，因此运行态时序字段尚未由本轮用户抓包验证，源码不得据此提交。
+
+## 2026-07-15 阶段 F-69：外部抓包等待（阻断）
+
+- F-69烧录后已连续三次等待同一项用户现场输入：60秒空闲后的唯一HTTP请求pcap、curl trace和串口`[http-trace]`行。主会话未发送额外HTTP、未操作CANtest、未修改源码或提交；没有这些数据不能安全判定约2秒延迟发生在调度、SPI/RX、RECV、JSON构造或SEND阶段，也不能把观测固件提交为验证通过。
+- 当前按外部条件阻断暂停；用户提供上述三项输出后应直接从F-69字段与pcap时间对齐恢复，不重新烧录、不重选阶段或猜测修复方向。本次仅记录阻断，未编译、反汇编、烧录或执行硬件访问。
+
+## 2026-07-15 阶段 F-69：用户请求细化抓包操作
+
+- 用户要求把F-69现场验证拆成可观察的逐步操作。已明确：CANtest保持当前持续发送；抓包开始前及60秒空闲期不得打开浏览器或执行其它访问`192.168.1.88:80`的命令；终端A出现`listening on en2`才启动终端B的唯一一次`curl`；curl完成后等待2秒让固件输出连接结束的`[http-trace]`串口行；最后停止抓包并导出pcap与curl trace。此问答只提供用户操作说明，未编译、反汇编、烧录、访问HTTP或修改固件。
+
+## 2026-07-15 阶段 F-69：用户拟重新上电
+
+- 用户决定重新上电后再执行F-69。已确认这是允许且有利于清除前一连接状态的准备动作；上电后应等待固件启动稳定、保持CANtest当前发送，并从抓包终端A开始重新执行固定的“空闲60秒唯一HTTP请求”协议。主会话未操作电源、HTTP、CANtest、构建、烧录或源码。
+
+## 2026-07-15 阶段 F-69：重上电后单请求现场结果（串口观测待确认）
+
+- 用户按协议启动`en2` tcpdump并在60秒后只执行一次`/api/status`；抓包停止时为`12 packets captured/0 dropped`。curl实际成功：`F69 http=200 start=0.029652 total=0.033381`，所以本次未复现F-67的约2.20秒延迟，不能把正常单样本扩大为空闲稳定性已证明。
+- 初始沟通称“未出现`[http-trace]`”，用户随后澄清为当时没有查看串口；因此不能把该行缺失写成现场事实或固件失败。该行仍是将pcap与固件SEND时间对齐的必要观测；应先在串口监视器历史中搜索该行，若历史未保留，再重新安排一次串口全程可见的唯一HTTP请求。当前要求保留`/tmp/f69-idle60-status.pcap`，不得在确认历史前额外发送HTTP；F-70只读审计目标改为核对`bringup_print_http_trace`触发/完成条件和下次观察窗口。主会话未额外访问HTTP、操作CANtest、构建、烧录或提交。
+
+## 2026-07-15 阶段 F-70：`[http-trace]` 输出时序只读审计（完成，未修改）
+
+- F-70确认`[http-trace]`不在HTTP 200或FIN时立即输出：`RX_RSR>0`时开始trace；响应发送后只发`DISCON`并置graceful-disconnect pending；后续HTTP轮询观察到pending且socket为`CLOSED/INIT/CLOSE_WAIT/LISTEN`才完成trace；随后约每秒一次的MonitorTask先打印`[bringup] run`，再在`seq!=0 && active==0 && seq未打印`时尝试输出短行。因此本轮curl成功后仅等待2秒且没有查看串口，不能证明该行缺失或F69固件失败。
+- `printed_seq`在UART写调用前置位，若UART超时或监视工具漏收，本序号不会重试；但当前没有原始串口记录，不能把这个源码事实认定为已发生故障，也不允许据此修改固件。唯一下一步是先导出已有pcap/curl只读结果；若串口历史没有保留，再重新执行一次既定单GET，并在请求后至少3秒持续观察和保留原始串口（应包含后续`[bringup] run`及可能的`[http-trace]`）。F-70未编辑、构建、反汇编、烧录、访问HTTP/CANtest或Git。
+
+## 2026-07-15 阶段 F-69：已保存pcap历史解码（正常样本，trace完成态仍缺）
+
+- 用户提供`/tmp/f69-idle60-status.pcap`的完整解码。该单连接时间为：SYN=`23:38:06.327880`、SYN-ACK=`.328111`（约`0.231 ms`）；GET=`.328189`；HTTP header=`.354182`（GET后约`25.993 ms`）；733 B body=`.357749`（GET后约`29.560 ms`）；四次挥手于`.359729`完成。无RST、无重传、无未完成握手；curl先前记录的`start=29.652 ms/total=33.381 ms`与该pcap一致。该样本证明重上电后的这一次空闲单请求正常，不能反证F-67已测得的约2.20秒异常延迟。
+- body内的F-69 JSON为`seq=1/active=1`，`rxReadyTick=handleEnterTick=p=145434`、`g=50`；`ss/se/is/ie/rs/re/bs/be/cs/ce`均为`145434`，只可说明这些被tick观测的前段在同一tick内完成，不能推断其精确微秒耗时。该请求在组装自身body时，后续`ue/hs/hi/hk=0`以及既有record/return零值均为预期采样顺序，不能用它们判定SEND路径。附件没有串口原始输出，故尚缺F-69完成态`[http-trace]`行，无法把pcap首个header与`hi/hk`对齐；不提交源码。
+
+## 2026-07-15 阶段 F-69：历史串口不可用，安排单次重采样
+
+- 用户确认此前串口历史未保留。F-69的已烧录固件、现有pcap和正常样本结论保持有效，但无法补回连接完成态`[http-trace]`。无需重新烧录或改源码；下一次必须先确认串口监视器已持续显示，再开始独立tcpdump，60秒空闲后只发一次GET，curl结束后持续观察串口至少3秒并复制后续`[bringup] run`和`[http-trace]`行。当前等待用户按此协议操作；主会话未发HTTP、操作CANtest、构建、烧录或提交。
+
+## 2026-07-16 阶段 F-69：重采样端到端时序验收（通过）
+
+- 用户按固定协议取得第二次完整空闲60秒单GET证据：pcap中GET=`00:02:24.035869`、HTTP header=`.042546`（`6.677 ms`）、733 B body=`.046198`（`10.329 ms`）；SYN/SYN-ACK、ACK、FIN四次挥手均完整，无RST和重传。curl记录HTTP200，首字节/总时长=`11.275/15.011 ms`，与pcap的相对时序一致。
+- 连接结束后用户获得完整F-69串口行：`seq=1 p=181468 g=50 ss=181468 se=181468 is=181468 ie=181468 rs=181468 re=181468 bs=181468 be=181468 cs=181468 ce=181468 us=181468 ue=181468 hs=181468 hi=181469 hk=181469`。因此轮询、SR/IR/RX_RSR读取、请求buffer读取、RX_RD+RECV、status body构造和header发送进入均在同一系统tick内；`SEND`命令写入与`SENDOK`均在下一tick。请求自身JSON中的后续字段为零仍是预期采样顺序，完成态UART行已补全该缺口。
+- F-69“最小端到端观测可与pcap对照”的阶段目标已实际满足：源码仅增加trace字段与独立UART短行，`git diff --check`、`verify.sh`/host CTest=`14/14`、关键反汇编、OpenOCD `Programming Finished/Verified OK/Resetting Target`（`3.250368 V`）均已完成；ELF/HEX SHA-256=`be4e69cdbdfb70fc8583a4b4167a01b539cb9c5181f09284882652ce563f4754`/`e345a3d460a8570acfb1767575f9b423b1723fc1a40ecf3a2abc2b3cf6a5355b`。本次正常样本不推翻F-67的约2.20秒延迟，不能把根因或G-1联合耐久写为通过；但F-69观测功能可按规则提交。下一阶段必须只针对间歇延迟的可重复复现/分类，不直接改状态机或重试。
