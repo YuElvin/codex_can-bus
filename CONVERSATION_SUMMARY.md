@@ -2417,3 +2417,16 @@
 - 仍需在当前同一映像重新形成联合证据：正常500k外部CAN RX/TX与SignalCache持续增长、30分钟TF日志耐久、DBC上传/激活、规则HTTP→ConfigTask→持久化后的冷启动、网线恢复、真实250k bus-off恢复和最终ELF/HEX/反汇编/烧录汇总。运行中TF热插拔、并发HTTP、无界规则管理、LAN8720/lwIP及用QSPI诊断扇区保存配置均为明确非目标。
 - 下一阶段固定为G-1：重新构建、反汇编、烧录当前HEAD后，在TF/网线插入、开发板上电且CANtest保持500k持续发送的正常工况下进行30分钟联合耐久；结束再顺序回归API、DBC有效激活、非法规则400后短连接以及5×20单连接压力。该阶段依赖用户确认CANtest持续发送，主会话暂停等待明确的“已发送/准备就绪”，期间不自行操作CANtest、拔插、重启或烧录。本次仅记录审计，未编译或烧录。
 - G-1 已连续三次等待同一外部条件而未收到“准备就绪/已发送”确认；主会话未烧录、未访问CANtest、未拔插或修改源码。当前唯一阻断为CANtest 500k持续发送的实际确认，收到后应从G-1当前HEAD的重新构建、反汇编和烧录开始，不能把历史CAN证据代替当前同映像联合耐久。
+
+## 2026-07-15 阶段 G-1：当前HEAD联合耐久首轮（HTTP空闲首请求失败）
+
+- 用户确认已重新上电并持续发送500k信号后，主会话重新构建当前HEAD，`verify.sh`/host CTest=`14/14`通过；反汇编确认 `s0_read_u16_stable`、FDCAN2 `HAL_FDCAN_Stop/Start`恢复路径仍在。ELF/HEX SHA-256=`3077703f2870b91acf94b1c66737f383aa4efc95fe886e8d035d4c6e74970c1a`/`17313d823489aaf7ceb376dc80ea17de8adee418ab087ec75418396e8f72007f`。烧录前3333/6666无监听，OpenOCD `Programming Finished/Verified OK/Resetting Target`，电压=`3.268051 V`。
+- 启动基线API均200：CAN `tx/rx/errors/busOff/tec/rec/sendResult=14/132/0/0/0/0`，DBC active=`151B/3 lines/1 message/2 signals/errors=0`，规则源为v3两槽，外部`/api/signals`为marker=`42434`/sequence=`4660`。一分钟后同类只读采样前CAN RX已至`733`且所有错误仍0。串口随后显示CAN RX=`1092→2096`、队列无drop、CAN错误/BO/TEC/REC为0、W5500/HTTP/TF/QSPI任务循环均持续增长。
+- 但首个60秒空闲后的`GET /api/status`在3秒无字节超时；其后仅只读串口，`hreq=12`未增加、`hsr=14(LISTEN)`、`hir=0`、`herr=0`，说明失败请求没有进入既有HTTP记录路径，且当时系统并未整体停滞。G-1耐久立即停止，不能把此前连续短连接压力成功写为当前联合耐久通过；源码不提交。
+- F-67已派送只读审计，目标是为“空闲60秒→单GET”固定同步TCP抓包协议，先用报文方向区分未建连、GET未到板、板端未响应或RST，再决定是否允许修改源码。抓包若要求管理员密码，必须等待用户本机执行，主会话不得代填或自行猜测。
+
+## 2026-07-15 阶段 F-67：空闲首HTTP请求同步抓包协议（等待用户操作）
+
+- F-67只读审计未执行抓包、HTTP、CANtest、Git、构建或烧录。F61 trace 只在稳定`RX_RSR>0`时才创建序号，因此当前`hreq/trace`不变只说明应用未观察到完整RX，不能用它区分SYN未应答、GET未到板或应用未处理。
+- 唯一有效现场协议为：用户先停止所有其它对`192.168.1.88:80`的轮询，在终端A自行输入sudo密码执行 `sudo tcpdump -i en2 -nn -s 0 -U -w - 'host 192.168.1.88 and tcp port 80' | tee /tmp/f67-idle60-single-status.pcap >/dev/null`；看到`listening on en2`后，终端B仅执行一次“sleep 60后 `curl --http1.0 --max-time 3 --trace-time` GET `/api/status`”且不重试；随后Ctrl-C停止抓包并保留GET前后串口状态、pcap和curl trace。任何额外TCP/80流量均使本轮无效。
+- 判读以pcap为准：无SYN为主机问题；SYN无SYN-ACK为板端未完成TCP接入；握手无GET为客户端问题；GET被ACK却无HTTP payload需结合`htseq/htwc/htrc/htre/htrs`；payload首字节超过3秒为延迟响应；RST/无body FIN为关闭路径异常。只有pcap可证明报文实际在线路出现，F61的handler返回只能证明软件发送调用返回。当前暂停等待用户按协议操作并回复“抓包已启动/已完成”，主会话不得代填sudo、发送额外HTTP或改变CANtest。
