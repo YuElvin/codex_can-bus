@@ -2430,3 +2430,4 @@
 - F-67只读审计未执行抓包、HTTP、CANtest、Git、构建或烧录。F61 trace 只在稳定`RX_RSR>0`时才创建序号，因此当前`hreq/trace`不变只说明应用未观察到完整RX，不能用它区分SYN未应答、GET未到板或应用未处理。
 - 唯一有效现场协议为：用户先停止所有其它对`192.168.1.88:80`的轮询，在终端A自行输入sudo密码执行 `sudo tcpdump -i en2 -nn -s 0 -U -w - 'host 192.168.1.88 and tcp port 80' | tee /tmp/f67-idle60-single-status.pcap >/dev/null`；看到`listening on en2`后，终端B仅执行一次“sleep 60后 `curl --http1.0 --max-time 3 --trace-time` GET `/api/status`”且不重试；随后Ctrl-C停止抓包并保留GET前后串口状态、pcap和curl trace。任何额外TCP/80流量均使本轮无效。
 - 判读以pcap为准：无SYN为主机问题；SYN无SYN-ACK为板端未完成TCP接入；握手无GET为客户端问题；GET被ACK却无HTTP payload需结合`htseq/htwc/htrc/htre/htrs`；payload首字节超过3秒为延迟响应；RST/无body FIN为关闭路径异常。只有pcap可证明报文实际在线路出现，F61的handler返回只能证明软件发送调用返回。当前暂停等待用户按协议操作并回复“抓包已启动/已完成”，主会话不得代填sudo、发送额外HTTP或改变CANtest。
+- F-67 已连续三次等待用户执行需要管理员密码的同步抓包而未收到输出。主会话未继续发送HTTP、烧录、修改源码或操作CANtest；当前唯一阻断为该空闲首请求pcap和curl trace。收到完整输出后可直接按F-67判读表恢复，不能以当前UART最终LISTEN状态替代报文方向证据。
