@@ -238,6 +238,24 @@ extern volatile uint32_t g_w5500_http_request_count;
 extern volatile uint32_t g_w5500_http_last_path;
 extern volatile uint32_t g_w5500_http_last_code;
 extern volatile uint32_t g_w5500_http_error_count;
+extern volatile uint32_t g_w5500_http_last_nonclosed_close;
+extern volatile uint32_t g_w5500_http_socket_ir;
+extern volatile uint32_t g_w5500_http_trace_seq;
+extern volatile uint32_t g_w5500_http_trace_active;
+extern volatile uint32_t g_w5500_http_trace_mutex_wait_start_tick;
+extern volatile uint32_t g_w5500_http_trace_mutex_wait_end_tick;
+extern volatile uint32_t g_w5500_http_trace_mutex_wait_ms;
+extern volatile uint32_t g_w5500_http_trace_rx_ready_tick;
+extern volatile uint32_t g_w5500_http_trace_rx_size;
+extern volatile uint32_t g_w5500_http_trace_handle_enter_tick;
+extern volatile uint32_t g_w5500_http_trace_record_tick;
+extern volatile uint32_t g_w5500_http_trace_handler_return_tick;
+extern volatile uint32_t g_w5500_http_trace_handler_result;
+extern volatile uint32_t g_w5500_http_trace_disconnect_start_tick;
+extern volatile uint32_t g_w5500_http_trace_disconnect_end_tick;
+extern volatile uint32_t g_w5500_http_trace_handle_wait_count;
+extern volatile uint32_t g_w5500_http_trace_handle_wait_first_tick;
+extern volatile uint32_t g_w5500_http_trace_handle_wait_last_rx_size;
 extern volatile uint32_t g_w5500_http_static_count;
 extern volatile uint32_t g_w5500_http_static_read_result;
 extern volatile uint32_t g_w25q128_jedec_id;
@@ -297,10 +315,10 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[1080];
+  char line[1536];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu cfgqr=%lu cfgqe=%lu cfgqd=%lu cfgdrop=%lu cfgcmd=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu cfgqr=%lu cfgqe=%lu cfgqd=%lu cfgdrop=%lu cfgcmd=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hir=%08lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu hclose=%08lx htseq=%lu htact=%lu htm0=%lu htm1=%lu htmm=%lu htrx=%lu htrxs=%lu hthe=%lu htrc=%lu htre=%lu htrs=%08lx htds=%lu htde=%lu htwc=%lu htwf=%lu htwl=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -393,6 +411,7 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_w5500_network_configured,
                  (unsigned long)g_w5500_http_status,
                  (unsigned long)g_w5500_http_socket_sr,
+                 (unsigned long)g_w5500_http_socket_ir,
                  (unsigned long)g_w5500_http_request_count,
                  (unsigned long)g_w5500_http_last_path,
                  (unsigned long)g_w5500_http_last_code,
@@ -402,7 +421,24 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_tf_sd_last_hal_status,
                  (unsigned long)g_tf_sd_last_error,
                  (unsigned long)g_tf_sd_last_sta,
-                 (unsigned long)g_tf_sd_last_dcount);
+                 (unsigned long)g_tf_sd_last_dcount,
+                 (unsigned long)g_w5500_http_last_nonclosed_close,
+                 (unsigned long)g_w5500_http_trace_seq,
+                 (unsigned long)g_w5500_http_trace_active,
+                 (unsigned long)g_w5500_http_trace_mutex_wait_start_tick,
+                 (unsigned long)g_w5500_http_trace_mutex_wait_end_tick,
+                 (unsigned long)g_w5500_http_trace_mutex_wait_ms,
+                 (unsigned long)g_w5500_http_trace_rx_ready_tick,
+                 (unsigned long)g_w5500_http_trace_rx_size,
+                 (unsigned long)g_w5500_http_trace_handle_enter_tick,
+                 (unsigned long)g_w5500_http_trace_record_tick,
+                 (unsigned long)g_w5500_http_trace_handler_return_tick,
+                 (unsigned long)g_w5500_http_trace_handler_result,
+                 (unsigned long)g_w5500_http_trace_disconnect_start_tick,
+                 (unsigned long)g_w5500_http_trace_disconnect_end_tick,
+                 (unsigned long)g_w5500_http_trace_handle_wait_count,
+                 (unsigned long)g_w5500_http_trace_handle_wait_first_tick,
+                 (unsigned long)g_w5500_http_trace_handle_wait_last_rx_size);
   bringup_uart_write(line);
 }
 
@@ -876,7 +912,9 @@ static void http_periodic_task(void *argument)
 
   g_http_task_started = 1u;
   for (;;) {
+    const TickType_t mutex_wait_start = xTaskGetTickCount();
     w5500_mutex_take();
+    w5500_http_trace_mutex_wait((uint32_t)mutex_wait_start, (uint32_t)xTaskGetTickCount());
     (void)w5500_http_status_poll();
     w5500_mutex_give();
     g_http_task_loop_count++;

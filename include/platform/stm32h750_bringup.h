@@ -101,6 +101,7 @@ int w5500_http_dbc_reload_complete(void);
 int w5500_http_dbc_reload_result(void);
 const DbcDatabase *w5500_http_active_dbc_snapshot(void);
 int w5500_http_status_poll(void);
+void w5500_http_trace_mutex_wait(uint32_t start_tick, uint32_t end_tick);
 
 #endif
 

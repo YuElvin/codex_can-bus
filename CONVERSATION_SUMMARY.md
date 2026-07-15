@@ -2301,3 +2301,112 @@
 - F-45后连续三次目标续行仍未收到用户对PD5/PD6、TX/RX、共地、3.3V TTL/反相条件的实际复查结果。主会话未操作CANtest、串口写入、板端或未提交源码；当前唯一阻断为UART物理层无法输出可读F-44诊断。按连续外部阻断规则，仅提交本记录检查点并再次暂停目标；收到实际复查确认后从UART可读基线继续。
 - 用户随后回复“串口已接好”，主会话立即以115200、8N1重读CH340，但仍为持续乱码、无`[bringup]`状态文本；未发送串口字节、未压测HTTP、未操作CANtest或提交源码。故该回复未形成USART2物理通道通过证据。下一步需用户明确CH340的RX/TX/GND实际接入的开发板引脚，或提供接线照片，以排除接错至非PD5/PD6、未交叉、未共地、5V/RS-232或反相转换；在此之前不能读取F-44关闭来源或继续功能修复。
 - 请求具体CH340 RX/TX/GND引脚对应或接线照片后，连续三次目标续行均未收到实际接线信息。主会话未再次烧录、读写串口、操作CANtest或修改源码；当前唯一阻断仍是UART物理层无法读出F-44诊断。按连续外部阻断规则，仅提交本记录检查点并暂停目标，未验证HTTP/UART源码不提交。
+
+## 2026-07-15 阶段 F-44：Windows UART 来源采集（进行中）
+
+- 用户说明开发板串口接到Windows电脑并以 VS Code Serial Monitor 可正常读取 `[bringup]` 开头数据。这证明开发板USART2/F-44输出链路正常，先前Mac CH340乱码只说明Mac侧串口通道不可解码，不能当作固件或开发板UART失败。
+- 用户被要求保持Windows Serial Monitor打开。主会话未改变CANtest，以257/271/283/307ms循环触发20次独立HTTP短连接：1至18次为HTTP 200，19至20次为`Recv failure: Connection reset by peer`，复现既有板端RST条件。当前等待用户粘贴该轮后的最新完整 `[bringup]` 状态行中的 `hclose=%08lx`；此编码决定关闭来源，尚未获得，不能提前选择或实现修复。
+- 请求该轮Windows Serial Monitor的完整 `hclose` 状态行后，连续三次目标续行均未收到数据。主会话未追加HTTP压测、未操作CANtest、板端或串口；当前唯一阻断为外部Windows串口读数未提供，不能确定F-42的关闭来源。按连续外部阻断规则，仅提交本记录检查点并暂停；所有未验证HTTP/UART源码继续不提交。
+
+## 2026-07-15 阶段 F-46/F-47：Mac 串口句柄修复与 RST 关闭来源（进行中）
+
+- 用户要求派送任务解决Mac读取串口问题。F-46只读诊断确认 `/dev/cu.usbserial-12230` 为WCH/CH340；独立 `stty 115200` 虽成功但关闭句柄后节点回退至9600，随后另开`cat`必然乱码。使用同一打开句柄内的termios设为115200、8N1、raw并只读5秒，`tcgetattr`确认速率，收到4524字节；切换前约63字节残留乱码后连续出现正确 `[bringup] run` 文本。未写串口、改固件、烧录、操作CANtest或Git。今后Mac读取必须使用保持自身句柄的工具（如`screen /dev/cu.usbserial-12230 115200`）或该termios只读方式，不能先stty后另开cat。
+- F-46 同一只读采样得到 `hclose=00000117`：编码严格为source=`1`（`http_open_listener`重建）与即时SR=`0x17`（ESTABLISHED）。这首次客观证明listener重建在新连接已建立时发出CLOSE，直接解释板端RST；不是handler错误或未知状态fallback。已按固定范围派送F-47，只读定义最小控制流：对实际SYNRECV/ESTABLISHED/CLOSE_WAIT交还现有poll处理且不发CLOSE/OPEN/LISTEN，同时保留CLOSED/INIT/异常状态重建；不得预先实现。
+- F-47审计后F-48仅扩展`http_open_listener()`的免重建集合为LISTEN/SYNRECV/ESTABLISHED/CLOSE_WAIT，所有其它重建路径未改。主会话完成 `diff --check`、`verify.sh`（CTest=`14/14`、FLASH=`86392 B`、RAM_D1=`239776 B`）及关键反汇编：首读SR后的位掩码仅命中`0x14/0x16/0x17/0x1c`并在任何source=1 CLOSE前早返，其他状态仍重建；ELF/HEX SHA-256=`21ee0e0db7777b82544c476255d8987216ced65eadce4818a08f4bb4b638dce5`/`443e4b6829339017d4b915d35399cb4266af83cf939f31d93ff4b880f648bee3`。烧录输出 `Programming Finished/Verified OK/Resetting Target`，电压=`3.260712 V`。
+- F-48首个目标压测为20/20 HTTP200；同一打开句柄的Mac UART采集显示`hreq=20/herr=0/hclose=00000000`，原`00000117`不再出现。但随后的正常API回归首请求超时、其余连接被拒绝；UART连续约8秒显示`http=0 hsr=1c(CLOSE_WAIT) hreq=20 herr=0 hclose=00000000`，任务循环仍增长。故F-48不能提交，且“保留CLOSE_WAIT”会造成已关闭对端连接未重建的现场停滞。F-49已明确派送，只读确定CLOSE_WAIT的唯一安全处理，同时必须保留对SYNRECV/ESTABLISHED的竞态保护；禁止预先修改。
+- F-49确认直接控制流为disconnect_pending下的CLOSE_WAIT无限返回。F-50仅移除helper早返的CLOSE_WAIT，并在pending的原`CLOSED||INIT`条件追加CLOSE_WAIT。主会话完成 `diff --check`、`verify.sh`（CTest=`14/14`、FLASH=`86384 B`、RAM_D1=`239776 B`）与反汇编：helper早返仅`0x14/0x16/0x17`，pending位集含`0x00/0x13/0x1c`并调用helper；ELF/HEX SHA-256=`800a34b411480e7c286a1ebdd7ecb464761bec9724023167b5170a2fc0908e25`/`a0bdcb475d9c67989f4769b3d1d0c1523bc150bdd3baed745138905168844f66`。烧录 `Programming Finished/Verified OK/Resetting Target`，电压=`3.259100 V`。
+- F-50现场20/20压测仍全HTTP200，但随后五个API均3秒超时。已验证UART显示`hclose=0000011c`且`hsr=14(LISTEN)`、`hreq=20/herr=0`、任务循环增长：CLOSE_WAIT已走source=1的强制重建并显示LISTEN，未再停在pending路径；但主机连接仍不能完成，故F-50不能提交。F-51已固定派送，只读审计W5500 CLOSE命令完成与紧随MR/OPEN/LISTEN重配置的时序缺口，禁止盲改。
+
+## 2026-07-15：Mac 串口读取方式复验（通过）
+
+- 用户要求派送明确任务解决Mac读取串口。只读子任务实际确认 `/dev/cu.usbserial-12230` 存在，读取前后均无用户进程占用；未向设备写入任何字节，也未修改固件、构建、烧录、操作 CANtest 或 Git。
+- 以单一进程、同一文件描述符设置 raw `115200 8N1` 并读取8秒，实际收到 `6944` 字节；首段从一行中段开始，随后连续得到8条完整 `[bringup]` 状态行（`rtc=356..363`），其中包括 `http=0 hsr=14 hreq=20 herr=0 hclose=0000011c`。因此Mac侧读取已恢复，且该状态行与此前F-50现场诊断一致。
+- 结论仅限主机串口使用方式：历史现场中先执行 `stty` 后再由独立 `cat` 打开设备会出现乱码/9600表现；本次同一FD配置并读取稳定成功，故后续必须将termios配置与读取保持在同一个打开会话中，不能使用两进程 `stty ...; cat ...`。本轮未编译，因此未执行反汇编检查。
+
+## 2026-07-15 阶段 F-52：W5500 强制关闭完成后再重建监听（未通过）
+
+- F-51 审计指出旧 `http_close_socket()` 只等待 `Sn_CR` 清零，不确认 `Sn_SR=CLOSED`，而 `http_open_listener()` 会立即写 MR/PORT/OPEN/LISTEN。F-52 的最小改动为：CLOSE 命令成功后清 `Sn_IR`，轮询 `Sn_SR` 最多1000次（每100次 `delay_ms(1)`），仅在 `CLOSED` 时返回成功；listener 只有该返回成功后才继续重配。LISTEN/SYNRECV/ESTABLISHED 保留为免重建状态，CLOSE_WAIT 不在免重建集合中。
+- 已完成 `git diff --check`、`./scripts/verify.sh`（host CTest=`14/14`，FLASH=`86448 B`、RAM_D1=`239776 B`）；本轮定向反汇编确认 `http_close_socket()` 的 `CLOSE(0x10)` 后确有 `Sn_SR` 读取循环和1000次上限，`http_open_listener()` 在写MR前检查该关闭函数返回值，失败走既有 `http=2/herr++`。F-52 ELF/HEX SHA-256 分别为 `6fe07950a3f90433767a0b3229e8c360722204c273e7861117094534d66b1ea4` / `a3fee93aee6b42278645f97426f7fe610aabd96c43f1a311599028b7928be050`。
+- 已通过 OpenOCD/ST-Link V2 烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex`，输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.260712 V`。现场257/271/283/307ms循环的20次 `/api/status` 压测全部 HTTP200；但随后依次访问 `/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime`、`/api/rules` 均在3秒无字节超时，ping仍为`2/2`。
+- 同一FD Mac UART连续8秒显示任务循环、CAN计数和RTOS持续增长，HTTP为`http=0 hsr=14(LISTEN) hreq=20 herr=0 hclose=0000011c`；即CLOSE_WAIT确已由source=1重建并显示LISTEN，但后续SYN/请求没有增加`hreq`。F-52未达到“压测后API回归”成功标准，源码不得提交。已固定派送F-53只读审计：只定位LISTEN却不接收新请求的最小控制流/寄存器证据缺口并定义唯一下一步，禁止预先实现或扩展功能。
+
+## 2026-07-15 阶段 F-53/F-54：清除 LISTEN 状态残留 pending（未通过）
+
+- F-53只读审计确认：`http_begin_graceful_disconnect()` 置 `disconnect_pending=1` 后，旧pending分支仅在CLOSED/INIT/CLOSE_WAIT清除；若SR已是LISTEN则永久保留pending，后续SYNRECV/ESTABLISHED也先被该分支返回，完全不读RX数据。该控制流可解释F-52中`hreq=20/herr=0/hsr=14`与新HTTP超时。F-54按唯一最小范围只在该条件追加`sr == W5500_S0_SR_LISTEN`，其后调用已对LISTEN早返的listener；未改其它协议、诊断或文件。
+- F-54 `git diff --check`、`./scripts/verify.sh`通过，host CTest=`14/14`；FLASH=`86448 B`、RAM_D1=`239776 B`。ELF/HEX SHA-256=`506fe9bc9f475dfc0563efde2ba0055967f4eb09785c6cc71e0d820c054f759d`/`f20f628fe5ffd46d4c2fd790442e51823bcba5c08bc72338ed4ab2d1d5ad1c08`。反汇编中pending位图为`0x10180001`，包含SR `0/0x13/0x14/0x1c`，命中后清pending并调用listener。OpenOCD烧录输出 `Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.259100 V`。
+- F-54现场压测仍未通过：20次为19次HTTP200、第20次3秒超时；之后五个API仅`/api/signals`一次200，其余超时，ping=`2/2`。UART持续显示任务增长、`hsr=14/herr=0`，最后成功路径为`hpath=7/hcode=200`、`hreq=20`。短暂停止读取后已立即`resume/shutdown`：`socket_sr=0x14`、`disconnect_pending=0`、`http_error=0`、`last_code=200`、`last_path=7`、`request_count=20`。因此F-54确已清除已证明的pending缺口，但没有恢复完整稳定性，源码不得提交；OpenOCD无驻留监听。
+
+## 2026-07-15 阶段 F-55/F-56：socket0 中断快照诊断（未通过）
+
+- F-55只读审计确认：现有代码只在发送紧循环读并清SENDOK/TIMEOUT，关闭时写`Sn_IR=0x1f`；没有可事后读取的CON/DISCON/RECV事件。因此F-56只新增原始 `g_w5500_http_socket_ir` 快照：每轮成功读取SR后、所有pending和状态分支前只读`Sn_IR=0x0002`，读失败写`0xffffffff`；不写IR、不改返回、状态机或协议。该变量仅追加到`/api/status`和既有UART的`hir=%08lx`。
+- F-56 `git diff --check`、`./scripts/verify.sh`通过，host CTest=`14/14`；FLASH=`86548 B`、RAM_D1=`239776 B`。ELF/HEX SHA-256=`09adbfe5abd2f786e464f598eb7f876608fb4792f2d1dacbdf23f47179038f9f`/`f15c8a2b86d21dc265c3744850556c3f313cce4217e27a28ce985e8e167899bb`。反汇编确认成功SR读后以`r0=2`调用` s0_read_u8`，失败路径仅写`0xffffffff`，之后才进入pending位图；源审计确认没有新增`Sn_IR`写入。OpenOCD烧录 `Programming Finished/Verified OK/Resetting Target`，电压=`3.260712 V`。
+- 现场同样为20次压测全部HTTP200，后续五个API均3秒超时，ping=`2/2`；UART连续8秒稳定为`hsr=14/hir=00000000/hreq=20/herr=0/hpath=1/hcode=200/hclose=0000011c`，任务与CAN计数持续增长。`hir=0`只说明之后每个轮询采样时无锁存事件，不能证明此前失败请求从未发生短暂事件；但当前已确认`pending=0`且IR无持久异常，F-56是诊断镜像而非修复，不能提交。下一步必须先以同步TCP方向抓包取得失败连接的SYN/SYN-ACK/ACK/RST方向，再决定是否允许修改监听逻辑；不能根据`hir=0`臆测W5500未收包或直接新增重试。
+
+## 2026-07-15 阶段 F-57：同步 TCP 失败方向抓包协议（待用户管理员操作）
+
+- F-57只读审计已固定唯一下一证据：以macOS `en2` 对 `host 192.168.1.88 and tcp port 80` 抓包，同时执行20次固定`/api/status`压力和一次压力后`/api/can/status`。只有抓到失败请求的SYN/SYN-ACK/ACK/GET/FIN/RST方向，才能区分“未完成握手”“GET未获板端ACK”“板端ACK后未响应”“板端RST”四类；在该分类前禁止继续调整W5500状态机或新增重试。
+- 抓包需要用户在本机Terminal输入管理员密码；主会话不能代填密码。本阶段暂停等待用户执行后回复“抓包已完成”并粘贴完整输出。F-56诊断源码保持未提交；本次仅固定协议和记录，未修改固件、未编译、未执行反汇编或烧录。
+
+## 2026-07-15 阶段 F-57：等待失败抓包（外部条件）
+
+- 本轮未收到用户执行管理员抓包后的输出，因此没有触发任何HTTP压力、烧录、串口或CANtest操作，也没有改变F-56诊断源码。只读复查工作区仍为未提交的`CONVERSATION_SUMMARY.md`、`cube_mx/Core/Src/main.c`和`firmware/bringup/w5500_bringup.c`；3333/6666未见监听。当前唯一阻断是用户本机管理员密码所需的TCP失败方向证据，不能以`hir=0`或ping成功代替。
+
+- F-57 已连续三次等待均未收到管理员抓包输出。主会话未继续改动W5500状态机、未触发HTTP压力、未烧录或操作CANtest；该阶段现按外部条件阻断暂停，诊断源码保持未提交。用户完成既定只读抓包并贴出输出后，可直接从F-57报文方向判定恢复，不需要重新选择开发目标。
+
+## 2026-07-15 阶段 F-57：同步 TCP 抓包结果（未复现失败）
+
+- 用户已提供完整抓包。`252`包已捕获、内核丢包`0`；20次固定间隔`/api/status`以及随后`/api/can/status`均完整呈现SYN/SYN-ACK/ACK/GET、板端对GET的ACK、HTTP 200 header/body、板端FIN和四次挥手。没有RST、GET重传、未完成握手或未确认GET。该证据证明当前F-56镜像在这一次压力序列中正常，但因没有复现此前超时，不能把它写成旧故障根因已消除，也不能将F-56诊断当作修复提交。
+
+## 2026-07-15 阶段 F-58：W5500 动态16位寄存器静态审计
+
+- F-58未访问硬件或修改文件。审计发现可直接证明的实现缺口：`Sn_RX_RSR`和`Sn_TX_FSR` 都经单次 `s0_read_u16()` 读取，但二者由W5500异步更新；单次两字节读取可能取得不一致值。RX错误长度会使既有RX_RD/RECV按错误长度前移并造成后续接收失步，TX错误空闲长度可能误允许覆写未释放环形区。IR的W1C、RX_RD/RECV顺序以及CLOSE→CLOSED→OPEN→LISTEN顺序未发现其它可静态证明错误；2KiB掩码依赖W5500复位默认缓冲配置，但不能单独认定为根因。下一派送F-59只为这两个动态寄存器增加有上限的“两次相等”读取，禁止改通用16位寄存器、状态机或协议。
+
+## 2026-07-15 阶段 F-59：动态16位寄存器稳定读取（未通过）
+
+- F-59 仅新增 `s0_read_u16_stable()`：最多四组、每组连续两次读取，值相等才返回；任何SPI读取失败或四组均不相等即报错。它只替换发送前 `Sn_TX_FSR` 与接收前 `Sn_RX_RSR` 的读取，未替换TX/RX指针、端口等静态/事务寄存器，也未修改HTTP状态机、IR写入或协议。
+- 已完成 `git diff --check` 与 `./scripts/verify.sh`，host CTest=`14/14`；STM32产物 FLASH=`86612 B`（`66.08%`）、RAM_D1=`239776 B`，`text/data/bss=86288/312/239464`。ELF/HEX SHA-256=`5c3d2f61c695010ecab813f63660e84d7dc902519ca3b9e83746dad7d0e50deb`/`e10d97fe500bc63e248c315df4b29a7e172b1e5e14bf2bcb0566bba4bab2d298`。定向反汇编确认 `s0_read_u16_stable` 至多执行四对读取、任一失败立即返回、仅在两值相等时写入结果；调用点只在 `http_send_bytes` 与 `w5500_http_status_poll`。
+- 已通过OpenOCD/ST-Link烧录 `build/stm32h750/can_bus_gateway_stm32h750.hex`，输出 `Programming Finished`、`Verified OK`、`Resetting Target`，目标电压=`3.260712 V`。
+- 烧录后执行三轮、每轮20次 `/api/status`（257/271/283/307ms间隔，单请求`curl --http1.0 --max-time 3`）及五个API回归。首轮仅`17/20`成功，随后`/api/status`、`/api/can/status`、`/api/signals`均3秒无字节超时；命令输出通道随后提前结束，不能将未显示的请求结果伪写为完成。之后UART实际显示任务持续运行且 `hreq=65/hpath=9/hcode=200/herr=0/hsr=14/hir=00000000/hclose=0000011c`：部分先前超时请求在客户端放弃后仍被板端处理，但总请求计数也未覆盖计划的全部75次压力请求。
+- 紧接着立即单独访问 `/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime`、`/api/rules`，5/5均HTTP200。这只证明故障具有间歇恢复性，不能证明F-59通过。当前不提交；已固定派送F-60只读审计，目标是从`ESTABLISHED+RX_RSR`到记录、发送、关闭重监听的代码路径中找出能解释“客户端先超时、板端后处理”的可证实延迟点，并定义最小时间观测，禁止直接增加重试或继续改状态机。
+
+## 2026-07-15 阶段 F-60：HTTP 超时后迟到处理路径审计（完成，未修改）
+
+- F-60只读审计未修改、构建、烧录或访问硬件。`GET /api/status` 本身只读取状态并`snprintf`后发送，不进入TF/DBC/规则锁或显式`vTaskDelay`；但HTTP任务从 `w5500_mutex_take(portMAX_DELAY)` 开始，持有同一W5500互斥锁贯穿整个轮询和请求处理，锁等待无源码上限。W5500周期任务同样使用该锁。
+- 更重要的是，`http_record_request(..., 200)` 在 `http_send_response()` 之前执行。因此F-59中稍后出现的`hreq`增长、`hcode=200`、`herr=0`只证明请求进入“准备发送响应”前，不能证明客户端3秒期限内已发送完成；最终采样的`hsr=LISTEN/hir=0`也不能倒推超时期间的socket状态。
+- 可超过3秒但尚未证实的候选仅包括：无限互斥锁等待；单字节SPI传输（每字节HAL超时100ms）累计；`SENDOK`轮询中未受墙钟约束的SPI读；关闭/命令轮询；不完整请求反复返回`HANDLE_WAIT`且没有超时；以及非`/api/status`路径在持有W5500锁时进行TF/DBC等慢操作。不能把任一候选写作根因。
+- 下一阶段F-61已明确派送：只增加最近一次连接的递增序号和时间观测（等锁、RX就绪与长度、处理进入、记录200、handler返回、优雅断开起止、`HANDLE_WAIT`次数/首末tick），只通过UART和`/api/status`暴露；禁止改状态机、重试、任务优先级、SPI、协议或业务逻辑。F-61必须重新编译、关键反汇编、烧录并以相同压力复测后才可决定下一步。
+
+## 2026-07-15 阶段 F-61：HTTP 时序观测与首轮现场结果（未通过）
+
+- F-61只新增最近一次HTTP连接的观测，不改HTTP状态机、SPI、socket寄存器/命令顺序、任务优先级或路由：RX首次就绪递增序号；记录HTTP任务的W5500互斥锁等待、RX tick/长度、handler进入/返回/结果、请求记录tick、优雅断开起止以及`HANDLE_WAIT`次数/首末信息。`/api/status`追加`w5500.httpTrace`，UART追加相同缩写字段；状态JSON容纳量使响应缓冲由640B最小扩大到1024B。
+- 已完成`git diff --check`与`./scripts/verify.sh`，host CTest=`14/14`；STM32 FLASH=`87960 B`（`67.11%`）、RAM_D1=`240240 B`，`text/data/bss=87632/316/239920`。ELF/HEX SHA-256=`3077703f2870b91acf94b1c66737f383aa4efc95fe886e8d035d4c6e74970c1a`/`17313d823489aaf7ceb376dc80ea17de8adee418ab087ec75418396e8f72007f`。定向反汇编确认mutex观测无活动连接时只更新内部最近值、活动连接时才写公开trace；`RX>0`分支建立trace并记录handler返回和WAIT计数；`http_record_request`仅在活动trace时写tick，随后保留原请求计数/路径/状态更新。
+- 烧录前已检查3333/6666无监听、无残留OpenOCD。已通过OpenOCD/ST-Link烧录并复位，输出`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.260712 V`。
+- 现场同一节奏压力的前6次`/api/status`均HTTP200；第7次起连续请求出现3秒无字节超时（本机命令输出在第13次后提前结束，未把未显示的后续结果当作完成）。只读串口随后持续5秒显示RTOS/HTTP任务循环增长，`hreq=6`、最近连接`htseq=6/htact=0`且其处理`htrx=37900`、`hthe=37900`、`htrc=37900`、`htre=37906`、`htds=37906`、`htde=37956`、`htwc=0`、mutex等待`htmm=0`，说明已完成的第6次无等待；同时实时socket快照为`hsr=17(ESTABLISHED)`、`hir=00000005(CON|RECV)`。因此板端已锁存连接和接收事件，但没有进入下一次`RX>0`处理（否则应创建`htseq=7`）；这排除“第7次单纯等W5500互斥锁”及“hreq=200即发送完成”的解释，但尚未证明`Sn_RX_RSR`为何持续为0或是否存在RX指针/缓冲配置问题。
+- F-61未通过且不提交。下一阶段F-62只读审计必须围绕此精确证据：核对W5500 `Sn_IR=CON|RECV`、`Sn_RX_RSR`稳定读取、RX_RD/RECV提交和缓冲配置的语义，区分软件可证明缺口与需要硬件寄存器快照的项目；禁止根据该一次现场结果直接添加重试或调整状态机。
+
+## 2026-07-15 阶段 F-62：RECV事件与RX寄存器语义审计（完成，未修改）
+
+- F-62未编辑、构建、烧录、访问现场或发起网络压力。审计确认`Sn_IR`是W1C：当前代码只在强制关闭时写`0x1f`，或发送链路写/清`SENDOK|TIMEOUT`；正常`http_consume_rx()`只写RX_RD并发`RECV`，正常优雅断开回到LISTEN会因listener早返而不清`CON|RECV`。因此F61的`hir=0x05`可能是粘滞历史事件，不能单独证明第7请求数据仍在RX缓冲。
+- 在当前控制流中，`htseq`未变为7可严格推出：轮询没有观察到成功的稳定非零`Sn_RX_RSR`。可能是稳定双读得到0，或SPI失败/四对值不等（后者应置`http=4/herr++`）；一旦得到任何非零值，trace必在RX_RD、RX buffer、解析或发送之前创建，因此后续路径不能解释“无seq7”。当前稳定双读满足W5500动态16位寄存器的相等读取要求。
+- RX正常路径为读RX_RD→读RX buffer→写`RX_RD+rx_size`→发`RECV`，与W5500规范一致；`HANDLE_WAIT`和RX消费失败也都会在trace创建后发生。未发现一个可以证明“还未创建seq7却由本代码提前推进RX_RD”的软件路径。Socket0的REG/TX/RX块选择与2KiB掩码在W5500复位默认RX/TX各2KiB时正确，但代码未配置或读取`RXBUF_SIZE/TXBUF_SIZE`；这仍是待排除条件，而非已证明根因。
+- 下一阶段F-63已固定派送：仅在`SR=ESTABLISHED`、`IR`含RECV且稳定`RX_RSR=0`时做一次不写寄存器的Socket0快照，记录SR/IR/CR、四次原始RSR值、RX_RD/RX_WR、RXBUF_SIZE/TXBUF_SIZE，并通过已有UART与`/api/status`暴露。触发快照不得清IR、不得发RECV、不得改变状态机；必须重新构建、反汇编、烧录并复现后才可下结论。
+
+## 2026-07-15 阶段 F-63：Socket0异常组合只读快照与压力复测（当前映像通过，根因未定）
+
+- F-63只在同一轮`SR=ESTABLISHED`、成功读到`IR&RECV`、稳定`RX_RSR=0`且当前连接尚未锁存时触发一次快照；快照只读SR/IR/CR、RSR四次原始读值、RX_RD/RX_WR、RXBUF_SIZE/TXBUF_SIZE并记录有效位/序号。非零RX_RSR或离开ESTABLISHED才解除本连接锁存。没有新增`s0_write`、`s0_command`、IR清除、RECV、重试、状态机或任务优先级改动；状态JSON/UART只追加观测字段。
+- 已完成`git diff --check`和`./scripts/verify.sh`，host CTest=`14/14`；STM32 FLASH=`88996 B`（`67.90%`）、RAM_D1=`240288 B`，`text/data/bss=88624/360/239928`。ELF/HEX SHA-256=`31751c7b861d710798d383bba0394479d461fe152aedcd7a9c8e60a4eaa6f53b`/`d85eb066dc75721e6b2b6429481992ae4aa232357e5260f2a70deb62ee67f69b`。反汇编确认快照触发前严格比较`SR=0x17`、IR bit2、稳定RSR为0与未锁存；快照展开后只有SR/IR/CR、`0x0026`四次、`0x0028/0x002a`、`0x001e/0x001f`的读取调用，没有任何写寄存器或命令路径。
+- 烧录前3333/6666均无监听、无残留OpenOCD；已OpenOCD/ST-Link烧录，输出`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.260712 V`。随后相同257/271/283/307ms单连接节奏累计5轮共100次`/api/status`压力为`100/100 HTTP200`；压力后`/api/status`、`/api/can/status`、`/api/signals`、`/api/dbc/runtime`、`/api/rules`均HTTP200，ping=`2/2`。
+- 压力后状态接口中的`socket0Stall`为`v=0/q=0`，所有快照数据仍为初始化`0xffffffff`，即F63未观察到F61的异常组合；该状态请求自身正在处理，所以其`httpTrace`显示`seq=111/active=1`、`rxSize=85`、尚未写record/return，这是“响应组装期间读取自身trace”的预期瞬时状态，不能当作挂起。首次API回归命令因当前shell缺少系统PATH而报`curl/ping command not found`，未访问开发板；已用`/usr/bin/curl`与`/sbin/ping`完整重跑并取得上述真实结果。
+- 当前映像在100次覆盖下稳定，但F63是只读诊断、没有直接修复F61曾复现的故障，且其编译后函数布局/栈帧发生变化；因此不能据此宣称根因消失或提交。F-64已固定派送只读审计：比较F61与F63在异常快照未触发时的实际快路径、栈帧/时序影响，给出是否能把100/100视为阶段F稳定验收的明确证据边界和唯一下一验证目标。
+
+## 2026-07-15 阶段 F-64：F63诊断扰动审计（完成，未修改）
+
+- F-64未编辑、构建、烧录、网络访问或Git。F63未触发快照时仍非零扰动：反汇编显示`w5500_http_status_poll`栈帧从F61的`268B`增至`372B`；RX>0路径多一次stall latch RAM写，RX=0未触发路径多SR/IR/latch条件分支；每次`/api/status`增加`socket0Stall` JSON格式化和发送长度，UART行也变长。只有异常组合真正触发时才新增11次只读W5500事务（SR/IR/CR、RSR×4、RD/WR、RX/TX size），未发现写或命令。
+- 所以F63的`100/100`、五API和ping只能证明该F63二进制在本次五轮节奏未触发异常组合时正常，不能证明F61的6次后失败消失、不能证明根因、更不能把诊断改动作为稳定修复提交。唯一下一步F-65已固定派送：仅撤除F63特有的stall latch/捕获/`socket0Stall` HTTP与UART字段，保留F59稳定读取、F60/F61 trace与全部状态机/SPI/任务设置；重新构建反汇编必须证明poll栈帧恢复268B且无F63的11次读取，再烧录执行同样5×20压力、五API和ping。结果无论通过或失败都只用于判别F63扰动，不能臆测根因。
+
+## 2026-07-15 阶段 F-65：撤除F63诊断扰动并复验（进行中）
+
+- F-65已精确删除F63的stall全局状态、捕获函数/latch、轮询触发、`socket0Stall`状态JSON/UART字段及三项仅供该快照使用的寄存器常量；F59稳定读取与F61的`socketIr/httpTrace`均保留。未修改状态机、SPI、任务优先级、路由或业务。
+- `git diff --check`、`./scripts/verify.sh`通过，host CTest=`14/14`；FLASH=`87960 B`、RAM_D1=`240240 B`、`text/data/bss=87632/316/239920`，ELF/HEX SHA-256恢复F61的`3077703f2870b91acf94b1c66737f383aa4efc95fe886e8d035d4c6e74970c1a`/`17313d823489aaf7ceb376dc80ea17de8adee418ab087ec75418396e8f72007f`。反汇编确认`w5500_http_status_poll`栈帧恢复`268B`，F63的快照读取序列不再存在。
+- 烧录前3333/6666无监听；OpenOCD烧录输出`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.260712 V`。五轮20次脚本的宿主输出已实际显示r1-r3各`20/20`和r4的前16次全部200，但工具在该点提前截断，故只能客观计为至少`76/76`，不得把r4余4次及r5写成已完成。随后独立完整20次压力为`20/20`，合计已有至少`96/96`真实HTTP200、未复现F61故障；尚未完成一个完整可核对的5×20结果和压力后五API/ping回归，F65继续进行且源码不提交。
+- 为消除宿主截断，后续以单独命令完成五个独立20次轮次，round6至round10均为`20/20`；其后五个API均HTTP200、ping=`2/2`。因此F65满足当前单socket稳定性验收；仍不声称F61延迟的单一根因已证明，也不扩展为并发HTTP能力。下一步同步状态文档并提交本次经过烧录验证的F59--F65修复/观测链。

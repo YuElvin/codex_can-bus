@@ -29,6 +29,24 @@ volatile uint32_t g_w5500_http_last_code = 0u;
 volatile uint32_t g_w5500_http_last_rx_size = 0u;
 volatile uint32_t g_w5500_http_last_tx_size = 0u;
 volatile uint32_t g_w5500_http_error_count = 0u;
+volatile uint32_t g_w5500_http_last_nonclosed_close = 0u;
+volatile uint32_t g_w5500_http_socket_ir = 0xffffffffu;
+volatile uint32_t g_w5500_http_trace_seq = 0u;
+volatile uint32_t g_w5500_http_trace_active = 0u;
+volatile uint32_t g_w5500_http_trace_mutex_wait_start_tick = 0u;
+volatile uint32_t g_w5500_http_trace_mutex_wait_end_tick = 0u;
+volatile uint32_t g_w5500_http_trace_mutex_wait_ms = 0u;
+volatile uint32_t g_w5500_http_trace_rx_ready_tick = 0u;
+volatile uint32_t g_w5500_http_trace_rx_size = 0u;
+volatile uint32_t g_w5500_http_trace_handle_enter_tick = 0u;
+volatile uint32_t g_w5500_http_trace_record_tick = 0u;
+volatile uint32_t g_w5500_http_trace_handler_return_tick = 0u;
+volatile uint32_t g_w5500_http_trace_handler_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_trace_disconnect_start_tick = 0u;
+volatile uint32_t g_w5500_http_trace_disconnect_end_tick = 0u;
+volatile uint32_t g_w5500_http_trace_handle_wait_count = 0u;
+volatile uint32_t g_w5500_http_trace_handle_wait_first_tick = 0u;
+volatile uint32_t g_w5500_http_trace_handle_wait_last_rx_size = 0u;
 volatile uint32_t g_w5500_http_static_count = 0u;
 volatile uint32_t g_w5500_http_static_read_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_static_file_size = 0u;
@@ -137,6 +155,7 @@ extern RuleFileV3 g_rule_file_v3_pending;
 #define W5500_S0_SR_CLOSED 0x00u
 #define W5500_S0_SR_INIT 0x13u
 #define W5500_S0_SR_LISTEN 0x14u
+#define W5500_S0_SR_SYNRECV 0x16u
 #define W5500_S0_SR_ESTABLISHED 0x17u
 #define W5500_S0_SR_CLOSE_WAIT 0x1cu
 #define W5500_HTTP_PORT 80u
@@ -181,13 +200,55 @@ static uint8_t g_w5500_bound;
 static SemaphoreHandle_t g_w5500_dbc_mutex;
 static QueueHandle_t g_w5500_dbc_reload_queue;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
-static char g_http_response_body[640];
+static char g_http_response_body[1024];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
 static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
 static DbcDatabase g_http_dbc_runtime_db[2];
 static const DbcDatabase *g_http_dbc_runtime_active_db;
 static uint8_t g_w5500_http_disconnect_pending;
+static uint32_t g_w5500_http_last_mutex_wait_start_tick;
+static uint32_t g_w5500_http_last_mutex_wait_end_tick;
+static uint32_t g_w5500_http_last_mutex_wait_ms;
+
+void w5500_http_trace_mutex_wait(uint32_t start_tick, uint32_t end_tick) {
+  g_w5500_http_last_mutex_wait_start_tick = start_tick;
+  g_w5500_http_last_mutex_wait_end_tick = end_tick;
+  g_w5500_http_last_mutex_wait_ms = (end_tick - start_tick) * portTICK_PERIOD_MS;
+  if (g_w5500_http_trace_active != 0u) {
+    g_w5500_http_trace_mutex_wait_start_tick = start_tick;
+    g_w5500_http_trace_mutex_wait_end_tick = end_tick;
+    g_w5500_http_trace_mutex_wait_ms = g_w5500_http_last_mutex_wait_ms;
+  }
+}
+
+static void http_trace_begin(uint16_t rx_size) {
+  ++g_w5500_http_trace_seq;
+  g_w5500_http_trace_active = 1u;
+  g_w5500_http_trace_mutex_wait_start_tick = g_w5500_http_last_mutex_wait_start_tick;
+  g_w5500_http_trace_mutex_wait_end_tick = g_w5500_http_last_mutex_wait_end_tick;
+  g_w5500_http_trace_mutex_wait_ms = g_w5500_http_last_mutex_wait_ms;
+  g_w5500_http_trace_rx_ready_tick = HAL_GetTick();
+  g_w5500_http_trace_rx_size = rx_size;
+  g_w5500_http_trace_handle_enter_tick = 0u;
+  g_w5500_http_trace_record_tick = 0u;
+  g_w5500_http_trace_handler_return_tick = 0u;
+  g_w5500_http_trace_handler_result = 0xffffffffu;
+  g_w5500_http_trace_disconnect_start_tick = 0u;
+  g_w5500_http_trace_disconnect_end_tick = 0u;
+  g_w5500_http_trace_handle_wait_count = 0u;
+  g_w5500_http_trace_handle_wait_first_tick = 0u;
+  g_w5500_http_trace_handle_wait_last_rx_size = 0u;
+}
+
+static void http_trace_finish(void) {
+  if (g_w5500_http_trace_active != 0u) {
+    if (g_w5500_http_trace_disconnect_start_tick != 0u) {
+      g_w5500_http_trace_disconnect_end_tick = HAL_GetTick();
+    }
+    g_w5500_http_trace_active = 0u;
+  }
+}
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
   return w5500_port_read_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, value, 1u);
@@ -209,6 +270,21 @@ static W5500Result s0_read_u16(uint16_t address, uint16_t *value) {
 static W5500Result s0_write_u16(uint16_t address, uint16_t value) {
   const uint8_t data[2] = {(uint8_t)(value >> 8), (uint8_t)value};
   return w5500_port_write_block(&g_w5500_port, W5500_S0_REG_BLOCK, address, data, sizeof(data));
+}
+
+static W5500Result s0_read_u16_stable(uint16_t address, uint16_t *value) {
+  for (uint32_t pair = 0u; pair < 4u; ++pair) {
+    uint16_t first = 0u;
+    uint16_t second = 0u;
+    if (s0_read_u16(address, &first) != W5500_OK || s0_read_u16(address, &second) != W5500_OK) {
+      return W5500_ERROR;
+    }
+    if (first == second) {
+      *value = first;
+      return W5500_OK;
+    }
+  }
+  return W5500_ERROR;
 }
 
 static W5500Result s0_command(uint8_t command) {
@@ -262,16 +338,43 @@ static W5500Result socket_buffer_write(uint8_t block, uint16_t ptr, const uint8_
   return W5500_OK;
 }
 
-static int http_close_socket(void) {
+static int http_close_socket(uint32_t source) {
+  uint8_t sr = 0u;
+  if (s0_read_u8(W5500_S0_SR, &sr) != W5500_OK) {
+    g_w5500_http_last_nonclosed_close = 0x80000000u | source;
+  } else if (sr != W5500_S0_SR_CLOSED) {
+    g_w5500_http_last_nonclosed_close = (source << 8) | sr;
+  }
   g_w5500_http_disconnect_pending = 0u;
-  (void)s0_command(W5500_S0_CR_CLOSE);
+  const W5500Result close_result = s0_command(W5500_S0_CR_CLOSE);
   (void)s0_write_u8(W5500_S0_IR, 0x1fu);
-  return 0;
+  if (close_result != W5500_OK) {
+    http_trace_finish();
+    return 1;
+  }
+  for (uint32_t i = 0u; i < 1000u; ++i) {
+    if (s0_read_u8(W5500_S0_SR, &sr) != W5500_OK) {
+      http_trace_finish();
+      return 1;
+    }
+    if (sr == W5500_S0_SR_CLOSED) {
+      http_trace_finish();
+      return 0;
+    }
+    if ((i % 100u) == 0u) {
+      g_w5500_port.ops->delay_ms(g_w5500_port.ctx, 1u);
+    }
+  }
+  http_trace_finish();
+  return 1;
 }
 
 static int http_begin_graceful_disconnect(void) {
   if (g_w5500_http_disconnect_pending != 0u) {
     return 0;
+  }
+  if (g_w5500_http_trace_active != 0u) {
+    g_w5500_http_trace_disconnect_start_tick = HAL_GetTick();
   }
   if (s0_command(W5500_S0_CR_DISCON) != W5500_OK) {
     return 1;
@@ -282,8 +385,15 @@ static int http_begin_graceful_disconnect(void) {
 
 static int http_open_listener(void) {
   uint8_t sr = 0u;
-  (void)http_close_socket();
-  if (s0_write_u8(W5500_S0_MR, W5500_S0_MR_TCP) != W5500_OK ||
+  if (s0_read_u8(W5500_S0_SR, &sr) == W5500_OK &&
+      (sr == W5500_S0_SR_LISTEN || sr == W5500_S0_SR_SYNRECV ||
+       sr == W5500_S0_SR_ESTABLISHED)) {
+    g_w5500_http_socket_sr = sr;
+    g_w5500_http_status = 0u;
+    return 0;
+  }
+  if (http_close_socket(1u) != 0 ||
+      s0_write_u8(W5500_S0_MR, W5500_S0_MR_TCP) != W5500_OK ||
       s0_write_u16(W5500_S0_PORT, W5500_HTTP_PORT) != W5500_OK ||
       s0_command(W5500_S0_CR_OPEN) != W5500_OK ||
       s0_read_u8(W5500_S0_SR, &sr) != W5500_OK ||
@@ -337,7 +447,8 @@ static size_t build_status_body(char *body, size_t len) {
   return (size_t)snprintf(body,
                           len,
                           "{\"ok\":true,\"data\":{\"rtos\":{\"started\":%lu,\"ready\":%lu,\"loop\":%lu},"
-                          "\"w5500\":{\"status\":%d,\"link\":%lu,\"version\":%lu,\"phycfgr\":%lu},"
+                          "\"w5500\":{\"status\":%d,\"link\":%lu,\"version\":%lu,\"phycfgr\":%lu,\"lastNonclosedClose\":%lu,\"socketIr\":%lu,"
+                          "\"httpTrace\":{\"seq\":%lu,\"active\":%lu,\"mutexWaitStartTick\":%lu,\"mutexWaitEndTick\":%lu,\"mutexWaitMs\":%lu,\"rxReadyTick\":%lu,\"rxSize\":%lu,\"handleEnterTick\":%lu,\"recordTick\":%lu,\"handlerReturnTick\":%lu,\"handlerResult\":%lu,\"disconnectStartTick\":%lu,\"disconnectEndTick\":%lu,\"handleWaitCount\":%lu,\"handleWaitFirstTick\":%lu,\"handleWaitLastRxSize\":%lu}},"
                           "\"tf\":{\"status\":%d},\"qspi\":{\"status\":%d,\"jedec\":%lu}}}",
                           (unsigned long)g_freertos_task_started,
                           (unsigned long)g_freertos_bringup_complete,
@@ -346,6 +457,24 @@ static size_t build_status_body(char *body, size_t len) {
                           (unsigned long)g_w5500_link_up,
                           (unsigned long)g_w5500_version,
                           (unsigned long)g_w5500_phycfgr,
+                          (unsigned long)g_w5500_http_last_nonclosed_close,
+                          (unsigned long)g_w5500_http_socket_ir,
+                          (unsigned long)g_w5500_http_trace_seq,
+                          (unsigned long)g_w5500_http_trace_active,
+                          (unsigned long)g_w5500_http_trace_mutex_wait_start_tick,
+                          (unsigned long)g_w5500_http_trace_mutex_wait_end_tick,
+                          (unsigned long)g_w5500_http_trace_mutex_wait_ms,
+                          (unsigned long)g_w5500_http_trace_rx_ready_tick,
+                          (unsigned long)g_w5500_http_trace_rx_size,
+                          (unsigned long)g_w5500_http_trace_handle_enter_tick,
+                          (unsigned long)g_w5500_http_trace_record_tick,
+                          (unsigned long)g_w5500_http_trace_handler_return_tick,
+                          (unsigned long)g_w5500_http_trace_handler_result,
+                          (unsigned long)g_w5500_http_trace_disconnect_start_tick,
+                          (unsigned long)g_w5500_http_trace_disconnect_end_tick,
+                          (unsigned long)g_w5500_http_trace_handle_wait_count,
+                          (unsigned long)g_w5500_http_trace_handle_wait_first_tick,
+                          (unsigned long)g_w5500_http_trace_handle_wait_last_rx_size,
                           g_tf_card_bringup_status,
                           g_w25q128_bringup_status,
                           (unsigned long)g_w25q128_jedec_id);
@@ -709,7 +838,7 @@ static int http_send_bytes(const uint8_t *data, size_t len) {
   }
 
   for (uint32_t i = 0u; i < 1000u; ++i) {
-    if (s0_read_u16(W5500_S0_TX_FSR, &tx_free) != W5500_OK) {
+    if (s0_read_u16_stable(W5500_S0_TX_FSR, &tx_free) != W5500_OK) {
       return 1;
     }
     if (tx_free >= len) {
@@ -723,6 +852,7 @@ static int http_send_bytes(const uint8_t *data, size_t len) {
       s0_read_u16(W5500_S0_TX_WR, &tx_wr) != W5500_OK ||
       socket_buffer_write(W5500_S0_TX_BLOCK, tx_wr, data, len) != W5500_OK ||
       s0_write_u16(W5500_S0_TX_WR, (uint16_t)(tx_wr + len)) != W5500_OK ||
+      s0_write_u8(W5500_S0_IR, W5500_S0_IR_SENDOK | W5500_S0_IR_TIMEOUT) != W5500_OK ||
       s0_command(W5500_S0_CR_SEND) != W5500_OK) {
     return 1;
   }
@@ -733,12 +863,16 @@ static int http_send_bytes(const uint8_t *data, size_t len) {
       return 1;
     }
     if ((ir & W5500_S0_IR_SENDOK) != 0u) {
-      (void)s0_write_u8(W5500_S0_IR, W5500_S0_IR_SENDOK);
+      if (s0_write_u8(W5500_S0_IR, W5500_S0_IR_SENDOK) != W5500_OK) {
+        return 1;
+      }
       g_w5500_http_last_tx_size += (uint32_t)len;
       return 0;
     }
     if ((ir & W5500_S0_IR_TIMEOUT) != 0u) {
-      (void)s0_write_u8(W5500_S0_IR, W5500_S0_IR_TIMEOUT);
+      if (s0_write_u8(W5500_S0_IR, W5500_S0_IR_TIMEOUT) != W5500_OK) {
+        return 1;
+      }
       return 1;
     }
     if ((i % 100u) == 0u) {
@@ -1116,6 +1250,9 @@ static int http_handle_rules_write(uint32_t operation, int path_slot, const char
 }
 
 static void http_record_request(uint32_t path_code, uint16_t code) {
+  if (g_w5500_http_trace_active != 0u) {
+    g_w5500_http_trace_record_tick = HAL_GetTick();
+  }
   g_w5500_http_request_count++;
   g_w5500_http_last_path = path_code;
   g_w5500_http_last_code = code;
@@ -1432,9 +1569,7 @@ static int http_handle_request(uint16_t rx_size) {
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {
-      g_w5500_http_request_count++;
-      g_w5500_http_last_path = W5500_HTTP_PATH_INDEX;
-      g_w5500_http_last_code = 200u;
+      http_record_request(W5500_HTTP_PATH_INDEX, 200u);
       return 0;
     }
     if (static_result == W5500_HTTP_STATIC_SEND_ERROR) {
@@ -1449,9 +1584,7 @@ static int http_handle_request(uint16_t rx_size) {
   if (body_len >= sizeof(g_http_response_body)) {
     return 1;
   }
-  g_w5500_http_request_count++;
-  g_w5500_http_last_path = path_code;
-  g_w5500_http_last_code = code;
+  http_record_request(path_code, code);
   return http_send_response(code, content_type, body, body_len);
 }
 
@@ -1526,10 +1659,19 @@ int w5500_http_status_poll(void) {
     return 1;
   }
   g_w5500_http_socket_sr = sr;
+  uint8_t ir = 0u;
+  const W5500Result ir_result = s0_read_u8(W5500_S0_IR, &ir);
+  if (ir_result == W5500_OK) {
+    g_w5500_http_socket_ir = ir;
+  } else {
+    g_w5500_http_socket_ir = 0xffffffffu;
+  }
 
   if (g_w5500_http_disconnect_pending != 0u) {
-    if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT) {
+    if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT || sr == W5500_S0_SR_CLOSE_WAIT ||
+        sr == W5500_S0_SR_LISTEN) {
       g_w5500_http_disconnect_pending = 0u;
+      http_trace_finish();
       return http_open_listener();
     }
     g_w5500_http_status = 0u;
@@ -1543,28 +1685,43 @@ int w5500_http_status_poll(void) {
     g_w5500_http_status = 0u;
     return 0;
   }
+  if (sr == W5500_S0_SR_SYNRECV) {
+    g_w5500_http_status = 0u;
+    return 0;
+  }
   if (sr == W5500_S0_SR_ESTABLISHED || sr == W5500_S0_SR_CLOSE_WAIT) {
     uint16_t rx_size = 0u;
-    if (s0_read_u16(W5500_S0_RX_RSR, &rx_size) != W5500_OK) {
+    if (s0_read_u16_stable(W5500_S0_RX_RSR, &rx_size) != W5500_OK) {
       g_w5500_http_status = 4u;
       g_w5500_http_error_count++;
       return 1;
     }
     if (rx_size > 0u) {
+      if (g_w5500_http_trace_active == 0u) {
+        http_trace_begin(rx_size);
+      }
+      g_w5500_http_trace_handle_enter_tick = HAL_GetTick();
       const int request_result = http_handle_request(rx_size);
+      g_w5500_http_trace_handler_return_tick = HAL_GetTick();
+      g_w5500_http_trace_handler_result = (uint32_t)request_result;
       if (request_result == W5500_HTTP_HANDLE_WAIT) {
+        ++g_w5500_http_trace_handle_wait_count;
+        if (g_w5500_http_trace_handle_wait_first_tick == 0u) {
+          g_w5500_http_trace_handle_wait_first_tick = HAL_GetTick();
+        }
+        g_w5500_http_trace_handle_wait_last_rx_size = rx_size;
         return 0;
       }
       if (request_result != W5500_HTTP_HANDLE_OK) {
         g_w5500_http_status = 5u;
         g_w5500_http_error_count++;
-        (void)http_close_socket();
+        (void)http_close_socket(2u);
         return 1;
       }
       if (http_begin_graceful_disconnect() != 0) {
         g_w5500_http_status = 5u;
         g_w5500_http_error_count++;
-        (void)http_close_socket();
+        (void)http_close_socket(2u);
         return 1;
       }
       return 0;
@@ -1573,14 +1730,14 @@ int w5500_http_status_poll(void) {
       if (http_begin_graceful_disconnect() != 0) {
         g_w5500_http_status = 5u;
         g_w5500_http_error_count++;
-        (void)http_close_socket();
+        (void)http_close_socket(2u);
         return 1;
       }
     }
     return 0;
   }
 
-  (void)http_close_socket();
+  (void)http_close_socket(3u);
   return 0;
 }
 
