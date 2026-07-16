@@ -364,3 +364,9 @@ F-76以失败pcap和`Sn_TX_FSR`确认：两次manual POST的handler和SENDOK均�
 当前HEAD的固件源码对应ELF/HEX与F-76已烧录哈希完全一致；`verify.sh`/CTest 15/15及HTTP、LogTask、RuleFile v3、bus-off关键反汇编通过。一次OpenOCD预读误含`reset run`后，复位前结果未与后续计数混用；复位后重新建立统一Snapshot A并执行完整窗口。
 
 该窗口19个顺序HTTP连接全部满足预期状态码和Content-Length，覆盖status/CAN/signals/DBC/rules/manual/Web、151 B DBC upload/active/runtime、规则可逆PUT、非法400和未知404。signals保持marker=`42434`/sequence=`4660`，页面11143 B且哈希一致，manual disabled、规则最终完全恢复。两次精确快照证明LogTask、TF文件、CAN TX/RX和DBC RX均增长，所有错误/丢弃为0；HTTP socket最终LISTEN，error/ACK timeout/recovery为0。G-1通过，下一步只补安全HTTP 500样本和最终发布封口。
+
+## G-2 安全HTTP 500现场样本
+
+G-2不破坏TF/QSPI、不暂停任务且不增加生产接口。只在RAM中将`g_rule_file_v3_load_result`从真实原值0临时改为1；`g_rule_file_v2_load_result`保持真实哨兵`0xffffffff`。规则写handler因此在candidate、body解析、save_request和文件操作之前返回500 `rules_source_unavailable`。请求体同时故意为非法`enabled=true`，注入失效时只会400且仍不保存。
+
+实测HTTP500头完整，Content-Length=98且body哈希=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`；RAM立即恢复后同一请求返回400。规则响应前后哈希一致，save request/result=`0/0`、generation=4、socket=LISTEN，HTTP error/ACK timeout/recovery=0；最终CAN、RTOS、W5500、TF和QSPI正常。该样本只验证500协议行为，不宣称真实存储失败。

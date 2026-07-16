@@ -3113,3 +3113,13 @@
 - Snapshot A→B精确读数：LogTask sample/write/flush=`101/20/20→281/56/56`，active/TF file size=`15326272→15346678 B`（+20406），failure/write result=`0/0`；SD read call=`204→665`且failure=0。CAN TX/RX=`103/1017→284/2811`，DBC RX同为`1017→2811`，error/busOff/TEC/REC/sendResult/decode error/RX-TX queue drop均为0。
 - 规则generation=`2→4`，v3 load/result/rule_count最终=`0/0/2`；HTTP request=`0→19`，socket=`0x14 LISTEN`，HTTP error、ACK timeout、W5500 recovery均0，ACK pending=0。ACK wait count为17而非19，因为该计数仅在发送结束仍需等待时增长，不等同请求总数；最后一次CLOSE_WAIT优雅断开保留initial/final FSR=`1925`、elapsed=50 ms，与F-76已验证语义一致，不是失败。
 - 每次GDB读取后均执行`monitor resume`；最终关闭OpenOCD/GDB并确认3333/4444/6666无监听，随后ping 2/2、status HTTP200，RTOS/W5500/TF/QSPI正常。G-1正常联合烟雾判定PASS。下一固定阶段为G-2：只读选择一个安全、可回退、不破坏TF/QSPI的现有HTTP 500触发协议；在审计完成前不现场即兴制造500。
+
+## 2026-07-17 阶段 G-2：安全HTTP 500现场样本通过
+
+- G-1治理记录已提交并推送为`5f9f00000375e753fb0231fc25c522550288456a`（`Record G-1 final image smoke validation`），随后HEAD与远端一致、工作树干净，OpenOCD/GDB和3333/4444/6666无残留。按用户的外派要求以`fork_turns=none`派送固定G-2只读审计；派送接口仍不能显式选择模型。子任务只读证明规则来源不可用分支位于candidate和save_request之前；其最终长报告被平台误判安全风险而过滤，但关键源码结论已由主会话独立复核。
+- 主会话遍历现有500：兼容规则配置save/reload、v3 rule save/reload、DBC save/load/active/reload以及manual submit/timeout都需要真实任务或文件失败，不适合作为无破坏样本。唯一候选是`http_handle_rules_write()`的`g_rule_file_v3_load_result!=0 && g_rule_file_v2_load_result!=0`，它在candidate复制、body解析、pending/save_request和任何TF/QSPI操作之前返回500。
+- 首次只读OpenOCD前置校验预期双0，但真实读数为v3/v2=`0/0xffffffff`，所以命令按停止条件退出且未注入。该哨兵表示正常使用v3而v2未加载；目标已resume/shutdown，随后ping 2/2和status HTTP200。协议据此修正为只改v3并按真实原值恢复，不把v2强写为0。
+- 执行时仅将`g_rule_file_v3_load_result`从0临时写为1，v2保持`0xffffffff`；退出陷阱保证curl失败也先恢复。发送`PUT /api/rules/1`、12 B body=`enabled=true`：命中`HTTP/1.1 500 Internal Server Error`，Content-Type=`application/json`、Content-Length=98，完整body为`rules_source_unavailable/valid v2 or v3 rules required`，SHA-256=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`。该body故意非法，若注入未生效只会400且不会写盘。
+- 500响应完成后立即恢复v3=0并读回v3/v2=`0/0xffffffff`；同一非法请求随后返回400 `invalid_rule`。规则响应前后逐字节`cmp`相同，SHA-256均为`85fcd21ea3482d8a6888ec06cf495346b3c4a62d72bb545a7c4dba2bdd824e9d`；`g_rule_file_v3_save_request/save_result=0/0`、generation=4，证明未发起TF规则保存。
+- 恢复快照为socket=`0x14 LISTEN`、HTTP error=0、ACK pending/timeout=`0/0`、W5500 recovery=0。最终CAN status=`tx/rx 1056/10468`且errors/busOff/TEC/REC/sendResult全0；RTOS ready、W5500 status/link/version=`0/1/4`、TF/QSPI status=`0/0`，ping 2/2、最终status HTTP200。所有halt无reset且已resume/shutdown，最终OCD/GDB与端口释放。
+- G-2判定PASS。本阶段只做RAM-only现场验证和Markdown治理同步，没有固件源码变化，因此没有新固件，不重复编译、反汇编或烧录。下一固定阶段G-3只读审计最终验收矩阵、Git/远端、最终固件哈希/烧录证据、治理一致性和非目标；不再重复高成本现场故障。

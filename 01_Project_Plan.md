@@ -29,7 +29,7 @@
 | 9 | TF 静态文件和 DBC 上传 | [客观已验证] | `/www/index.html` 静态文件512字节循环分块、`POST /api/dbc/upload`候选保存与portable parser报告、`POST /api/dbc/active`最小激活、启动/激活后的运行态快照和`GET /api/dbc/runtime`均已烧录验证；multipart、分片和DBC列表/删除属于未来非一期范围 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
 | 11 | TF 驻留 Web 控制台 | [一期核心三项客观已验证] | 用户固定的一期核心为CAN刷新显示、规则设置和继电器操作：板端冷启动页面哈希一致；独立pcap中首页最终ACK至首API SYN=`303.503 ms`，1次首页+14次CAN状态+14次signals全部200、RST=0；浏览器把slot1 threshold `42435→42436→42435`保存并读回；浏览器手动覆盖`relay1=0/relay2=1`后RuleTask `request/applied=1/1`且GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复规则。DBC区域保留并复用既有已验证API，但本次未以浏览器重新执行上传/激活，不计入上述三项现场结论 |
-| 12 | 稳定性基线 | [主体及G-1正常联合烟雾已验证；仅HTTP 500安全样本与最终发布封口待完成] | F-11/12长跑、F-14网线恢复、F-19冷启动、F-25真实bus-off、F-26实体CSV和F-76响应交付均已通过。G-1在同一最终映像复位后完成19个顺序HTTP、DBC激活、规则可逆恢复、Web哈希、外部CAN/SignalCache及日志增长联合回归：HTTP error/ACK timeout/W5500 recovery、日志/TF/CAN/DBC/队列错误均为0。下一步仅G-2安全500协议，不重复高成本故障。运行中插拔仍为非支持操作 |
+| 12 | 稳定性基线 | [主体、G-1正常联合烟雾及G-2安全500样本已验证；仅最终发布审计待完成] | F-11/12长跑、F-14网线恢复、F-19冷启动、F-25真实bus-off、F-26实体CSV和F-76响应交付均已通过。G-1在同一最终映像完成19个顺序HTTP、DBC激活、规则可逆恢复、Web哈希、外部CAN/SignalCache及日志增长联合回归；G-2用RAM-only前置故障标志得到完整HTTP500后精确恢复，规则/TF/QSPI未写且后续400/200、CAN和系统状态正常。下一步只做G-3最终发布审计。运行中插拔仍为非支持操作 |
 
 ## 阶段 C 当前状态
 

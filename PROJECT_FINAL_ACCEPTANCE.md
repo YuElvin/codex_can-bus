@@ -22,13 +22,13 @@
 | --- | --- | --- | --- |
 | 硬件与启动 | ST-Link 可烧录/读数；W5500、TF、FDCAN2、W25Q128 启动状态正常 | OpenOCD `Verified OK`；精确变量；ping 与状态 API | 已有基线，后续每次回归 |
 | CAN 与 DBC | 外部 CANtest RX、周期 TX、DBC 上传/激活、解码到 SignalCache 持续正确 | CANtest 与板端 RX/TX/error 计数；`/api/signals`；`/api/dbc/runtime` | 主要完成，需稳定性回归 |
-| 网络/API | socket0 顺序 GET/POST 语义、错误码、请求体完整性正确 | 顺序 curl；HTTP 200/400/500 行为；W5500 诊断 | G-1同映像19连接已验证200/400/404、完整Content-Length及HTTP error/ACK timeout/recovery=0；只缺安全、可回退的500现场样本 |
+| 网络/API | socket0 顺序 GET/POST 语义、错误码、请求体完整性正确 | 顺序 curl；HTTP 200/400/500 行为；W5500 诊断 | G-1同映像19连接已验证200/400/404和完整Content-Length；G-2以RAM-only规则来源不可用前置分支得到完整500/98 B JSON并精确恢复，恢复后400/200正常，规则未变，HTTP error/ACK timeout/recovery=0 |
 | Web 前端 | `/index.html` 为离线单页控制台；一期核心三项为CAN状态/信号严格串行刷新、规则设置、两路继电器手动覆盖 | 浏览器实际访问；独立pcap；页面数据与API JSON对应；规则保存/恢复和继电器操作后的回读/板端GPIO | F-75三项核心已客观通过；F-76又以最终63包/5连接pcap确认两次页面手动POST和三个顺序GET全部完整交付、双向FIN、RST=0，响应交付异常已关闭；DBC浏览器上传/激活仍按既有API证据边界处理 |
 | TF 与日志 | TF 卡在插入状态下上电后默认 CSV 路径连续落盘；运行中插拔明确不支持，必须先下电 | TF 文件大小/内容、LogTask write/flush/failure、插卡冷启动状态 | F-26 已下电取卡只读验证 CSV 内容；运行中 recovery 不作为交付条件 |
 | 配置持久化 | 双槽保存、读回、断电/复位加载、坏槽回退；HTTP 不绕过 ConfigTask | QSPI save/load/sequence 读数；复位后 API；配置队列读数 | 单规则完成 |
 | 规则管理 | 规则模型、文件格式、HTTP CRUD、多规则执行/优先级/安全态均定义并现场验证 | 文件读写、HTTP 请求、RuleTask generation、继电器 GPIO、异常输入 | v2/v3 两规则和 TF 规则文件已验证；通用无限规则管理非目标 |
 | 故障与稳定性 | 长跑、断网、CAN bus-off/恢复、插卡冷启动后配置/DBC/日志恢复 | 连续计数、错误计数、恢复证据和明确的未通过项 | 主体已验证；F-12长跑、F-14物理断网恢复、F-17关闭修复、F-19冷启动恢复、F-25 CAN bus-off恢复、F-26 CSV内容和F-76响应交付/优雅关闭均已通过；当前进入G最终全量审计，只有矩阵全部通过才可标记项目完成 |
-| 发布完整性 | 工作树干净、分支已推送；所有状态文档与最终固件一致 | `git status`、远端哈希、`verify.sh`、ELF 反汇编、最终烧录记录 | G-1同映像构建/反汇编/哈希与已烧录映像一致；待G-2后最终治理提交推送 |
+| 发布完整性 | 工作树干净、分支已推送；所有状态文档与最终固件一致 | `git status`、远端哈希、`verify.sh`、ELF 反汇编、最终烧录记录 | G-1同映像构建/反汇编/哈希与已烧录映像一致，G-2无源码改动；待G-2治理提交和G-3最终只读审计封口 |
 
 ## 3. 统一验收门槛
 

@@ -8,8 +8,8 @@
 
 ## 当前阶段
 
-- 固定阶段：`G-2`。
-- G-1最终提交同映像正常联合烟雾已通过；当前唯一目标是只读设计并验证一个安全、可回退、不破坏TF/QSPI的HTTP 500现场协议。
+- 固定阶段：`G-3`。
+- G-1最终提交同映像正常联合烟雾和G-2安全HTTP 500现场样本均已通过；当前唯一目标是最终发布完整性只读审计与治理封口，不再做功能或故障注入。
 
 ## 成功标准
 
@@ -38,7 +38,15 @@
 
 ## 唯一下一动作
 
-以`fork_turns=none`外派G-2只读审计：从现有、已实现的500分支中选择不会写坏TF/QSPI、不会改固件、不会要求拔卡/断网/bus-off的唯一可控触发；固定触发、恢复、精确读数和通过条件。审计前不得自行注入500。
+以`fork_turns=none`外派G-3最终发布只读审计：逐项核对最终验收矩阵、提交/远端、固件哈希、已烧录证据、反汇编、现场G-1/G-2证据、非目标和治理文件一致性；只列真实未关闭缺口，不重复现场故障，不修改文件。
+
+## G-2 已验收基线
+
+- G-2只读审计确认当前HEAD没有纯curl且无副作用的500；唯一安全候选是`http_handle_rules_write()`在candidate构造、body解析和`g_rule_file_v3_save_request=1`之前的`rules_source_unavailable`前置分支。
+- 实际原值为`g_rule_file_v3_load_result=0`、`g_rule_file_v2_load_result=0xffffffff`。仅将v3 RAM值临时改为1，并发送故意非法的12 B body `enabled=true`；即使注入未生效也只会返回400，绝不会进入保存。
+- 实际响应为HTTP500 `Internal Server Error`，Content-Length=98，body SHA-256=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`，错误码=`rules_source_unavailable`。随后立即将v3恢复为0，v2保持`0xffffffff`。
+- 恢复后同一请求返回400 `invalid_rule`；规则响应前后SHA-256同为`85fcd21ea3482d8a6888ec06cf495346b3c4a62d72bb545a7c4dba2bdd824e9d`。`save_request/save_result=0/0`、generation=4、socket=LISTEN，HTTP error/ACK timeout/W5500 recovery全0。
+- 最终CAN tx/rx=`1056/10468`且错误全0，RTOS/W5500/TF/QSPI正常，ping 2/2、status HTTP200；所有halt均无reset并已resume/shutdown，OpenOCD/GDB及调试端口已释放。G-2判定PASS。
 
 ## G-1 已验收基线
 

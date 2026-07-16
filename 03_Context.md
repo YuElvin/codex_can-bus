@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-17（G-1最终提交同映像正常联合烟雾已通过；当前仅剩G-2安全HTTP 500样本与最终发布封口）
+更新时间：2026-07-17（G-1正常联合烟雾与G-2安全HTTP 500样本均已通过；当前仅剩G-3最终发布审计与治理封口）
 
 ## 当前仓库
 
@@ -176,3 +176,10 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 初次OpenOCD预读误含`reset run`造成一次复位；主会话没有混用复位前后计数，而是从复位后Snapshot A重新执行完整窗口。复位后19个串行HTTP连接的状态码与Content-Length全部匹配，DBC 151 B上传/激活、runtime generation `1→2`、signals `42434/4660`、Web 11143 B哈希、规则`42435→42436→42435`恢复、400/404和manual安全态均通过。
 - Snapshot A→B：LogTask sample/write/flush=`101/20/20→281/56/56`，文件=`15326272→15346678 B`；CAN TX/RX与DBC RX=`103/1017/1017→284/2811/2811`。日志failure、TF read failure、CAN error/busOff/TEC/REC/sendResult、DBC decode error、RX/TX queue drop全为0。
 - HTTP request=`0→19`，socket最终`0x14(LISTEN)`，HTTP error、ACK timeout、W5500 recovery为0，ACK pending=0；规则generation=`2→4`且v3两槽完全恢复。GDB读取后已resume，OpenOCD/GDB和调试端口已释放；最终ping 2/2与status HTTP200确认继续运行。G-1判定PASS，下一固定任务为G-2安全500协议审计，不重复长跑、拔线、bus-off、取卡或冷启动故障。
+
+## 2026-07-17 G-2 安全HTTP 500现场样本通过
+
+- 只读审计遍历现有500分支，排除TF保存/读取、规则save/reload、兼容配置和manual超时等会扩大副作用的候选；唯一采用规则写handler最前置`rules_source_unavailable`分支，它在candidate、body解析、save_request和任何文件操作之前。
+- 实际RAM原值为v3/v2 load result=`0/0xffffffff`。仅临时把v3改为1，发送12 B故意非法body`enabled=true`；命中完整HTTP500、Content-Length=98，错误码=`rules_source_unavailable`，body SHA-256=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`。若注入未生效，该body只会400，不会保存。
+- v3立即恢复为0后，同一请求返回400 `invalid_rule`。规则正文前后SHA-256均为`85fcd21ea3482d8a6888ec06cf495346b3c4a62d72bb545a7c4dba2bdd824e9d`；v3/v2=`0/0xffffffff`、save request/result=`0/0`、generation=4、socket=LISTEN，HTTP error/ACK timeout/W5500 recovery全0。
+- 最终CAN tx/rx=`1056/10468`、所有错误0，RTOS/W5500/TF/QSPI正常，ping 2/2、status HTTP200。所有halt都没有reset，已resume/shutdown并释放OCD/GDB。G-2判定PASS；下一固定阶段G-3只做最终发布完整性审计和治理封口。

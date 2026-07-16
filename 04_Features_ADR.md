@@ -207,3 +207,9 @@ F-76确认W5500 `SENDOK`只表示芯片接受SEND命令，不能证明对端已�
 F-76只改变HTTP发送完成和关闭状态机，未触及CAN/DBC、SD/FatFs/LogTask、QSPI、RuleTask业务语义或W5500 PHY轮询。因此G阶段复用F-12长跑、F-14拔线、F-19冷启动、F-25真实bus-off、F-26实体CSV等高成本现场证据，不重复故障注入；但必须用同一最终ELF/HEX做正常联合烟雾覆盖各域共同运行。
 
 G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与Content-Length全部正确；DBC 151 B上传/激活、signals、Web页面哈希、v3规则`42435→42436→42435`可逆保存及manual安全态均通过。Snapshot A→B中LogTask write/flush=`20/20→56/56`、文件=`15326272→15346678 B`，CAN TX/RX=`103/1017→284/2811`；所有日志、TF read、CAN、DBC decode和队列错误为0。HTTP request=`0→19`，socket最终LISTEN，HTTP error、ACK timeout、W5500 recovery为0。G-1通过；HTTP 500仍必须另用安全、可回退、非破坏协议补证。
+
+### ADR-028：HTTP 500只用规则来源前置RAM故障标志补证
+
+当前所有自然500都依赖队列超时、TF保存/读取、运行态reload或manual交接，直接制造会扩大为持久化或任务故障。G-2只使用`http_handle_rules_write()`最前置的`rules_source_unavailable`：该判断位于candidate复制、body解析、pending/save_request和任何TF/QSPI操作之前。现场实际v3/v2加载结果为`0/0xffffffff`，仅临时把v3 RAM诊断值改为1；请求体故意使用已知非法`enabled=true`，所以注入失效时只会400而不会保存。
+
+实测500为98 B完整JSON，随后立即把v3恢复为0；同一请求恢复400，规则正文前后哈希一致，save request/result=`0/0`、generation=4，HTTP error/ACK timeout/recovery为0。该方法只证明现有500响应语义和恢复后的顺序服务，不把RAM注入冒充TF/QSPI真实失败，也不新增生产故障接口。

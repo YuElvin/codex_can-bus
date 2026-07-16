@@ -56,6 +56,7 @@
 - L-071：W5500 的 `SENDOK`/内部HTTP200仅证明芯片接受发送，不保证TCP优雅完成。成功响应同轮 `DISCON→CLOSE` 会在实板形成主机RST；必须等待 `Sn_SR` 进入 CLOSED/INIT 后才重新监听。当前单 socket/50ms轮询在关闭重监听间有短窗口，验收和客户端操作应在短连接间留至少一个轮询周期（本轮250ms）；这不是并发HTTP能力。
 - L-076：`SENDOK`之后立即`DISCON`仍可能让浏览器收到0字节；用`Sn_TX_FSR`观察未确认响应字节，回到完整2048后才能开始正常断开。客户端先FIN时socket会进入`CLOSE_WAIT`，此时必须发送graceful `DISCON`完成板端FIN，不能硬CLOSE并重开listener。最终验收必须同时检查完整body、响应ACK、双方FIN最终ACK和RST=0，单看handler=200、SENDOK或页面状态都不足以判定交付成功。
 - L-077：只读GDB快照启动OpenOCD时不得带`reset run`；它会重置运行计数并切断前后证据连续性。误复位后必须明确废弃复位前计数比较，在同一最终映像复位后重新建立Snapshot A并完整重跑目标窗口。无debug type的ELF读取用`x/wx &symbol`，每次halt后先`monitor resume`再断开并确认OpenOCD/GDB端口释放。
+- L-078：RAM-only故障注入必须先读真实原值并按原值恢复，不能把未加载哨兵`0xffffffff`假定成0。安全HTTP错误样本应把故障分支放在任何candidate/save_request之前，并让请求本身是失效保险：本轮`enabled=true`在注入成功时前置返回500，注入失败时只返回400，两条路径都不写TF/QSPI；恢复后还必须比较完整配置哈希和保存请求/结果。
 - L-072：zsh 的 `path` 是连接到 `PATH` 的保留数组，不能用作脚本循环变量。F-17 首轮因此在主机端得到 curl exit=127，但未访问或写入目标；此类主机脚本错误必须明确排除，不得作为固件回归或成功证据。
 - L-073：页面显示`Failed to fetch`时，板端handler记录HTTP 200只证明业务处理完成，不证明响应已被浏览器收到，也不证明socket已恢复监听。必须把浏览器结果、同一连接pcap、后续ping/API、串口trace和W5500寄存器分层记录；若以OpenOCD停机读取，命令应分步执行并显式`resume`/`shutdown`，不能把遗漏恢复造成的网络中断算作固件故障。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
