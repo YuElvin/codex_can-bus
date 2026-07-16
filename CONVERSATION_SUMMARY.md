@@ -3102,3 +3102,14 @@
 - G-0确认F-76只触及HTTP响应/关闭域，因此F-12长跑、F-14拔线、F-19冷启动、F-25 bus-off、F-26实体CSV及QSPI坏槽等高成本证据可复用；阶段G不重复这些故障注入。仍不能宣布项目完成：最终同映像联合烟雾尚未执行，HTTP 500现场行为仍缺安全样本，G完成后的治理封口尚未完成。
 - G阶段第一个唯一目标固定为`G-1 最终提交同映像正常联合烟雾`，不做任何故障注入。唯一人工窗口是用户保持TF/网线/开发板正常，并在CANtest设置500 kbit/s、normal active、开启接收/ACK，持续发送标准ID`0x321`、DLC 8、数据`C2 A5 34 12 00 00 00 00`；回复“G窗口已就绪”后，主会话自动执行同映像构建/反汇编/哈希、顺序API、DBC upload/active/runtime、v3规则可逆回归、manual安全态、两次日志增长和精确状态读回。任一哈希、HTTP、CAN、DBC、规则、日志或resume条件失败即停止，不顺势扩大故障测试。
 - 本次仅更新Markdown治理记录，未修改固件源码、未编译，因此未执行新的固件反汇编或烧录；提交前只需`git diff --check`并推送治理修正。
+
+## 2026-07-17 阶段 G-1：最终提交同映像正常联合烟雾通过
+
+- 用户回复“G窗口已就绪，can一直在保持发送”后，主会话先冻结HEAD=`1e31213aa414c3bb11ede79e251ab02a37c58311`、确认工作树干净和远端一致，再执行`git diff --check`、`./scripts/verify.sh`：host CTest=`15/15`，STM32无增量工作；ELF `text/data/bss=92232/384/242408`，ELF/HEX SHA-256保持`26b632...34bc5`/`d1ef383...968c`，与F-76已烧录映像一致。
+- 定向反汇编再次确认：HTTP `SR=0x1c→http_begin_graceful_disconnect`、FSR=2048和500 ms恢复边界；LogTask 1000 ms采样、512 B/5000 ms flush与TF append；RuleFile v3 build-engine栈帧120 B且调用`rule_engine_add_rule`；真实bus-off仍为1000 ms限流、逐位Abort→Stop成功才Start。故本轮无固件源码变化，不重复烧录。
+- 复位前只读HTTP曾得到正常基线，但启动Snapshot A的OpenOCD命令误含`reset run`，导致开发板复位。主会话明确废弃复位前计数关联，未把两段证据混用；复位后以同一最终映像重新取得Snapshot A，并从HTTP request/ACK wait计数0开始完整执行G-1。该误操作不改写固件或TF/QSPI，复位后ping正常。
+- 复位后严格串行执行19个HTTP连接，每次保存header/body并验证状态码和Content-Length相等，间隔700 ms。正常200覆盖status、CAN、signals、DBC runtime、rules、manual、Web、DBC upload/active；DBC精确151 B、SHA-256=`271f20...5417`，激活后generation=`1→2`且151 B/3行/1 message/2 signals/errors=0。signals前后均为marker=`42434`、sequence=`4660`、quality ok。
+- Web `/index.html`实取11143 B、SHA-256=`2ed23b...17da`。规则slot1完整表单完成`42435→42436→42435`并每次GET独立回读，最终两槽恢复；非法`enabled=true` PUT返回400 `invalid_rule`且不改配置，`GET /api/rules/2`返回404；manual始终disabled、request/applied=`0/0`、实际输出=`1/0`。最后CAN API为tx/rx=`213/2108`且错误全0。
+- Snapshot A→B精确读数：LogTask sample/write/flush=`101/20/20→281/56/56`，active/TF file size=`15326272→15346678 B`（+20406），failure/write result=`0/0`；SD read call=`204→665`且failure=0。CAN TX/RX=`103/1017→284/2811`，DBC RX同为`1017→2811`，error/busOff/TEC/REC/sendResult/decode error/RX-TX queue drop均为0。
+- 规则generation=`2→4`，v3 load/result/rule_count最终=`0/0/2`；HTTP request=`0→19`，socket=`0x14 LISTEN`，HTTP error、ACK timeout、W5500 recovery均0，ACK pending=0。ACK wait count为17而非19，因为该计数仅在发送结束仍需等待时增长，不等同请求总数；最后一次CLOSE_WAIT优雅断开保留initial/final FSR=`1925`、elapsed=50 ms，与F-76已验证语义一致，不是失败。
+- 每次GDB读取后均执行`monitor resume`；最终关闭OpenOCD/GDB并确认3333/4444/6666无监听，随后ping 2/2、status HTTP200，RTOS/W5500/TF/QSPI正常。G-1正常联合烟雾判定PASS。下一固定阶段为G-2：只读选择一个安全、可回退、不破坏TF/QSPI的现有HTTP 500触发协议；在审计完成前不现场即兴制造500。

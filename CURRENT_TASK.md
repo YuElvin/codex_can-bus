@@ -1,6 +1,6 @@
 # 当前任务
 
-更新时间：2026-07-16
+更新时间：2026-07-17
 
 ## 项目目标
 
@@ -8,8 +8,8 @@
 
 ## 当前阶段
 
-- 固定阶段：`G`。
-- F-76 已完成构建、反汇编、烧录和现场封口；当前唯一目标是按 `PROJECT_FINAL_ACCEPTANCE.md` 执行最终全量审计，不再新增功能。
+- 固定阶段：`G-2`。
+- G-1最终提交同映像正常联合烟雾已通过；当前唯一目标是只读设计并验证一个安全、可回退、不破坏TF/QSPI的HTTP 500现场协议。
 
 ## 成功标准
 
@@ -38,7 +38,16 @@
 
 ## 唯一下一动作
 
-执行`G-1 最终提交同映像正常联合烟雾`，不做故障注入。开始前只等待用户将CANtest设置为500 kbit/s、normal active、开启接收/ACK，并持续发送标准ID`0x321`、DLC 8、数据`C2 A5 34 12 00 00 00 00`；用户回复“G窗口已就绪”后，其余构建/反汇编/哈希、顺序API、DBC、规则、日志和精确读回均由主会话自动执行。
+以`fork_turns=none`外派G-2只读审计：从现有、已实现的500分支中选择不会写坏TF/QSPI、不会改固件、不会要求拔卡/断网/bus-off的唯一可控触发；固定触发、恢复、精确读数和通过条件。审计前不得自行注入500。
+
+## G-1 已验收基线
+
+- 当前HEAD=`1e31213aa414c3bb11ede79e251ab02a37c58311`，工作树/远端一致；`verify.sh`与CTest=`15/15`通过，ELF/HEX哈希保持F-76已烧录值不变，HTTP、LogTask、RuleFile v3和CAN bus-off关键路径反汇编均通过。
+- OpenOCD预读命令误含`reset run`导致一次复位；因此复位前HTTP结果未与后续计数混用。复位后重新取得Snapshot A，并从统一基线执行完整G-1。
+- 复位后19个严格串行HTTP连接全部返回预期状态码且Content-Length等于实际body：正常200链路、非法规则400和未知路径404均通过；页面11143 B且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`。
+- DBC精确151 B上传/激活成功，runtime generation=`1→2`；signals持续为marker=`42434`、sequence=`4660`、quality=`ok`。规则slot1完成`42435→42436→42435`并完整回读恢复；manual保持disabled、输出=`1/0`。
+- Snapshot A→B：LogTask sample/write/flush=`101/20/20→281/56/56`，文件=`15326272→15346678 B`；CAN TX/RX=`103/1017→284/2811`。日志、TF read、CAN、DBC decode、RX/TX队列错误/丢弃均为0。
+- HTTP request count=`0→19`，socket最终LISTEN，HTTP error、ACK timeout、W5500 recovery均为0，ACK pending=0；规则generation=`2→4`且最终v3两槽恢复。每次GDB读取后已resume，OpenOCD/GDB和3333/4444/6666监听均释放；最终ping和status HTTP200。
 
 ## 禁止范围
 

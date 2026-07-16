@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-16（F-76单socket HTTP响应交付与优雅关闭已完成构建、反汇编、烧录和最终pcap验收；当前固定进入阶段G最终全量审计）
+更新时间：2026-07-17（G-1最终提交同映像正常联合烟雾已通过；当前仅剩G-2安全HTTP 500样本与最终发布封口）
 
 ## 当前仓库
 
@@ -169,3 +169,10 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - F-76最终源码以`Sn_TX_FSR`非阻塞等待响应ACK，并在ACK wait期间遇到`CLOSE_WAIT`时调用既有graceful `DISCON`。最终ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`；CTest=`15/15`，反汇编、OpenOCD Verified OK和精确符号读回均已通过。
 - 最终pcap为7653 B、SHA-256=`77a1ed949fb374641968b5d38e9a744e75057bfc7c9c7fa647520d01e418ad6e`、63包/5连接。两条manual POST和manual/status/CAN三个GET全部完整HTTP200、Content-Length匹配、请求/响应ACK、双方FIN最终确认；HTTP数据重传=0、RST=0。关闭覆盖后RuleTask序号=`2/2`、实际输出=`1/0`，ACK wait timeout和W5500 recovery均为0。
 - 当前无外部阻断，固定阶段为G。下一步先只读建立最终验收矩阵并最大化复用仍有效的高成本证据，只把明确缺口合并到最少人工现场窗口；未经矩阵明确，不要求用户操作CANtest、TF、网线或上下电，不新增功能。
+
+## 2026-07-17 G-1 最终提交同映像正常联合烟雾通过
+
+- 用户确认CANtest 500 kbit/s持续发送后，当前HEAD=`1e31213aa414c3bb11ede79e251ab02a37c58311`通过`verify.sh`/CTest 15/15；ELF/HEX哈希保持F-76已烧录值，HTTP ACK/CLOSE_WAIT、LogTask、RuleFile v3 120 B栈帧和CAN bus-off Abort→Stop→Start关键反汇编均通过。
+- 初次OpenOCD预读误含`reset run`造成一次复位；主会话没有混用复位前后计数，而是从复位后Snapshot A重新执行完整窗口。复位后19个串行HTTP连接的状态码与Content-Length全部匹配，DBC 151 B上传/激活、runtime generation `1→2`、signals `42434/4660`、Web 11143 B哈希、规则`42435→42436→42435`恢复、400/404和manual安全态均通过。
+- Snapshot A→B：LogTask sample/write/flush=`101/20/20→281/56/56`，文件=`15326272→15346678 B`；CAN TX/RX与DBC RX=`103/1017/1017→284/2811/2811`。日志failure、TF read failure、CAN error/busOff/TEC/REC/sendResult、DBC decode error、RX/TX queue drop全为0。
+- HTTP request=`0→19`，socket最终`0x14(LISTEN)`，HTTP error、ACK timeout、W5500 recovery为0，ACK pending=0；规则generation=`2→4`且v3两槽完全恢复。GDB读取后已resume，OpenOCD/GDB和调试端口已释放；最终ping 2/2与status HTTP200确认继续运行。G-1判定PASS，下一固定任务为G-2安全500协议审计，不重复长跑、拔线、bus-off、取卡或冷启动故障。

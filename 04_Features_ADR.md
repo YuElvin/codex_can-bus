@@ -201,3 +201,9 @@ F-75最终按用户明确的一期三项核心完成客观验收：板端服务�
 F-76确认W5500 `SENDOK`只表示芯片接受SEND命令，不能证明对端已确认TCP响应。所有成功响应发送后使用稳定`Sn_TX_FSR`非阻塞门控：FSR回到2048才开始既有graceful `DISCON`；未释放时每个HttpTask周期只读一次，500 ms超时才进入既有DISCON和完整W5500恢复。若等待期间socket先进入`CLOSE_WAIT`，只清ACK内部状态并调用既有graceful `DISCON`，禁止通过`http_open_listener()`硬CLOSE旧连接。
 
 最终固件host CTest=`15/15`，FLASH/RAM_D1=`92628/242792 B`，ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`，已反汇编并烧录验证。最终pcap SHA-256=`77a1ed949fb374641968b5d38e9a744e75057bfc7c9c7fa647520d01e418ad6e`：63包/5连接，2条manual POST与3条顺序GET全部HTTP200且Content-Length匹配，全部请求/响应被ACK，5/5双方FIN最终确认，HTTP数据重传=0、RST=0。该决定不提供并发HTTP能力，也不扩大Web/API或业务语义。
+
+### ADR-027：阶段G复用高成本故障证据并执行同映像联合烟雾
+
+F-76只改变HTTP发送完成和关闭状态机，未触及CAN/DBC、SD/FatFs/LogTask、QSPI、RuleTask业务语义或W5500 PHY轮询。因此G阶段复用F-12长跑、F-14拔线、F-19冷启动、F-25真实bus-off、F-26实体CSV等高成本现场证据，不重复故障注入；但必须用同一最终ELF/HEX做正常联合烟雾覆盖各域共同运行。
+
+G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与Content-Length全部正确；DBC 151 B上传/激活、signals、Web页面哈希、v3规则`42435→42436→42435`可逆保存及manual安全态均通过。Snapshot A→B中LogTask write/flush=`20/20→56/56`、文件=`15326272→15346678 B`，CAN TX/RX=`103/1017→284/2811`；所有日志、TF read、CAN、DBC decode和队列错误为0。HTTP request=`0→19`，socket最终LISTEN，HTTP error、ACK timeout、W5500 recovery为0。G-1通过；HTTP 500仍必须另用安全、可回退、非破坏协议补证。

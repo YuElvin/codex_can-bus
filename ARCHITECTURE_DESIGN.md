@@ -358,3 +358,9 @@ TF中的`/www/index.html`由仓库`www/index.html`唯一维护，使用原生HTM
 F-76以失败pcap和`Sn_TX_FSR`确认：两次manual POST的handler和SENDOK均成功，但SENDOK后FSR=`1839`，恰有209 B完整响应尚未被TCP ACK释放，客户端实际收到0 B并最终RST。正式修复不改变单socket、API或业务逻辑，只在成功响应后进入非阻塞ACK wait；FSR回2048才执行既有graceful DISCON，500 ms未释放才进入既有完整W5500恢复。修复响应交付后，pcap又暴露客户端FIN已获ACK但板端缺FIN；最终只将ACK wait期间的`CLOSE_WAIT`改为调用同一graceful DISCON，不再硬CLOSE旧连接。
 
 最终ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`，CTest=`15/15`，FLASH/RAM_D1=`92628/242792 B`，已完成关键路径反汇编、OpenOCD Verified OK和现场读回。最终pcap为63包/5连接：两条POST及manual/status/CAN三个GET均完整HTTP200、body长度匹配、请求与响应全部ACK、5/5双向FIN最终确认，HTTP数据重传=0、RST=0；ACK wait timeout和W5500 recovery均为0。F-76关闭，架构进入阶段G最终全量审计。
+
+## G-1 最终提交同映像正常联合烟雾
+
+当前HEAD的固件源码对应ELF/HEX与F-76已烧录哈希完全一致；`verify.sh`/CTest 15/15及HTTP、LogTask、RuleFile v3、bus-off关键反汇编通过。一次OpenOCD预读误含`reset run`后，复位前结果未与后续计数混用；复位后重新建立统一Snapshot A并执行完整窗口。
+
+该窗口19个顺序HTTP连接全部满足预期状态码和Content-Length，覆盖status/CAN/signals/DBC/rules/manual/Web、151 B DBC upload/active/runtime、规则可逆PUT、非法400和未知404。signals保持marker=`42434`/sequence=`4660`，页面11143 B且哈希一致，manual disabled、规则最终完全恢复。两次精确快照证明LogTask、TF文件、CAN TX/RX和DBC RX均增长，所有错误/丢弃为0；HTTP socket最终LISTEN，error/ACK timeout/recovery为0。G-1通过，下一步只补安全HTTP 500样本和最终发布封口。
