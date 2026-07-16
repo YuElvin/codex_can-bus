@@ -3094,3 +3094,11 @@
 - 最终源码验证保持：`git diff --check`、`./scripts/verify.sh`和CTest=`15/15`通过；FLASH/RAM_D1=`92628/242792 B`，ELF `text/data/bss=92232/384/242408`；ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`。反汇编与OpenOCD Verified OK证据均对应同一最终映像。
 - ST-Link最终读回ACK wait count=`2`、elapsed=`50 ms`、timeout=`0`、W5500 recovery count=`0`；顺序ping 2/2，manual/status/CAN均HTTP200，RTOS、W5500、TF、QSPI和CAN状态正常。F-76判定PASS并关闭；下一阶段固定为G最终全量审计，不新增功能。
 - 治理同步后再次执行`git diff --check && ./scripts/verify.sh`通过；host构建无增量工作，CTest仍为`15/15`，STM32构建同样无增量工作。对现有最终ELF再次执行`arm-none-eabi-size/nm/objdump`：`text/data/bss=92232/384/242408`，ELF/HEX哈希保持不变；`0x0801130a`比较`SR=0x1c`并于`0x08011312`调用`http_begin_graceful_disconnect`，`0x08011366`比较FSR=2048，`0x0801134c`比较500 ms，`0x080113c2`保留完整`w5500_bringup_run()`恢复。精确OpenOCD/GDB进程及3333/4444/6666监听待提交前再做一次无残留检查。
+
+## 2026-07-16 F-76提交推送与G-0只读验收矩阵
+
+- 提交前精确检查`openocd`、`arm-none-eabi-gdb`、`gdb-multiarch`及3333/4444/6666监听均为空；工作树只包含F-76源码、诊断输出和治理记录。已创建提交`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`（`Fix W5500 HTTP response delivery and close`）并推送`origin/codex/W5500`，随后HEAD/远端ahead/behind=`0/0`。
+- 按用户要求以`fork_turns=none`外派固定G-0只读审计；派送接口不能显式选择模型，但任务明确要求按用户指定`gpt-5.6-terra/high`同等严谨度执行。任务没有修改文件、构建、烧录、调试器、网络、浏览器、COMtool或CANtest操作。
+- G-0确认F-76只触及HTTP响应/关闭域，因此F-12长跑、F-14拔线、F-19冷启动、F-25 bus-off、F-26实体CSV及QSPI坏槽等高成本证据可复用；阶段G不重复这些故障注入。仍不能宣布项目完成：最终同映像联合烟雾尚未执行，HTTP 500现场行为仍缺安全样本，G完成后的治理封口尚未完成。
+- G阶段第一个唯一目标固定为`G-1 最终提交同映像正常联合烟雾`，不做任何故障注入。唯一人工窗口是用户保持TF/网线/开发板正常，并在CANtest设置500 kbit/s、normal active、开启接收/ACK，持续发送标准ID`0x321`、DLC 8、数据`C2 A5 34 12 00 00 00 00`；回复“G窗口已就绪”后，主会话自动执行同映像构建/反汇编/哈希、顺序API、DBC upload/active/runtime、v3规则可逆回归、manual安全态、两次日志增长和精确状态读回。任一哈希、HTTP、CAN、DBC、规则、日志或resume条件失败即停止，不顺势扩大故障测试。
+- 本次仅更新Markdown治理记录，未修改固件源码、未编译，因此未执行新的固件反汇编或烧录；提交前只需`git diff --check`并推送治理修正。
