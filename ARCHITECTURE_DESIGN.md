@@ -369,4 +369,4 @@ G-2不破坏TF/QSPI、不暂停任务且不增加生产接口。只在RAM中将`
 
 ## G-3 一期最终发布审计
 
-G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并通过F-76/G-1/G-2的唯一最终映像。G-3复用G-1的host CTest 15/15构建证据，只核对现有ELF/HEX哈希、size及HTTP、LogTask、RuleFile v3、bus-off定向反汇编。所有功能与现场域PASS；发布完整性在治理提交推送、工作树干净且本地/远端ahead/behind=`0/0`后生效。并发HTTP、运行中TF热插拔、无界规则、通用配置、在线日志下载、鉴权/TLS等继续是明确非目标。
+G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并通过F-76/G-1/G-2的唯一最终映像。G-3复用G-1的host CTest 15/15构建证据，只核对现有ELF/HEX哈希、size及HTTP、LogTask、RuleFile v3、bus-off定向反汇编。所有功能与现场域PASS；治理封口提交`fe2154c`已推送，工作树干净且本地/远端ahead/behind=`0/0`，发布完整性PASS。并发HTTP、运行中TF热插拔、无界规则、通用配置、在线日志下载、鉴权/TLS等继续是明确非目标。
