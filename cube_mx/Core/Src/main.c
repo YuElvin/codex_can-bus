@@ -280,6 +280,11 @@ extern volatile uint32_t g_w5500_http_trace_status_body_end_tick;
 extern volatile uint32_t g_w5500_http_trace_header_send_enter_tick;
 extern volatile uint32_t g_w5500_http_trace_header_send_issued_tick;
 extern volatile uint32_t g_w5500_http_trace_header_sendok_tick;
+extern volatile uint32_t g_w5500_http_trace_send_count;
+extern volatile uint32_t g_w5500_http_trace_last_send_len;
+extern volatile uint32_t g_w5500_http_trace_tx_total;
+extern volatile uint32_t g_w5500_http_trace_post_sendok_tx_fsr_result;
+extern volatile uint32_t g_w5500_http_trace_post_sendok_tx_fsr_value;
 extern volatile uint32_t g_w5500_http_pretrace_seq;
 extern volatile uint32_t g_w5500_http_pretrace_sr;
 extern volatile uint32_t g_w5500_http_pretrace_ir;
@@ -513,7 +518,7 @@ static void bringup_print_http_trace(void)
   }
   (void)snprintf(line,
                  sizeof(line),
-                 "[http-trace] seq=%lu p=%lu g=%lu ss=%lu se=%lu is=%lu ie=%lu rs=%lu re=%lu bs=%lu be=%lu cs=%lu ce=%lu us=%lu ue=%lu hs=%lu hi=%lu hk=%lu\r\n",
+                 "[http-trace] seq=%lu p=%lu g=%lu ss=%lu se=%lu is=%lu ie=%lu rs=%lu re=%lu bs=%lu be=%lu cs=%lu ce=%lu us=%lu ue=%lu hs=%lu hi=%lu hk=%lu sc=%lu sl=%lu st=%lu fr=%lu fv=%lu\r\n",
                  (unsigned long)g_w5500_http_trace_seq,
                  (unsigned long)g_w5500_http_trace_poll_enter_tick,
                  (unsigned long)g_w5500_http_trace_poll_gap_ms,
@@ -531,7 +536,12 @@ static void bringup_print_http_trace(void)
                  (unsigned long)g_w5500_http_trace_status_body_end_tick,
                  (unsigned long)g_w5500_http_trace_header_send_enter_tick,
                  (unsigned long)g_w5500_http_trace_header_send_issued_tick,
-                 (unsigned long)g_w5500_http_trace_header_sendok_tick);
+                 (unsigned long)g_w5500_http_trace_header_sendok_tick,
+                 (unsigned long)g_w5500_http_trace_send_count,
+                 (unsigned long)g_w5500_http_trace_last_send_len,
+                 (unsigned long)g_w5500_http_trace_tx_total,
+                 (unsigned long)g_w5500_http_trace_post_sendok_tx_fsr_result,
+                 (unsigned long)g_w5500_http_trace_post_sendok_tx_fsr_value);
   printed_seq = g_w5500_http_trace_seq;
   bringup_uart_write(line);
 }

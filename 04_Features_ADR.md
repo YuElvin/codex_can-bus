@@ -195,3 +195,9 @@ F-75过程记录（已被后文最终状态替代）：当时仅达到源码与�
 F-75过程记录（已被后文最终状态替代）：严格固件已完成host CTest=15/15、关键反汇编、OpenOCD `Verified OK`和顺序API验证；当时TF页面联合验收尚未完成。
 
 F-75最终按用户明确的一期三项核心完成客观验收：板端服务页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap为1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；浏览器规则slot1 threshold完成`42435→42436→42435`保存/回读；浏览器手动覆盖`relay1=0/relay2=1`得到RuleTask序号`1/1`和GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复自动规则。第一次手动页面提交仍曾出现服务端记录200而浏览器`Failed to fetch`、主机网络暂时不可达，复位后第二次才完整通过，故本ADR只确认三项功能，不确认HTTP长期稳定。DBC区域保留并复用既有API，但本次没有浏览器侧重做upload/active，不把该页面操作列为F-75三项现场证据。
+
+### ADR-026：HTTP响应完成以TCP ACK和优雅关闭为准
+
+F-76确认W5500 `SENDOK`只表示芯片接受SEND命令，不能证明对端已确认TCP响应。所有成功响应发送后使用稳定`Sn_TX_FSR`非阻塞门控：FSR回到2048才开始既有graceful `DISCON`；未释放时每个HttpTask周期只读一次，500 ms超时才进入既有DISCON和完整W5500恢复。若等待期间socket先进入`CLOSE_WAIT`，只清ACK内部状态并调用既有graceful `DISCON`，禁止通过`http_open_listener()`硬CLOSE旧连接。
+
+最终固件host CTest=`15/15`，FLASH/RAM_D1=`92628/242792 B`，ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`，已反汇编并烧录验证。最终pcap SHA-256=`77a1ed949fb374641968b5d38e9a744e75057bfc7c9c7fa647520d01e418ad6e`：63包/5连接，2条manual POST与3条顺序GET全部HTTP200且Content-Length匹配，全部请求/响应被ACK，5/5双方FIN最终确认，HTTP数据重传=0、RST=0。该决定不提供并发HTTP能力，也不扩大Web/API或业务语义。

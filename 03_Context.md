@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-16（F-75一期Web核心三项已客观验收；首次手动页面提交曾出现HTTP响应交付异常，下一阶段固定复现并修复该稳定性问题）
+更新时间：2026-07-16（F-76单socket HTTP响应交付与优雅关闭已完成构建、反汇编、烧录和最终pcap验收；当前固定进入阶段G最终全量审计）
 
 ## 当前仓库
 
@@ -33,6 +33,8 @@
 | TF RuleFile v3 / 受限规则 CRUD | [客观已验证] | `/config/rules-v3.conf` 固定两槽、640 B 严格文本格式；顺序 HTTP `GET`、DELETE 禁用、POST 恢复、PUT、非法 PUT、重启持久化和默认恢复均已烧录验证。F-19 第二次真实冷启动后再验证 `source="v3"`、两槽默认语义和 ST-Link `load_result=0/rule_count=2/read_len=size=312`。写入经 ConfigTask TF tmp/prev 原子替换，成功后 RuleTask 原子 reload；v3 构造函数已消除 3.8 KiB 栈对象导致的实测 HardFault。 |
 
 ## 当前阻断项
+
+- 当前无外部阻断。F-76最终pcap已确认5/5 HTTP完整交付、5/5双向FIN最终确认、RST=0、HTTP数据重传=0；下一步只读形成阶段G验收矩阵，再合并最少人工现场窗口。未经矩阵明确，不操作CANtest、TF、网线或上下电。
 
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
 - 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 曾保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-6 已在 TF 保持插入、板级断电至少 10 秒再上电的干净基线捕获首次错误：约 32 秒，read failure `0→1`、call `51→102`，append stage/op=`2/2`，单扇区 `LBA=3826`；调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0`，调用后 `State=1/Context=0/ErrorCode=0x20/HAL_SD_ERROR_RX_OVERRUN/STA=0x29000/DCOUNT=448`。F-7 只读审计确认该调用实际为 CPU polling `HAL_SD_ReadBlocks`（非 DMA/IDMA），故障时 `MASK=0`，不依赖 SDMMC IRQ；FDCAN2 没有 NVIC 接收中断且任务轮询，不能归因于 FDCAN2 ISR。F-8 的关中断实验会冻结 HAL tick，已撤回；F-9 的 `vTaskSuspendAll/xTaskResumeAll` 保留 tick/中断但在外部 `0x321` 输入下越过 F-6 call=102 后仍出现 read failure，终态 call/failure=`120/5`、LogTask failure=`6`、`HAL_TIMEOUT`，同样已撤回并重烧录正式 F-5 路径。任务切换不是已证实的充分原因；下一步只能只读审计 SD 传输/轮询参数与 HAL 机制，不直接改参数。其后网络回归未通过：主机 en2 对 `192.168.1.88` ARP 为 incomplete，ping/HTTP 均超时；但精确 ELF 读数 `bringup=0/VERSIONR=4/PHYCFGR=0xBF/link=1/network_configured=1` 且任务循环递增，不能写成固件或 SD 因果回归。
@@ -161,3 +163,9 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 浏览器手动继电器第二次实际提交`enabled=1/relay1=0/relay2=1`成功，页面显示RuleTask确认请求1，API为`requestSeq/appliedSeq=1/1`、实际输出`0/1`；按当前ELF精确地址停机读取后，RuleTask快照与GPIOE ODR均为`0x100`（PE8高、PE7低）。随后浏览器关闭覆盖，页面显示请求2，API为`2/2`；最终ODR=`0x80`（PE7高、PE8低），证明恢复自动规则而不是固定输出。每次OpenOCD读取后均显式resume/shutdown，最终3333/4444/6666无监听。
 - 第一次浏览器手动提交期间，板端串口已记录HTTP handler `hcode=200`且任务/CAN持续运行，但浏览器显示`Failed to fetch`，随后主机ping/curl暂时失败；一次明确`reset run`后网络、规则持久化和手动安全态恢复，第二次页面操作完整通过。该异常必须与无RST的CAN刷新pcap分开：F-75三项功能闭环通过，但不能据此宣称HTTP长期稳定或F-71间歇问题消失。
 - DBC页面区域继续复用已验证的upload/active/runtime API，但本次没有通过浏览器重新执行DBC上传/激活；不把既有API证据冒充本次页面操作。下一阶段固定为F-76，只复现、定位并修复“服务端记录200但浏览器未收到响应且网络需复位恢复”的单socket响应交付异常，禁止扩展Web功能。
+
+## 2026-07-16 F-76 已关闭，当前进入阶段G
+
+- F-76最终源码以`Sn_TX_FSR`非阻塞等待响应ACK，并在ACK wait期间遇到`CLOSE_WAIT`时调用既有graceful `DISCON`。最终ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`；CTest=`15/15`，反汇编、OpenOCD Verified OK和精确符号读回均已通过。
+- 最终pcap为7653 B、SHA-256=`77a1ed949fb374641968b5d38e9a744e75057bfc7c9c7fa647520d01e418ad6e`、63包/5连接。两条manual POST和manual/status/CAN三个GET全部完整HTTP200、Content-Length匹配、请求/响应ACK、双方FIN最终确认；HTTP数据重传=0、RST=0。关闭覆盖后RuleTask序号=`2/2`、实际输出=`1/0`，ACK wait timeout和W5500 recovery均为0。
+- 当前无外部阻断，固定阶段为G。下一步先只读建立最终验收矩阵并最大化复用仍有效的高成本证据，只把明确缺口合并到最少人工现场窗口；未经矩阵明确，不要求用户操作CANtest、TF、网线或上下电，不新增功能。

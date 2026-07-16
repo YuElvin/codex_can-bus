@@ -2899,3 +2899,198 @@
 - 当前HEX SHA-256=`9ba6906eb6da04549eb8dc1eab14e7d5d7a30406a4d7083428e7359640b926dd`，ELF SHA-256=`d9e20ad31a812d74f0def99b29abc45e4d7590601a4b895cfd1335a8d807bd6f`，与本次检查前完全一致，故仍是此前OpenOCD `Verified OK`烧录并完成现场验收的同一固件映像；没有因文档收口产生新固件，也未重复烧录。`git diff --check`通过，OpenOCD进程和3333/4444/6666监听为空。
 
 - F-75功能、页面、测试与治理同步已提交为`fe0f98b Add verified TF web control console`，并成功推送到`origin/codex/W5500`。下一阶段不得自行选择目标，固定派送F-76：只复现、定位并最小修复“handler记录200但浏览器Failed to fetch、后续网络暂时不可达且需复位恢复”的单socket响应交付异常；不得扩展Web功能、并发HTTP、API或规则/继电器业务语义。
+
+## 2026-07-16 阶段 F-76：源码与基线只读故障边界审计
+
+- 用户确认此前抓包已经停止。本轮先完成只读审计：实际工作目录解析为`/Users/elvin/Desktop/project/can_bus_W5500`，分支`codex/W5500`，工作树干净；当前推送基线为`2284038 Record F75 web acceptance push`，功能实现提交为`fe0f98b Add verified TF web control console`。检查时没有运行中的OpenOCD进程，也没有3333/4444/6666监听。
+- F-75现场事实保持不变：首次浏览器`POST /api/relay/manual`时COMtool记录`hcode=200`且RTOS/CAN继续运行，但浏览器为`Failed to fetch`，随后主机ping/curl暂不可达，`reset run`后恢复；第二次同样页面操作完整成功。因此200仅证明处理器路径和W5500 SENDOK，不证明客户端已收到完整响应或socket已恢复。
+- 只读检查当前`firmware/bringup/w5500_bringup.c`发现一个最小候选边界：成功请求在`http_begin_graceful_disconnect()`写入`DISCON`并置`g_w5500_http_disconnect_pending=1`后，`w5500_http_status_poll()`把`CLOSED`、`INIT`、`CLOSE_WAIT`和`LISTEN`均视作可清除pending并调用`http_open_listener()`的状态；但`http_open_listener()`对`CLOSE_WAIT`并无保留分支，因而会执行`CLOSE→OPEN→LISTEN`。这与项目既有L-071“优雅关闭后仅在`CLOSED/INIT`重开监听器”的经验不一致，可能在客户端仍处于关闭握手时提前终止连接。
+- 该静态矛盾尚未由本轮专用pcap和串口trace证明，不能写成已确认根因，尚未修改源码、编译、反汇编、烧录、操作CANtest或Git。下一步必须先按F-76固定场景获取一轮专用证据：停止页面自动刷新，仅做一次基线GET、一次浏览器手动POST，随后检查ping/API；同时封口pcap与COMtool HTTP trace，再决定是否只收紧上述pending状态条件。
+
+- 自动续行时只读检查未发现`tcpdump`持有`/tmp/f76-r01.pcap`，目标文件也尚不存在；因此没有发起基线GET、浏览器POST或任何HTTP流量，没有修改候选源码、编译、反汇编、烧录或操作CANtest。仍等待用户在Terminal执行已给出的sudo tcpdump命令并看到`listening on en2`后回复“抓包已启动”。
+
+- 同一F-76外部条件连续第三轮复核仍未满足：没有`tcpdump`进程、`/tmp/f76-r01.pcap`文件或文件持有者。专用pcap需要用户在Terminal输入sudo密码，主会话不能代替；在没有同一连接包序和COMtool trace时，静态候选不足以授权修改关闭状态机。按持续目标的三轮规则，本阶段正式标记为`blocked`。用户启动命令并回复“抓包已启动”后，应作为新的阻断审计立即恢复；本次仍未改功能源码、编译、反汇编、烧录、操作CANtest或提交Git。
+
+## 2026-07-16 阶段 F-76：专用r01受控复现已执行，待封口
+
+- 用户回复“抓包已启动”后按新的阻断审计恢复。只读确认`tcpdump`正持有`/tmp/f76-r01.pcap`，开始时文件为24 B且0个数据包；实际浏览器页面已明确点击停止自动刷新并显示“自动CAN刷新已由用户停止”，再次核对pcap仍为0包，故测试前边界干净。
+- 唯一基线`GET /api/relay/manual`为HTTP200，connect/start/total=`0.002923/0.031563/0.032215 s`，返回手动disabled、序号`2/2`、输出`1/0`。等待1秒后，实际页面只提交一次`enabled=1/relay1=0/relay2=1`，页面明确显示“RuleTask已确认应用请求3”，JSON为`requestSeq/appliedSeq=3/3`、输出`0/1`，浏览器error/warn日志为空。
+- 随后仅执行协议中的网络回归：ping=2/2，平均`0.621 ms`；唯一`GET /api/status`为HTTP200，connect/start/total=`0.002876/0.030684/0.034721 s`。本轮没有复现F-75首次`Failed to fetch`或后续网络不可达；这是一轮成功样本，不能证明静态候选根因成立或异常消失。
+- 当前为保持pcap边界，没有再发HTTP请求，也尚未关闭手动覆盖；必须先由用户在抓包终端按`Control+C`并回复“抓包已停止”，再离线分析包序和COMtool trace。封口后先在抓包外恢复`enabled=0`安全态并回读，然后决定是否需要新的独立轮次；本轮未改源码、编译、反汇编、烧录、操作CANtest或Git提交。
+
+- 用户确认“抓包已停止”，且文件无进程持有。抓包外立即POST恢复`enabled=0/relay1=0/relay2=0`成功，随后GET确认`requestSeq/appliedSeq=4/4`、输出`1/0`，ping=2/2；因此开发板已恢复自动规则安全态。
+- `/tmp/f76-r01.pcap`共36包、恰好3条连接：基线manual GET、浏览器manual POST和后续status GET各1次，均完整HTTP200。前两条均由板端在响应体后发FIN、主机ACK后再发FIN、板端最终ACK；status GET由主机先FIN、板端ACK后FIN、主机最终ACK。全包RST=0且无重传/duplicate ACK/out-of-order标记；网页POST请求22:18:48.266024，响应头22:18:48.333826、body/板端FIN22:18:48.334523、主机FIN22:18:48.335375、板端最终ACK22:18:48.335602，关闭完整。
+- r01没有复现异常，不能用它证明`CLOSE_WAIT` pending候选为根因或证明异常消失。COMtool在r01期间实际处于关闭且接收0字节，故没有同期串口历史；主会话已按既定流程重新打开`/dev/cu.usbserial-12230`、115200 8N1监视且未发送数据，已恢复接收。当前串口只显示恢复安全态后的末态：任务/CAN计数持续增长、`hsr=14/hreq=16/hpath=10/hcode=200/herr=0`，不能倒推r01时序。
+- 下一独立F76-r02固定为更强的空闲边界：COMtool保持已连接，页面自动刷新停止；新pcap开始后保持至少60秒绝对无HTTP，只执行一次浏览器manual POST，再执行ping和一次status GET，封口后在抓包外恢复安全态。若仍成功，只能记为第二个成功样本；若失败，立即停止并用同期pcap/串口定位，不循环或修改源码。
+
+- 自动续行只读检查未发现F76-r02的tcpdump进程、`/tmp/f76-r02.pcap`文件或持有者，因此没有开始60秒空闲计时，没有发起任何HTTP、浏览器操作、源码修改、编译、反汇编、烧录或CANtest操作。继续等待用户执行已给出的r02抓包命令并回复“抓包已启动”。
+
+## 2026-07-16 阶段 F-76：r02严格60秒空闲复现已执行，待封口
+
+- 用户回复“已启动”后，确认`tcpdump`正持有全新`/tmp/f76-r02.pcap`，初始24 B/0包。实际页面再次点击停止自动刷新并明确显示“自动CAN刷新已由用户停止”，此后起始`22:23:15.873676`、结束`22:24:15.898567`，空闲`60.024891 s`，pcap前后均为0包，证明该窗口没有HTTP连接。
+- 空闲结束后页面表单保持`enabled=1/relay1=0/relay2=1`，只点击一次“提交并等待RuleTask应用”。页面返回“RuleTask已确认应用请求5”，JSON为`requestSeq/appliedSeq=5/5`、输出`0/1`，浏览器error/warn日志为空。随后仅执行ping=2/2（平均`0.585 ms`）和唯一status GET：HTTP200，connect/start/total=`0.002616/0.048268/0.053352 s`。
+- r02再次没有复现`Failed to fetch`或后续网络不可达，但必须等用户封口后才能断言包序、RST或串口trace；当前为保持证据边界尚未恢复手动覆盖。下一步只等待用户在抓包终端按`Control+C`并回复“抓包已停止”，然后在抓包外恢复`enabled=0`、分析pcap并读取COMtool同期末态。本轮仍未改功能源码、编译、反汇编、烧录、操作CANtest或Git提交。
+
+## 2026-07-16 阶段 F-76：r02抓包封口与同期串口证据
+
+- 用户明确回复“已停止”后，按抓包已封口处理；此前已在抓包外恢复手动覆盖为`enabled=0`，API回读`requestSeq/appliedSeq=6/6`、输出`1/0`，ping=2/2，故板端已回到自动规则安全态。
+- `/tmp/f76-r02.pcap`共27包、恰好2条连接：一次浏览器`POST /api/relay/manual`与一次`GET /api/status`，均完整返回HTTP200；全包RST=0，文本未见retransmission/duplicate ACK/out-of-order标记。POST连接从`22:24:32.662434`握手开始，到响应体及板端FIN、主机FIN、板端最终ACK在`22:24:32.729335`完整结束。
+- status连接也完整交付响应：请求`22:24:45.796103`，响应头`22:24:45.841440`，751 B响应体`22:24:45.845033`；主机与板端在`22:24:45.846851/846886`几乎同时发FIN，主机随即以ACK=844确认板端FIN，板端也确认主机FIN。板端在`22:24:46.049553`又重发一次相同FIN，约`202.667 ms`后主机再次ACK；该现象没有造成RST、HTTP失败或后续网络不可达，只能记为同时关闭下的一次FIN重发，不能单独定性为F-75异常根因。
+- COMtool同期记录与pcap对应：浏览器POST为`hreq/htseq=17/17`、`hpath=10`、`hcode=200`、`herr=0`、`htrxs=487`，trace从`p=4949484`到handler完成`hs/hi/hk=4949531`；status GET为`hreq/htseq=18/18`、`hpath=1`、`hcode=200`、`herr=0`、`htrxs=85`，trace从`p=4962682`到`hi/hk=4962683`。后续抓包外恢复POST和回读使计数到20，末态持续为`hsr=14(LISTEN)`、`htact=0`、`herr=0`，RTOS、CAN收发和错误计数持续正常。
+- 因r01、严格60秒空闲后的r02均成功，原始“浏览器Failed to fetch且网络需复位恢复”仍未复现；现有证据不授权把`CLOSE_WAIT/LISTEN`候选直接写成已确认根因。已派送一个范围固定的只读控制流审计，专门判断当前pending状态集合与既有F-50/F-54防卡死修复的关系；在审计结论前不修改源码。本次没有编译，因此未执行新的反汇编检查，也没有烧录、操作CANtest或Git提交。
+
+- F-76断连控制流子任务只读审计完成：`CLOSE_WAIT`是对端FIN后的half-close而非断连完成，`LISTEN`则是监听已恢复终态；不能把pending条件简单收紧为仅`CLOSED/INIT`，否则会分别重引入历史F-48的`CLOSE_WAIT`永久pending和F-52/F-53的`LISTEN`下吞新连接。r02同期COMtool的`hclose=00000000`，不是证明source=1在CLOSE_WAIT强制关闭的`0x0000011c`，因此该成功样本的202.667 ms FIN重发没有命中候选分支的证据链。
+- 审计给出的唯一低风险硬化边界是把pending下首次已读到的`LISTEN`拆为独立fast-path：清pending、结束trace、保持HTTP状态正常并直接返回，不再调用会二次读取SR的`http_open_listener()`；这样避免LISTEN已恢复后在两次SR读取间状态变化而误入重建，同时不改变`CLOSED/INIT/CLOSE_WAIT`的既有恢复语义。已按此唯一目标派送实现；该修改只能称为消除一个可证明的二次读取竞态窗口，不能在没有失败复现时宣称已确认或修复F-75根因。
+
+## 2026-07-16 阶段 F-76：LISTEN fast-path构建、反汇编与烧录
+
+- 实际功能diff仅位于`firmware/bringup/w5500_bringup.c`的disconnect pending分支：首次SR为`LISTEN(0x14)`时执行`pending=0 → http_trace_finish() → http_status=0 → return 0`；原`CLOSED/INIT/CLOSE_WAIT`仍执行`pending=0 → finish → http_open_listener()`，其他状态和协议逻辑未改。该变更消除已恢复LISTEN后helper二次读SR的竞态窗口，不宣称已复现或确认F-75根因。
+- `git diff --check`和`./scripts/verify.sh`通过；host CTest=`15/15`，固件实际重编译并链接，FLASH=`91888 B/128 KB (70.10%)`、RAM_D1=`242480 B/512 KB (46.25%)`，ELF `text/data/bss=91504/372/242104`。ELF/HEX SHA-256分别为`cf59aa5d146621f32787ae738edda4807003673399ba3476c8412d319bcf69ca`/`63f9fbd8d55eeb2cf3a18b3c5c68dd8d3a235c53c3a3cb65913f4db2e51f1e9d`。
+- 定向反汇编确认`w5500_http_status_poll@0x08011128`在pending非零时先比较`SR==0x14`；命中后清`g_w5500_http_disconnect_pending@0x2401f418`、调用`http_trace_finish`、把`g_w5500_http_status@0x24000114`写0并直接返回，不调用`http_open_listener@0x080106d0`。非LISTEN继续以位集选择`CLOSED/INIT/CLOSE_WAIT`并调用listener，符合本轮唯一目标。
+- 烧录前精确`pgrep -x openocd/arm-none-eabi-gdb`及3333/4444/6666监听均为空。OpenOCD/ST-Link V2烧录当前HEX，目标电压=`3.248193 V`，实际输出`Programming Finished`、`Verified OK`、`Resetting Target`并`shutdown`。复位约5秒后无OCD监听，ping=`2/2`、平均`0.667 ms`；顺序`GET /api/status`为HTTP200，W5500 status/link/version=`0/1/4`、TF/QSPI status=`0/0`、`lastNonclosedClose=0`，connect/start/total=`0.003088/0.041085/0.044467 s`。
+- 新映像尚未完成实际浏览器手动POST、专用pcap、COMtool同期trace和安全态恢复验收，因此当前不得提交。下一步固定为F76-r03：页面保持自动刷新停止，在新pcap中只执行一次实际浏览器手动POST，再做ping和一次status GET，封口后恢复`enabled=0`并离线核对HTTP200/RST、`hclose`和LISTEN末态。CANtest无需改变或操作。
+- 本机sudo无交互凭据已失效（`sudo -n`退出1），主会话不能代输密码；已实际打开一个新的Terminal窗口，且`/tmp/f76-r03.pcap`确认不存在。等待用户在该终端执行固定tcpdump命令、在`Password:`自行输入密码，并以出现`listening on en2`作为唯一启动确认；启动前不要操作浏览器、COMtool或CANtest。
+- 自动目标续行第一次只读复核：精确`pgrep -x tcpdump`为空、`/tmp/f76-r03.pcap`仍不存在，也没有文件持有者；一次宽松`pgrep -af`返回的短暂PID已消失且不是实际tcpdump。故F76-r03尚未启动，本轮没有发起浏览器/API请求、没有改变继电器安全态或CANtest，也没有再次编译、反汇编、烧录或Git操作；继续等待用户在已打开的Terminal中启动命令并回复“抓包已启动”。
+
+## 2026-07-16 阶段 F-76：新映像r03浏览器POST已执行，待抓包封口
+
+- 第三次只读复核时发现用户已启动实际tcpdump，随后用户明确回复“已启动”。进程PID=`52061`，命令为`/usr/sbin/tcpdump -i en2 -nn -s 0 -U -w /tmp/f76-r03.pcap host 192.168.1.88 and tcp port 80`；测试开始前pcap为24 B，边界干净。
+- 实际浏览器页面保持自动刷新停止，旧UI表单为`enabled=1/relay1=0/relay2=1`；本轮只点击一次“提交并等待RuleTask应用”。页面明确返回“RuleTask已确认应用请求1”，JSON为`requestSeq/appliedSeq=1/1`、`relay1Output/relay2Output=0/1`，没有出现F-75的`Failed to fetch`。一次在点击完成后调用不存在的`consoleLogs`方法报工具API错误，但不影响已经完成的页面POST；随后独立DOM复读确认上述成功结果。
+- 紧接着ping=`2/2`、平均`0.617 ms`；唯一`GET /api/status`为HTTP200，connect/start/total=`0.006708/0.032693/0.036475 s`，W5500 status/link/version=`0/1/4`、TF/QSPI=`0/0`、`lastNonclosedClose=0`。pcap已增长到1602 B，仍由tcpdump持有。
+- 为保持专用pcap严格只有一次浏览器POST和一次status GET，当前尚未恢复手动覆盖；下一步只等待用户在抓包终端按`Control+C`并回复“抓包已停止”。封口后将在抓包外POST `enabled=0`并回读安全态，再离线分析pcap和COMtool同期trace；当前尚不可提交。
+
+## 2026-07-16 目标会话上下文与任务外派优化
+
+- 用户要求采取任务外派或其他措施，减少当前目标会话大量上下文累计和频繁压缩，避免目标跑偏或发散。已固定后续派发使用`fork_turns=none`，每个子任务只携带阶段、唯一目标、成功标准、证据要求和禁止范围，不再复制整段聊天历史；构建审计、pcap离线分析和治理同步优先拆成独立任务，主会话只控制现场动作、烧录与最终门槛。
+- 新增根目录`CURRENT_TASK.md`作为最多80行、覆盖式更新的当前任务包；`AGENTS.md` Governance Workflow最小新增“任务开始先读CURRENT_TASK.md，若与实际Git/现场冲突则以实际为准并更新”。该文件当前57行，记录F-76唯一问题、真实HEAD/分支、LISTEN fast-path构建/反汇编/烧录证据、r03现场状态、唯一下一动作与禁止范围。
+- 首次外派稿因刻意禁止读取长历史而把F-76当前验证写为“未核实”；主会话没有接受该错误，已用本轮实际命令输出校正为CTest=15/15、FLASH/RAM_D1=`91888/242480 B`、ELF/HEX哈希、定向反汇编和OpenOCD `Verified OK`，并明确当前手动覆盖仍启用、抓包封口后必须恢复。`git diff --check`通过。本治理变更未触碰功能源码、抓包、浏览器、串口或CANtest，未单独构建/反汇编/烧录，也尚未提交。
+- 按新短任务包的第一次自动续行只读复核：实际tcpdump PID=`52061`仍在运行，`/tmp/f76-r03.pcap=3393 B`且未继续增长；因此抓包尚未由用户按`Control+C`封口。主会话没有读取活动pcap、发HTTP、恢复手动覆盖、操作CANtest、构建、烧录或Git；继续等待用户回复“抓包已停止”。
+- 同一F76-r03停止条件的第三个连续目标轮次复核仍为tcpdump PID=`52061`、pcap=`3393 B`且活动；主会话无法替代用户在其sudo终端按`Control+C`，也不能在活动抓包内恢复手动覆盖而污染专用证据。按持续目标三轮规则，本阶段标记为外部`blocked`。用户回复“抓包已停止”后，应立即恢复目标：先在抓包外POST `enabled=0`并回读安全态，再用`fork_turns=none`外派pcap/COMtool离线分析。本轮未发HTTP、未操作CANtest、未编译、反汇编、烧录或Git提交。
+
+## 2026-07-16 阶段 F-76：r03后续请求复现FIN_WAIT服务中断
+
+- 用户明确回复“已停止”，目标从外部阻断恢复为active。`/tmp/f76-r03.pcap`离线外派分析确认24包/2连接：浏览器POST `enabled=1&relay1=0&relay2=1`和16.625秒后的status GET均完整HTTP200，响应体长度分别118/733 B，双向FIN/ACK完整，RST/重传/重复FIN/未ACK均为0；该pcap只证明前两连接成功，末包`22:34:46.374784`，不包含后续故障请求。
+- 抓包外立即POST恢复`enabled=0`时，curl 4.003814秒无字节超时；随后GET连接3.006485秒超时，ping也无响应。COMtool同期却记录该恢复POST已进入handler：`hreq=4/hpath=10/hcode=200/herr=0`、`htrxs=188`，随后`hsr=0x18`、`hir=0x05`、`htact=1`、`disconnectStartTick=491632`、`disconnectEndTick=0`、`hclose=0`；RTOS、W5500、HTTP任务和CAN收发计数继续增长，CAN错误/bus-off/TEC/REC=0。
+- 约32.250秒后串口从`hsr=0x18/htact=1`变为`hsr=0x14/htact=0`，`disconnectEndTick=523882`；但随后宿主ping仍0/2，manual GET和status GET均连接超时且板端`hreq`保持4。宿主`route -n get`仍走en2，ARP为板端MAC `02:00:00:12:34:56`，en2为`192.168.1.100/24`且100baseTX active，排除明显宿主路由/链路丢失。由此客观复现了“handler 200后DISCON长期FIN_WAIT，寄存器表面回LISTEN但网络数据面仍不可达”的原始边界；当前LISTEN fast-path不足以修复F-76，源码不得提交。
+- 当前ELF精确符号ST-Link只读采样：`manual_applied/request=2/2`、`manual_active/relay2/relay1/enabled=0/0/0/0`、RuleTask GPIO快照=`0x80`、实际relay2/relay1=`0/1`、GPIOE ODR=`0x80`；随后已执行resume/shutdown，COMtool `rtc/任务/CAN`继续增长。故恢复POST虽未交付响应，但业务状态已退出手动覆盖并恢复自动规则安全态。
+- 已以`fork_turns=none`外派只读FIN_WAIT审计，唯一目标是依据W5500官方语义确定pending有界超时与超时后socket恢复边界；未授权修改代码、构建、烧录、网络、串口或CANtest。下一步不得盲目复位或加入任意延时常数，先等待审计结论。
+
+## 2026-07-16 阶段 F-76：DISCON pending 500ms有界恢复源码实现与本地验证
+
+- 本轮固定只实现F-76的500ms有界恢复，并完整保留主会话已有`LISTEN` fast-path及`AGENTS.md`、`CURRENT_TASK.md`、既有对话记录。开始前只读核对治理文件和工作树；主任务调用关系为`HttpTask`先获取`g_w5500_mutex`再调用`w5500_http_status_poll()`，而`w5500_bringup_run()`自身不获取该mutex，故直接复用不存在递归锁。该函数运行期重绑W5500 port，调用`w5500_port_init()`执行W5500硬件RST、MR软件复位、恢复MAC/IP/掩码/网关及`RTR/RCR`，不复位MCU；已有DBC mutex非空时也不会重建。
+- `http_begin_graceful_disconnect()`只在`s0_command(W5500_S0_CR_DISCON)`返回成功后记录内部pending起点，再置pending；`http_close_socket()`、LISTEN fast-path、`CLOSED/INIT/CLOSE_WAIT`恢复和超时恢复清pending时均同步清起点。pending判定顺序固定为LISTEN直接清理返回、`CLOSED/INIT/CLOSE_WAIT`沿用listener恢复、其他状态以`uint32_t HAL_GetTick()-start`计算无符号elapsed；小于500ms保持pending且不调用初始化，达到500ms记录`g_w5500_http_recovery_last_sr`、递增`g_w5500_http_recovery_count`，随后清pending/trace，调用完整`w5500_bringup_run()`，成功才调用`http_open_listener()`恢复socket0 LISTEN。未新增Web API、状态机或业务语义，也未修改全局RTR/RCR。
+- `git diff --check`通过；`./scripts/verify.sh`通过，host CTest=`15/15`，固件实际重编译并链接。最终FLASH=`91980 B/128 KB (70.18%)`、RAM_D1=`242496 B/512 KB (46.25%)`，ELF `text/data/bss=91592/376/242120`；最终ELF/HEX SHA-256分别为`815c682cb9be1359e8486b508a91b567d30f0a079f1d5ff3f6c5b7808744e5be`/`4c4f81b858c1e480c59e4104764d622f0d237588c8489d26fd70d02871285cf9`。
+- 最终ELF `nm`确认`http_begin_graceful_disconnect@0x0801042c`、`http_open_listener@0x080106e4`、`w5500_bringup_run@0x08011088`、`w5500_http_status_poll@0x0801113c`，并保留可由ST-Link读取的`g_w5500_http_recovery_last_sr@0x24000110`与`g_w5500_http_recovery_count@0x240331cc`。定向反汇编确认：DISCON命令`bl s0_command`成功分支之后才`bl HAL_GetTick`写起点并置pending；pending先比较`SR=0x14`，再选择`CLOSED/INIT/CLOSE_WAIT`既有listener分支；其他状态以`subs`形成无符号elapsed并执行`cmp.w #500`，`bcc`未到期路径不调用初始化；到期路径才写诊断并调用`w5500_bringup_run`，返回0后调用`http_open_listener`。listener反汇编确认`CLOSE→MR TCP→port 80→OPEN/INIT→LISTEN/0x14`；完整初始化反汇编确认硬件RST低/高及2/50ms延时、MR写`0x80`软件复位、网络参数写回，配置只读数据尾部`d0 07 08`保持`RTR=2000/RCR=8`。ELF符号表未出现`NVIC_SystemReset`或`HAL_NVIC_SystemReset`。
+- 本轮严格未运行OpenOCD/GDB/ST-Link，未复位、烧录或访问板端网络，未操作COMtool/CANtest/浏览器/TF，未commit/push，也未修改阶段计划。当前仅完成源码、本机构建和反汇编证据，`CURRENT_TASK.md`已更新为等待主会话烧录与现场验证；在该现场闭环前不得写成F-76已验收。
+
+## 2026-07-16 阶段 F-76：500ms有界恢复候选烧录与基础回归
+
+- 用户回复“已停止”后，确认上一专用抓包已封口；主会话等待FIN_WAIT审计和明确实现子任务完成，未把失败的LISTEN-only补丁提交。只读审计确认`SR=0x18`为FIN_WAIT，工程`RTR=2000/RCR=8`对应约31.8秒TCP最终超时；结合实测32.250秒，固定最小边界为DISCON pending正常终态优先、其他状态达到500ms时完整重初始化W5500，不复位MCU，也不改变Web/规则/继电器/CAN/TF语义。
+- 主会话复核最终ELF/HEX SHA-256仍为`815c682cb9be1359e8486b508a91b567d30f0a079f1d5ff3f6c5b7808744e5be`/`4c4f81b858c1e480c59e4104764d622f0d237588c8489d26fd70d02871285cf9`。烧录前`openocd`、GDB及3333/4444/6666监听均为空；OpenOCD/ST-Link目标电压=`3.249799 V`，实际得到`Programming Finished`、`Verified OK`、`Resetting Target`并shutdown，退出后检查`OCD_RELEASED=1`。
+- 复位5秒后ping=`2/2`、平均`0.773 ms`；`GET /api/status`为HTTP200，connect/start/total=`0.005100/0.036300/0.039676 s`，W5500 status/link/version=`0/1/4`、TF/QSPI=`0/0`、`lastNonclosedClose=0`。等待250ms后`GET /api/relay/manual`也为HTTP200、total=`0.034617 s`，回读手动覆盖disabled、request/applied=`0/0`、实际relay1/relay2=`1/0`，证明烧录后当前安全态正常。
+- 当前仅完成基础回归，尚未满足F-76现场门槛：下一步必须由用户启动全新专用pcap，主会话再执行一次实际浏览器POST、ping和顺序只读API；抓包封口后独立恢复`enabled=0`，并核对正常路径recovery count不增或异常路径在约500ms触发W5500恢复。当前未操作CANtest、未commit/push。
+
+## 2026-07-16 阶段 F-76：r04正常路径专用现场验证已执行，待封口
+
+- 用户明确回复“已启动”后，确认`tcpdump`实际子进程持有全新`/tmp/f76-r04.pcap`，测试前文件仅24 B。内置浏览器原标签已失效，重新认领用户当前`http://192.168.1.88/`标签；页面自动CAN数据显示仍停留在旧值，手动表单固定为`enabled=1/relay1=0/relay2=1`，本轮只点击一次“提交并等待 RuleTask 应用”。页面明确显示“RuleTask 已确认应用请求 1”，JSON回读request/applied=`1/1`、实际relay1/relay2=`0/1`，未出现`Failed to fetch`。
+- 随后ping=`2/2`、平均`0.472 ms`。首次shell循环因PATH中找不到`curl`在任何API请求前停止，只完成ping；改用`/usr/bin/curl`后按250ms间隔顺序执行`GET /api/status`、`GET /api/can/status`、`GET /api/relay/manual`，三者均HTTP200，total=`0.045495/0.037501/0.031321 s`。status确认W5500 status/link/version=`0/1/4`、TF/QSPI=`0/0`、`lastNonclosedClose=0`；CAN status为tx/rx=`217/2138`、errors/busOff/TEC/REC=`0/0/0/0`；manual仍为request/applied=`1/1`、输出`0/1`。
+- pcap已增长至5760 B且仍由tcpdump持有。为保持证据边界，当前不再发网络请求；下一步只等待用户在抓包终端按`Control+C`并回复“已停止”，然后外派离线pcap审计，在抓包外执行独立`enabled=0`恢复POST、安全态与recovery符号验证。当前未操作CANtest、未commit/push。
+
+## 2026-07-16 阶段 F-76：r04封口、500ms恢复命中与剩余响应交付缺口
+
+- 自动续行只读确认`tcpdump`已停止、无文件持有者，`/tmp/f76-r04.pcap`固定5760 B。离线外派审计确认48包、4条连接、每条12包：浏览器POST和后续status/CAN status/manual GET均完整HTTP200、body长度精确、客户端ACK、双向FIN/ACK；全包RST/重传/out-of-order/未确认数据/未确认FIN均为0。浏览器POST请求到完整118 B body为68.539ms、到完整关闭为69.558ms，响应值request/applied=`1/1`、输出`0/1`。该pcap只证明正常路径，不能证明500ms异常恢复路径。
+- 抓包外唯一POST恢复`enabled=0&relay1=0&relay2=0`再次复现原请求交付失败：TCP connect=`0.002088 s`，4.002825秒收到0字节、HTTP000、curl exit28。1秒后ping已恢复`2/2`，随后manual/status GET均HTTP200，manual回读request/applied=`2/2`、手动覆盖disabled、输出`1/0`，说明业务安全态已应用且新候选消除了旧固件“32秒后仍不可达”的持续失联。
+- COMtool精确trace seq7记录rx=`188`、path10/code200/herr0，handler从tick`295242`进入并在`295280`完成、send结果0，disconnectStart=`295281`；下一采样SR=`0x18`、IR=`0x05`、trace active。候选在`disconnectEnd=295781`结束，严格等于500ms，W5500复位期间PHY/link短暂为`0xba/0`，随后恢复`0xbf/1`和SR=`0x14`；RTOS和CAN计数未回零且继续增长。
+- 前两次CPU0 halt因缺少`poll`报unknown state，未得到内存读数且均已释放OCD；一次AP2尝试在`0x2401f390`失败，也无读数并无残留。最终使用`poll→halt→read_memory→resume→shutdown`成功：`g_w5500_http_recovery_count=1`、`last_sr=0x18`、`g_w5500_init_result=0`、link=`1`；手动request/applied=`2/2`、active/enabled=`0/0`、GPIOE=`0x80`、实际relay2/relay1=`0/1`；FreeRTOS complete/loop=`1/399`，CAN2 rx/tx=`4399/445`。串口随后rtc/任务/CAN继续增长，证明已resume；OCD无残留。
+- 结论分界：500ms完整W5500重初始化已按预期命中并恢复后续网络，但触发POST本身仍未向客户端交付任何响应，故F-76成功标准未满足，当前源码禁止提交。已以`fork_turns=none`派送唯一明确的只读响应交付审计，专门检查TX WR/SEND/SENDOK/IR清理与DISCON先后，要求只提出一个最小下一补丁或最小诊断边界；当前未操作CANtest、未commit/push。
+
+## 2026-07-16 全量路线与验收流程审查、人工介入最小化
+
+- 用户要求审查全量功能路线和验收流程，目标为快速、精准完成全部交付，并进一步要求尽量减少非必要人工介入。本轮固定为只读审计与治理校准；未发起浏览器/API请求，未操作COMtool/CANtest/TF/网线，未运行OpenOCD/GDB或烧录。用户此前回复“已启动”后两次只读检查均未发现实际`tcpdump`进程或新pcap，故未把该回复写成有效抓包证据，也未污染任何抓包。
+- 真实Git基线仍为`codex/W5500`、HEAD=`22840382e542d99f6b8e59e3ad0cbfce768f8197`且与远端同步；工作树保留F-76未验收源码、治理和记录修改。路线审计确认一期主体已完成：硬件/RTOS、外部CAN收发、DBC上传/激活/runtime/SignalCache、TF日志与CSV、QSPI单规则双槽、RuleFile v1/v2/v3、两槽CRUD、规则/安全态/手动继电器、Web一期三项和多数稳定性异常均有既有现场证据。当前唯一产品阻断仍为F-76“handler/send记录成功但触发POST客户端0字节”；F-76关闭后只进入G最终全量审计，不再新增功能阶段。
+- 路线文件存在过时矛盾：`01_Project_Plan.md`和`ARCHITECTURE_DESIGN.md`仍把阶段7/9或多规则写为部分/待做，而v2/v3两规则、ConfigTask原子保存和DBC最小闭环已经验收；架构API表还混有DBC列表/删除、CAN发送、日志管理、settings、reboot等未来设想。已最小校准这些状态并明确上述未来接口不是一期目标，防止派送任务自行扩展。
+- 验收流程的强门槛保持不变：每个可独立现场判定的固件开发步骤仍必须全量构建、最终ELF定向反汇编、烧录、精确读回和真实现场闭环，通过后才提交/推送。优化点是把“开发步骤”限定为一个阶段/一个因果假设/一个运行时边界；只读审计、离线分析和同一假设内草稿不是新阶段。草稿可跑定向主机测试，冻结唯一候选后一次完成`git diff --check`、全量CTest、固件构建、size/哈希、nm/objdump，再进行一次烧录和一个合并现场窗口，失败只回同一阶段，不提交也不扩大目标。
+- 人工操作固定只保留软件无法替代的物理/权限动作：首次抓包`sudo`授权、开发板上下电、TF/网线插拔、无法远控的Windows CANtest位率/发送操作。构建、反汇编、哈希、残留检查、烧录、浏览器、顺序HTTP/ping、pcap/串口分析、精确符号读回后的resume/shutdown、文档和Git均由主会话或明确外派任务执行；若确需人工，必须一次给完“前置状态→连续操作→等待现象→回复口令”，不得逐小步反复打断。
+- F-76响应交付只读审计进一步证明：manual非空响应`handlerResult=0`说明header/body两次`http_send_bytes()`都经历`TX_FSR→TX_WR→写buffer→更新TX_WR→清IR→SEND→观察并清SENDOK`并返回0，但不能证明TCP ACK指针追上TX_WR、pcap出现payload或客户端收到body。两次SEND严格串行，`IR=0x05`仅为锁存的`CON|RECV`，当前证据不足以授权任意延时、合并SEND或改变关闭状态机。
+- F-76唯一下一步已写入`CURRENT_TASK.md`：复用现有trace，仅在每次SENDOK成功清位后锁存`send_count/last_send_len/tx_total/post_sendok_tx_fsr_result/value`，不改变返回值、DISCON时点或500ms恢复。构建/反汇编/烧录后，在同一个pcap中自动执行`enabled=1`和间隔至少250ms的`enabled=0`两次POST，避免再次把故障请求放在抓包外；第二次SEND后的`TX_FSR<2048`才授权非阻塞ACK-drain门槛，`TX_FSR=2048`则必须按pcap继续查客户端层或SPI/指针一致性，禁止猜测性补丁。
+- 已在`PROJECT_FINAL_ACCEPTANCE.md`固化快速闭环和人工最小化规则，并将派送模型文字校准为用户最新要求的`gpt-5.6-terra/high`；当前工具若不能显式选择模型，仍必须保持固定目标、证据和禁止范围。本轮只有治理/记录修改，没有固件源码新增修改；因此本轮未编译，也未执行新的反汇编检查或烧录。文档补丁完成后`git diff --check`实际通过。
+
+## 2026-07-16 阶段 F-76：SENDOK后TX_FSR最小ACK感知诊断完成本地验证
+
+- 本轮假设固定为：W5500的SENDOK只证明发送命令处理完成，不能替代对TCP ACK释放TX缓冲的判断；成功标准为只在每次SENDOK成功清位后读取一次稳定`TX_FSR`，锁存`send_count/last_send_len/tx_total/post_sendok_tx_fsr_result/value`，且读取失败绝不能改变原发送成功返回。验证方式固定为工作树保护、`git diff --check`、完整`verify.sh`、最终ELF `nm/objdump`及JSON/UART容量核查；明确禁止烧录、OpenOCD/GDB、网络、浏览器、COMtool、CANtest、commit/push。
+- 开始前已实际读取`AGENTS.md`、`CURRENT_TASK.md`、`02_Engineering_Rules.md`、`03_Context.md`、F-76相关`05_Lessons.md`/计划/ADR和`w5500_bringup.c`发送/trace/恢复函数，并核对工作树。既有500ms恢复候选及治理修改均被保留；本轮功能差异只在`firmware/bringup/w5500_bringup.c`增加5个trace变量、begin清零、SENDOK后只读锁存、status JSON字段及1280 B必要响应容量，在`cube_mx/Core/Src/main.c`增加对应5个extern和现有`[http-trace]`短行参数。
+- `http_send_bytes()`仍先等待`TX_FSR`，再读`TX_WR`、写TX buffer、更新`TX_WR`、清`SENDOK|TIMEOUT`、发`SEND`、观察SENDOK并清位；清位成功后才调用一次`s0_read_u16_stable(W5500_S0_TX_FSR,...)`。每个成功SEND递增count、记录last len并累计total，result失败时value记`0xffffffff`；该result不参与任何条件返回，随后原`g_w5500_http_last_tx_size += len`和`return 0`保持不变。普通JSON响应两次SEND后，最终锁存自然对应body；未合并SEND，未增加等待、延时或ACK gate。
+- 最终`./scripts/verify.sh`通过，host CTest=`15/15`；固件FLASH=`92340 B/128 KB (70.45%)`、RAM_D1=`242768 B/512 KB (46.30%)`，ELF `text/data/bss=91952/376/242392`。最终ELF SHA-256=`6281833eb4c6792382ffc95720957c0d761c8caff954cffe96a1dbb85d5b48da`，HEX SHA-256=`ec2a41f22725754595e7138dbf153864160142fb3e90b7352d7cea4a34233309`；此前1024 B中间构建及其哈希已作废，不得引用。
+- 最终ELF `nm`确认`http_send_bytes@0x08010b94`、`http_begin_graceful_disconnect@0x0801046c`、`http_open_listener@0x08010724`、`w5500_bringup_run@0x08011114`、`w5500_http_status_poll@0x080111c8`，5个新全局位于`0x2403324c..0x2403325c`。反汇编中原发送序列位于`0x08010ba8..0x08010c7c`；SENDOK清位成功检查在`0x08010c78..0x08010c82`，新增稳定TX_FSR读取在`0x08010c84..0x08010c8e`。读取失败由`0x08010caa`跳到`0x08010cd8`把value置`0xffffffff`，再回到`0x08010cb0`执行`movs r0,#0`并走原成功返回，证明诊断失败不改变send返回值。
+- 恢复控制流反汇编未变：`http_begin_graceful_disconnect`仍在`0x08010482`发DISCON且成功后才记录pending起点；`http_open_listener`仍对LISTEN/SYNRECV/ESTABLISHED直接返回，其他状态执行既有`CLOSE→MR TCP→port80→OPEN/INIT→LISTEN`；pending路径仍以`cmp.w #500`分流，达到门槛才调用`w5500_bringup_run()`，成功后调用`http_open_listener()`。未改变DISCON时点、500ms常数、完整W5500恢复或任何Web/规则/继电器/CAN/TF逻辑。
+- status JSON的format/参数实测计数=`50/50`，最大uint32和最小int的严格格式上界为`1177 B`且通过`jq`结构校验；原1024 B会有理论截断风险，故仅将共享响应body增至1280 B，按NUL占用后仍余102 B。独立UART短行为format/参数=`23/23`，严格上界`335 B`，现有384 B缓冲按NUL占用后余48 B；没有修改其它缓冲区或打印控制流。最终`git diff --check`通过。
+- 本轮未运行OpenOCD/GDB/ST-Link，未烧录、复位或访问板端网络，未操作浏览器/COMtool/CANtest/TF，也未commit/push。当前板上仍是此前500ms候选，新ACK诊断只有本地构建/反汇编证据；主会话下一门槛是烧录上述最终HEX，在同一个pcap内自动执行间隔至少250ms的`enabled=1`和`enabled=0`两次POST，再以第二次SEND后的TX_FSR和pcap决定后续唯一修复分流。
+
+## 2026-07-16 阶段 F-76：TX_FSR诊断候选烧录与基础回归
+
+- 主会话复核待烧录ELF/HEX SHA-256仍为`6281833eb4c6792382ffc95720957c0d761c8caff954cffe96a1dbb85d5b48da`/`ec2a41f22725754595e7138dbf153864160142fb3e90b7352d7cea4a34233309`，并再次核对`http_send_bytes@0x08010b94`、`http_open_listener@0x08010724`、`w5500_bringup_run@0x08011114`、`w5500_http_status_poll@0x080111c8`及5个TX_FSR诊断全局位于`0x2403324c..0x2403325c`。烧录前OpenOCD、GDB及3333/4444/6666监听均为空。
+- 已使用OpenOCD/ST-Link烧录当前最终HEX，目标电压=`3.248193 V`，实际输出`Programming Finished`、`Verified OK`、`Resetting Target`并正常shutdown。烧录后精确检查OpenOCD/GDB/tcpdump及调试端口均无残留。
+- 复位后ping=`2/2`、平均`1.042 ms`；`GET /api/status`为HTTP200、total=`0.039723 s`，RTOS ready，W5500 status/link/version/phycfgr=`0/1/4/191`，TF/QSPI status=`0/0`。响应JSON已包含5个新诊断字段；该status响应体在自身两次SEND前构造，所以其中本次trace字段仍为0是预期快照语义，不作为双POST判据。
+- COMtool串口监视仍在持续接收`[bringup]`数据，RTOS任务和CAN2收发计数持续增长。当前只完成烧录与基础回归，尚未执行同一pcap内的双POST，故F-76仍未验收、不得提交。为减少人工介入，后续仅保留一次`sudo tcpdump`授权；浏览器双POST、ST-Link精确读回、顺序网络回归、pcap与串口分析均由主会话完成。
+- 为避免COMtool累计数据继续扩大上下文，主会话已按用户演示过的固定流程自行操作：点击“关闭”停止串口监视，点击清空接收区后确认接收字节从`3615230`归零，再点击“打开”。复核界面为“已连接”，新`[bringup]`行持续出现，串口监视已恢复；该操作只清除显示历史，未改动开发板、固件、CANtest或网络状态。
+- 自动目标续行只读检查：精确`pgrep -x tcpdump`为空，`/tmp/f76-txfsr-r01.pcap`尚未创建；宽松命令行匹配出现的短暂PID不是实际tcpdump。`sudo -n true`退出1，说明当前没有可复用的sudo授权。为保护同一pcap双POST边界，本轮未发浏览器/API请求、未操作CANtest、未运行OpenOCD/GDB，也未重复构建或烧录；仍只等待用户在终端启动上一条带300秒自动停止的抓包命令。
+
+## 2026-07-16 阶段 F-76：同一pcap双POST复现并命中ACK未释放分支
+
+- 用户回复“抓包已启动”后，主会话实际确认root tcpdump PID=`73198`、全新`/tmp/f76-txfsr-r01.pcap`起始仅24 B且命令行目标为板端80端口；随后认领内置浏览器现有`http://192.168.1.88/`标签。页面每秒刷新保持停止，初始表单为覆盖启用、relay1/relay2=`0/1`。
+- 第一条实际浏览器POST保持`enabled=1&relay1=0&relay2=1`，pcap从24 B增长到3201 B；点击后页面仍显示`RuleTask 已确认应用请求 1`和request/applied=`1/1`，但这些值与点击前完全相同。封口后pcap直接证明该新POST没有任何板端HTTP响应，客户端重复发送487 B请求后收到RST，因此页面文字只是遗留旧成功状态，不能算本次成功。间隔超过250 ms后，第二条实际浏览器POST固定为`enabled=0&relay1=0&relay2=0`，等待5.2秒后页面明确显示`Failed to fetch`，同样无HTTP响应；两条故障请求均已在同一pcap内复现。
+- 第二条POST后没有先发任何新HTTP。等待既有500ms恢复链完成后，使用最终ELF精确地址执行`poll→halt→read_memory→resume→shutdown`；OpenOCD电压=`3.248193 V`并正常shutdown。第二条POST最终trace读得：`post_sendok_tx_fsr_result=0`、`value=1839`、`tx_total=209`、`last_send_len=118`、`send_count=2`，即`2048-1839=209 B`，恰等于本响应两次SEND的全部209 B，证明SENDOK清位时TCP ACK尚未释放任何响应字节。handler result=`0`、recovery last SR=`0x18`，trace seq=`3`、active=`0`、disconnect start/end=`366841/367381`，recovery count=`2`。
+- 同次ST-Link读回业务状态：manual request/applied=`2/2`、manual active/enabled=`0/0`，relay请求=`0/0`，规则实际输出恢复为relay1/relay2=`1/0`；FreeRTOS started=`1`、loop=`392`，CAN2 rx/tx=`4315/436`，说明故障POST已应用业务状态且MCU/RTOS/CAN未复位。COMtool完成态精确记录第二条`[http-trace] seq=3 ... sc=2 sl=118 st=209 fr=0 fv=1839`；第一条故障POST seq2也记录相同`sc=2/sl=118/st=209/fr=0/fv=1839`，与pcap中两条均无响应一致，说明不能以SENDOK代替等待客户端ACK。
+- ST-Link释放后顺序回归：ping=`2/2`、平均`0.577 ms`；manual/status/CAN三个GET均HTTP200，total=`0.036433/0.025295/0.034939 s`，CAN body回读tx/rx=`475/4699`、errors/busOff/TEC/REC=`0/0/0/0`。首次输出文件名构造使用了当前PATH中不可用的`tr`，导致三个响应体写到同一文件且只保留最后CAN body；这不影响curl打印的三个HTTP状态/耗时，也未重复请求以免无必要扩大pcap。
+- 该现场证据满足预先固定的`TX_FSR<2048`修复分流。已用`fork_turns=none`外派唯一明确的F-76源码任务：仅实现handler发送后非阻塞ACK-drain，FSR回2048才正常DISCON，500ms未释放才进入既有DISCON/完整W5500恢复；禁止新增Web/并发/业务功能、禁止现场操作和Git提交。pcap已由300秒命令自动封口，初读为56包、5个连接：两条POST均无板端HTTP payload并出现请求重传/RST，之后三个GET均完整HTTP200/body/FIN；精确包时间线等待只读外派审计。当前失败候选仍不得提交。
+
+## 2026-07-16 阶段 F-76：失败pcap精确封口与非阻塞ACK-drain候选
+
+- `/tmp/f76-txfsr-r01.pcap`离线只读审计确认56包、5个TCP连接。第一/第二POST分别持续`5.218460/5.216702 s`；三次握手均成功，客户端各发送完整487 B请求，header/body=`460/27 B`，body分别为`enabled=1&relay1=0&relay2=1`和`enabled=0&relay1=0&relay2=0`。板端始终未ACK这487 B、未发任何HTTP状态行/header/body/FIN；客户端各重传同一487 B四次，板端各发两个校验和正确的RST，首RST分别在请求后`2.219219/2.304775 s`，500ms附近只有客户端重传而板端静默。
+- 后三个恢复GET均完整：manual响应`91 B header+118 B body=209 B`，status=`91+826=917 B`，CAN=`91+123=214 B`；Content-Length匹配，响应数据和FIN均被客户端ACK，双向FIN完整，无RST/重传/未确认数据。第一个GET距第二POST最终RST约101.113秒，pcap只能证明到此时已恢复；精确500ms恢复时间仍以串口/ST-Link为准。
+- 唯一包级结论：`TX_FSR=1839`、`tx_total=209`与pcap中POST响应0 B、无ACK、随后RST相容，支持“在209 B响应得到客户端ACK前进入DISCON/恢复导致响应未交付”的因果假设，但pcap看不到DISCON命令时点，故仍需修复后现场对照证明，不能仅凭相容性写成根因已最终确认。
+- 固定外派任务仅在`firmware/bringup/w5500_bringup.c`实现统一`http_finish_response_send()`与ACK-wait。所有handler成功且至少一次SEND的响应均适用：最终稳定FSR为2048才直接调用既有graceful DISCON；FSR小于2048或读取失败则锁存pending并立即返回。后续HttpTask每周期仅稳定读取一次TX_FSR，回2048才DISCON；500ms仍未释放才DISCON并进入原有DISCON pending 500ms完整W5500恢复。CLOSED/INIT/CLOSE_WAIT/LISTEN沿用既有恢复，SEND失败仍走原CLOSE错误路径；未按manual/第一或第二POST做特判。
+- 新增仅供ST-Link读回的`ack_wait_pending/count/initial_fsr/final_fsr/elapsed_ms/timeout_count`，不扩展JSON/UART容量；完成或关闭只清内部pending/start，保留最近诊断。新增路径没有`HAL_Delay`、`vTaskDelay`、阻塞循环或新重试，未改变RTR/RCR、LISTEN fast-path、500ms完整W5500恢复及规则/继电器/CAN/TF/API语义。
+- 外派和主会话复核均通过`git diff --check`与`./scripts/verify.sh`，CTest=`15/15`。最终FLASH/RAM_D1=`92668/242792 B`，ELF `text/data/bss=92272/384/242408`；ELF/HEX SHA-256=`8db5962d12bb378b1d8b0784d9ed2133ab6ca5974d7ebd69c54456a7dfc64d91`/`273b9c7dcc55b68d6c170b2cc4538aa5cb723c1f09765f958f1d38c5b2452a20`。
+- 最终ELF反汇编确认：`0x08012c68..0x08012cae`在handler成功后检查send count及最终FSR，只有2048跳至DISCON，否则写ACK pending后返回；`0x08011336`每轮一次稳定FSR读取，`0x0801135e`比较2048并在满足后于`0x0801136a`调用DISCON，`0x08011344`比较500ms且超时后才走同一DISCON。原`http_send_bytes`仍为`TX_FSR→TX_WR→buffer→TX_WR→IR clear→SEND→SENDOK→clear→只读TX_FSR`；`0x0801137e..0x080113d0`保留LISTEN fast-path、DISCON 500ms与`w5500_bringup_run()`完整恢复。
+- 烧录前精确检查OpenOCD/GDB/tcpdump与3333/4444/6666监听均为空，且HEX哈希匹配。OpenOCD/ST-Link目标电压=`3.249799 V`，实际输出`Programming Finished`、`Verified OK`、`Resetting Target`并shutdown。复位后无OCD/GDB残留，ping=`2/2`、平均`0.609 ms`；status HTTP200、connect/start/total=`0.001717/0.041228/0.045754 s`，RTOS ready、W5500 status/link/version/phycfgr=`0/1/4/191`、TF/QSPI=`0/0`。当前只完成候选烧录和基础回归，仍需修复后同一pcap双POST对照，未通过前不得提交。
+- 修复后现场窗口前，主会话再次自行关闭COMtool串口监视、清空显示、重新打开；界面确认接收字节归零、状态“已连接”且新`[bringup]`持续出现。`/tmp/f76-ack-r01.pcap`确认不存在，OpenOCD/GDB/tcpdump均为空；下一步只需用户一次sudo抓包授权，命令将在300秒后自动封口，无需再按Control+C。
+- 自动目标续行只读复核：精确`pgrep -x tcpdump`仍为空，`/tmp/f76-ack-r01.pcap`尚未创建；宽松匹配出现的短暂PID不是实际tcpdump。`sudo -n true`退出1，当前没有可复用授权；OpenOCD/GDB同样无残留。为保持修复前后pcap严格可比，本轮未发浏览器/API、未操作COMtool/CANtest、未运行调试器，也未重复构建、烧录或Git操作，继续等待用户启动上一条300秒自动停止抓包命令。
+- 同一外部条件的下一次目标续行复核仍为：无实际tcpdump、`/tmp/f76-ack-r01.pcap`不存在、OpenOCD/GDB无残留。修复后现场验收必须有root抓包，而主会话没有可用sudo授权，不能以无pcap的浏览器结果替代硬门槛；因此继续发请求不会形成有效进展。该条件从首次请求sudo授权起已连续出现三个目标轮次，按持续目标规则将目标暂标为外部blocked。用户启动固定抓包命令并回复“抓包已启动”后，应视为新一轮恢复并立即继续双POST，不需重新构建或烧录。
+
+## 2026-07-16 阶段 F-76：ACK-drain修复后双POST现场执行，待pcap封口
+
+- 用户回复“抓包已启动”后目标恢复；实际确认tcpdump PID=`81788`持有全新`/tmp/f76-ack-r01.pcap`且起始仅24 B，OpenOCD/GDB为空，COMtool状态“已连接”并持续接收`[bringup]`。认领当前内置浏览器标签后，页面保留的是修复前`Failed to fetch`及旧request1 JSON，作为新响应是否到达的明确对照。
+- 第一条实际POST固定为`enabled=1&relay1=0&relay2=1`。点击后页面从旧`Failed to fetch`更新为`RuleTask 已确认应用请求 1`，并回读request/applied=`1/1`、实际输出=`0/1`，证明本次浏览器确实收到新响应。间隔超过250ms后第二条POST固定为`enabled=0&relay1=0&relay2=0`，页面更新为`RuleTask 已确认应用请求 2`，回读request/applied=`2/2`、manual disabled、规则实际输出=`1/0`；两条均未显示失败。
+- 第二条后未先发新HTTP，直接用最终ELF地址执行`poll→halt→read_memory→resume→shutdown`，电压=`3.249799 V`。handler result=`0`；ACK wait initial/final FSR均=`1930`，即SENDOK时header已被ACK、body 118 B仍待释放；ACK wait count=`2`、最后elapsed=`50 ms`、pending=`0`、timeout count=`0`、W5500 recovery count=`0`、recovery last SR=`0xffffffff`。trace seq=`3`、send count/last/total=`2/118/209`；manual request/applied=`2/2`且输出=`1/0`，FreeRTOS started/loop=`1/201`，CAN2 rx/tx=`2214/224`，证明无MCU/W5500恢复且任务/CAN连续。
+- COMtool完成态与读回一致：POST seq2/seq3均`sc=2 sl=118 st=209 fr=0 fv=1930`；本候选在约50ms周期内结束ACK wait。ST-Link退出后无OCD/GDB残留，ping=`2/2`、平均`0.514 ms`；manual/status/CAN顺序GET均HTTP200，total=`0.051927/0.017679/0.038767 s`。manual回读安全态`enabled=0`、request/applied=`2/2`、输出=`1/0`；CAN tx/rx=`259/2558`且errors/busOff/TEC/REC=`0/0/0/0`。status出现`lastNonclosedClose=284(0x11c)`，表示客户端关闭使socket进入CLOSE_WAIT后由listener关闭；是否伴随RST及是否满足正常关闭门槛必须以封口pcap判定，当前不提前写PASS或提交。
+- 当前pcap仍由300秒自动停止命令持有；网络操作已全部结束，不再发请求。下一步等待自动封口后只读分析5个连接的响应payload、客户端ACK、FIN/RST/重传以及关闭发起方，再决定F-76是否通过。
+
+## 2026-07-16 阶段 F-76：响应交付通过但CLOSE_WAIT关闭失败，最后补丁已烧录
+
+- `/tmp/f76-ack-r01.pcap`已自动封口，62包。活动期预览和封口事实直接显示两条POST均已完成响应交付：客户端完整发送487 B请求，板端分别发送`91 B header+118 B body=209 B`，客户端ACK到响应序号210并立即主动FIN；无响应数据重传。页面request1/request2成功与包级响应一致，证明ACK-drain已修复原“handler/send成功但响应0 B”的核心缺口。
+- 封口审计纠正活动预览：两条POST的客户端FIN均被板端明确ACK，但板端没有继续发送自身FIN；约45秒后客户端ACK探测触发板端RST。manual和CAN GET同样ACK客户端FIN却缺自身FIN，约60秒后以RST结束；只有status GET在客户端FIN后`0.850 ms`发板端FIN并获最终ACK。`lastNonclosedClose=0x11c`与源码边界一致：ACK-wait pending看到`SR=CLOSE_WAIT`后清pending并调用`http_open_listener()`，后者对CLOSE_WAIT执行硬CLOSE/重开，旧连接因此没有完成关闭握手。故该候选只通过响应交付、未通过F-76完整TCP关闭门槛，未提交。
+- 已用`fork_turns=none`外派唯一明确的最后补丁，仅把ACK-wait pending的CLOSE_WAIT分支改为清内部ACK pending/start后调用既有`http_begin_graceful_disconnect()`；不提前finish trace，使后续完全复用DISCON pending、LISTEN终态与500ms完整W5500恢复。CLOSED/INIT、ESTABLISHED FSR/500ms门控、SEND、RTR/RCR及全部业务语义不变；未增加延时、轮询、API或诊断。
+- 外派与主会话复核均通过`git diff --check`、`./scripts/verify.sh`和CTest=`15/15`。最终FLASH/RAM_D1=`92628/242792 B`，ELF `text/data/bss=92232/384/242408`；ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`。
+- 最终反汇编确认`0x0801130a`比较`SR=0x1c`，命中后`0x0801130e..0x08011312`清ACK状态并调用graceful DISCON，不再调用listener/close；helper在`0x08010482`装载命令`0x08`并调用`s0_command`。CLOSED/INIT仍在`0x0801131e..0x0801132c`走finish/listener；`0x08011336`保留FSR读取、`0x08011366`比较2048、`0x0801134c`比较500ms；`0x08011374`后的DISCON pending与`0x080113c2`完整`w5500_bringup_run()`恢复保留。
+- 烧录前OpenOCD/GDB/tcpdump均为空且HEX哈希匹配；OpenOCD/ST-Link电压=`3.249799 V`，实际输出`Programming Finished`、`Verified OK`、`Resetting Target`并shutdown。复位后无OCD/GDB残留，ping=`2/2`、平均`0.625 ms`；status HTTP200、total=`0.039932 s`，RTOS/W5500/TF/QSPI基础状态正常且`lastNonclosedClose=0`。
+- 为最终关闭握手复验，主会话已自动关闭COMtool监视、清空旧显示并重新打开，复核已连接且新`[bringup]`持续。下一步只需一次180秒自动停止的root pcap；主会话将重复双POST和顺序回归，要求响应交付、客户端ACK、双方FIN及无RST/重传同时通过，之后才提交推送。
+- `/tmp/f76-ack-r01.pcap`最终精确统计为：62包、5连接、0数据重传、0未确认请求/响应字节。POST1/POST2从请求到首响应分别`75.442/81.642 ms`，到body被ACK分别`76.248/82.446 ms`，body发出后仅`0.058/0.072 ms`获ACK；页面request/applied=`1/1`与`2/2`和响应体一致。关闭方面POST1/POST2缺板端FIN，分别约45秒后RST；manual/CAN GET也缺板端FIN并约60秒后RST，status GET完整四次挥手。该审计进一步固定最后补丁只解决“已ACK客户端FIN后发送自身FIN”。
+- 自动目标续行只读检查最终复验条件：`/tmp/f76-final-r01.pcap`尚未创建、无实际tcpdump，`sudo -n true`退出1，OpenOCD/GDB无残留。为保护最终关闭握手证据，本轮未发浏览器/API、未操作COMtool/CANtest、未重新构建或烧录，等待用户启动上一条180秒自动停止抓包命令。
+
+## 2026-07-16 阶段 F-76：最终CLOSE_WAIT候选双POST已执行，待pcap封口
+
+- 自动目标续行检测到最终抓包已经实际启动：tcpdump PID=`85793`持有全新`/tmp/f76-final-r01.pcap`，起始仅24 B；虽然用户未另发口令，现场条件已客观满足，主会话直接继续。COMtool已连接且持续接收，OpenOCD/GDB为空。
+- 浏览器初始页面仍显示上轮request2，第一条新POST `enabled=1&relay1=0&relay2=1`后页面明确更新为request/applied=`1/1`、输出=`0/1`；间隔超过250ms后第二条`enabled=0&relay1=0&relay2=0`更新为request/applied=`2/2`、manual disabled、规则输出=`1/0`。两条均为新响应且无`Failed to fetch`。
+- 第二条后未先发新HTTP，最终ELF精确ST-Link读回：handler result=`0`，ACK wait initial/final FSR=`1930/1930`、count=`2`、last elapsed=`50 ms`、pending=`0`、timeout count=`0`；graceful disconnect start/end=`212485/212535`，恰为50ms，W5500 recovery count=`0`、last SR=`0xffffffff`。trace seq=`3`、send count/last/total=`2/118/209`；manual request/applied=`2/2`、输出=`1/0`，FreeRTOS started/loop=`1/201`，CAN2 rx/tx=`2217/225`。已resume/shutdown，OCD/GDB无残留。
+- COMtool POST seq2/seq3均记录`sc=2 sl=118 st=209 fr=0 fv=1930`。顺序回归ping=`2/2`、平均`0.503 ms`；manual/status/CAN均HTTP200，total=`0.043901/0.038544/0.038242 s`。manual安全态保持request/applied=`2/2`和输出`1/0`；status的`lastNonclosedClose=0`，W5500/TF/QSPI正常；CAN tx/rx=`240/2369`且errors/busOff/TEC/REC=`0/0/0/0`。
+- 网络操作已结束，pcap仍由180秒命令持有，不再发请求。最终PASS仍取决于封口pcap确认两条POST及顺序GET完整响应、客户端ACK、双方FIN和最终ACK，且无RST/重传。
+
+## 2026-07-16 阶段 F-76：最终pcap封口通过，阶段关闭
+
+- `/tmp/f76-final-r01.pcap`已自动封口：7653 B，SHA-256=`77a1ed949fb374641968b5d38e9a744e75057bfc7c9c7fa647520d01e418ad6e`，63包、5条TCP连接。两条`POST /api/relay/manual`和三个顺序GET均为`HTTP/1.1 200 OK`，实际body均等于Content-Length；5/5完整请求和5/5完整响应全部被对端ACK，HTTP数据重传=0、未确认HTTP数据=0。
+- 两条POST分别提交`enabled=1&relay1=0&relay2=1`和`enabled=0&relay1=0&relay2=0`，响应request/applied=`1/1`、`2/2`，第二条关闭覆盖后实际输出=`1/0`，与浏览器页面、ST-Link和COMtool一致。
+- 关闭序列逐连接审计：5/5客户端FIN均获板端ACK，5/5板端均发送FIN且最终获客户端ACK；status连接为双方近同时关闭并各有一次冗余FIN，但全部FIN最终确认。全pcap RST=0，不存在CLOSE_WAIT残留或RST终止。与前一候选4/5缺板端FIN的失败模式相比，最后的CLOSE_WAIT graceful DISCON补丁已完成因果对照。
+- 最终源码验证保持：`git diff --check`、`./scripts/verify.sh`和CTest=`15/15`通过；FLASH/RAM_D1=`92628/242792 B`，ELF `text/data/bss=92232/384/242408`；ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`。反汇编与OpenOCD Verified OK证据均对应同一最终映像。
+- ST-Link最终读回ACK wait count=`2`、elapsed=`50 ms`、timeout=`0`、W5500 recovery count=`0`；顺序ping 2/2，manual/status/CAN均HTTP200，RTOS、W5500、TF、QSPI和CAN状态正常。F-76判定PASS并关闭；下一阶段固定为G最终全量审计，不新增功能。
+- 治理同步后再次执行`git diff --check && ./scripts/verify.sh`通过；host构建无增量工作，CTest仍为`15/15`，STM32构建同样无增量工作。对现有最终ELF再次执行`arm-none-eabi-size/nm/objdump`：`text/data/bss=92232/384/242408`，ELF/HEX哈希保持不变；`0x0801130a`比较`SR=0x1c`并于`0x08011312`调用`http_begin_graceful_disconnect`，`0x08011366`比较FSR=2048，`0x0801134c`比较500 ms，`0x080113c2`保留完整`w5500_bringup_run()`恢复。精确OpenOCD/GDB进程及3333/4444/6666监听待提交前再做一次无残留检查。

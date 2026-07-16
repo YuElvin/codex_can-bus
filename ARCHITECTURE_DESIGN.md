@@ -184,6 +184,8 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列表分页；上传和下载必须分块处理，避免阻塞 CAN 任务。
 
+交付状态边界：上表只有明确写出“当前最小实现”的路由，以及已由计划/ADR记录验收的规则和手动继电器路由属于一期；`GET /api/dbc`、`DELETE /api/dbc/{name}`、CAN raw/signal/periodic、日志管理、settings和reboot均为未来设想/非一期目标，不能据此生成新的开发阶段。
+
 ## 9. 前端页面计划
 
 一期前端固定为TF驻留的单页原生HTML/CSS/JS控制台，入口仅为`/`和`/index.html`，实际文件为`/www/index.html`。页面必须只使用当前已实现的HTTP路由，不能把本设计中的未来CAN发送、日志下载、系统设置等路线当作已交付API。
@@ -243,11 +245,11 @@ API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列
 | 4 | CAN2 外部收发 | 已验证 | CANtest 收到 `0x321`，开发板收到 Windows 发帧 |
 | 5 | W25Q128 QSPI | 已验证 | JEDEC ID、擦写读回通过 |
 | 6 | FreeRTOS 单任务迁移 | 已验证 | `g_freertos_task_started=1`、loop 计数递增，各硬件状态仍为 0 |
-| 7 | FreeRTOS 多任务拆分 | 部分已验证 | 既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界已烧录验证；单规则 HTTP 配置已复用 ConfigTask 完成闭环；完整配置服务仍待实现 |
+| 7 | FreeRTOS 多任务拆分 | 已验证 | 既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界已烧录验证；RuleFile v3 两槽保存复用 ConfigTask 原子提交并由 RuleTask reload；通用消息总线和无界配置服务为非目标 |
 | 8 | W5500 socket/HTTP status | 已验证 | `/api/status`、`/api/can/status` 可用 |
-| 9 | TF 静态文件和 DBC 上传 | 部分已验证 | `/www/index.html` 默认静态页可访问；`POST /api/dbc/upload` 可保存 `/dbc/candidate.dbc`，并已在源码中接入候选读回 + portable parser 报告；`POST /api/dbc/active` 最小激活和 `GET /api/dbc/runtime` 运行态快照诊断已烧录验证 |
+| 9 | TF 静态文件和 DBC 上传 | 已验证 | `/www/index.html` 分块静态服务、`POST /api/dbc/upload`候选保存/读回/portable parser报告、`POST /api/dbc/active`最小激活和`GET /api/dbc/runtime`运行态快照均已烧录验证；multipart、列表和删除为未来非一期范围 |
 | 10 | 实时解码和日志 | 已验证 | active DBC、外部 RX、`/api/signals` 和旧最小 CSV 追加已验证；独立 LogTask 默认路径批量写和 F-26 下电取卡 CSV 内容均已验证。运行中 recovery/热插拔非目标 |
-| 11 | 规则/继电器 | 部分已验证 | 固定高滞回、延时、超时、单规则 QSPI 双槽和 RuleTask reload 已验证；新增 `GET/POST /api/rule/config` 已验证 HTTP→ConfigTask→QSPI→RuleTask→复位加载；RuleFile v1 有效/缺失路径已板端验证，非法板端输入未注入；多规则仍待做 |
+| 11 | 规则/继电器 | 一期主体已验证 | 固定高滞回、延时、超时、单规则QSPI双槽、RuleFile v1/v2/v3、两槽HTTP CRUD、priority winner、手动覆盖和RuleTask reload均已验证；v1非法文件仅有主机解析证据、v2首次缺失创建未在板端观察，作为明确证据边界保留，不再误写为“多规则未做” |
 | 12 | 稳定性测试 | 进行中 | F-12 插卡日志长跑、F-14 物理断网恢复、F-17 HTTP 优雅断开、F-19 冷启动恢复、F-25 CAN bus-off 恢复、F-26 CSV 物理内容已验证；待最终全量复验 |
 
 ## 13. 风险与规避
@@ -350,3 +352,9 @@ TF中的`/www/index.html`由仓库`www/index.html`唯一维护，使用原生HTM
 一期三项核心已经客观闭环：板端页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap中1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；规则页面实际完成slot1 threshold `42435→42436→42435`保存、读取和恢复；手动继电器页面提交`enabled=1/relay1=0/relay2=1`后RuleTask请求/应用序号=`1/1`、GPIOE ODR=`0x100`，关闭覆盖后序号=`2/2`、ODR=`0x80`并恢复自动规则。
 
 首次手动页面提交曾出现handler记录200但浏览器`Failed to fetch`且网络需复位恢复，因此架构结论仅覆盖功能路径，不覆盖HTTP长期稳定。下一阶段F-76必须在单socket边界内复现和修复响应交付异常，禁止扩展Web功能。DBC页面控制保留并复用既有API，但本次未在浏览器重做upload/active，不将历史API验证写成本次页面证据。
+
+## F-76 单socket HTTP响应交付与关闭修复
+
+F-76以失败pcap和`Sn_TX_FSR`确认：两次manual POST的handler和SENDOK均成功，但SENDOK后FSR=`1839`，恰有209 B完整响应尚未被TCP ACK释放，客户端实际收到0 B并最终RST。正式修复不改变单socket、API或业务逻辑，只在成功响应后进入非阻塞ACK wait；FSR回2048才执行既有graceful DISCON，500 ms未释放才进入既有完整W5500恢复。修复响应交付后，pcap又暴露客户端FIN已获ACK但板端缺FIN；最终只将ACK wait期间的`CLOSE_WAIT`改为调用同一graceful DISCON，不再硬CLOSE旧连接。
+
+最终ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`，CTest=`15/15`，FLASH/RAM_D1=`92628/242792 B`，已完成关键路径反汇编、OpenOCD Verified OK和现场读回。最终pcap为63包/5连接：两条POST及manual/status/CAN三个GET均完整HTTP200、body长度匹配、请求与响应全部ACK、5/5双向FIN最终确认，HTTP数据重传=0、RST=0；ACK wait timeout和W5500 recovery均为0。F-76关闭，架构进入阶段G最终全量审计。

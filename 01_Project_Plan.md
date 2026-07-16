@@ -24,12 +24,12 @@
 | 4 | FDCAN2 外部 CAN 收发 | [客观已验证] | Windows CANtest 可收开发板帧，开发板可收 Windows 发帧 |
 | 5 | W25Q128 QSPI | [客观已验证] | 默认启动只读 JEDEC ID；`0x00FFF000` 保留诊断区仅显式触发擦除、写入、读回匹配。2026-07-13 已复核历史 `0xffffffff/erase_count=0` 为未触发诊断的初始化哨兵值，正式单次请求 `result=0/erase_count=1` |
 | 6 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录确认 `g_freertos_task_started=1`、loop 递增、各硬件状态仍通过 |
-| 7 | FreeRTOS 多任务拆分 | [部分客观已验证] | 已完成既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界；本轮 HTTP 规则保存复用 ConfigTask 队列并完成上板闭环，完整配置文件/多规则仍未做 |
+| 7 | FreeRTOS 多任务拆分 | [客观已验证] | 既有任务、CAN RX/TX、DbcTask、TfTask 和 ConfigTask 队列边界均已烧录验证；RuleFile v3 两槽配置经 ConfigTask 原子保存并由 RuleTask reload，未实现的通用消息总线和无界规则管理属于非目标 |
 | 8 | W5500 socket/HTTP status | [客观已验证] | `/api/status`、`/api/can/status` 可访问 |
-| 9 | TF 静态文件和 DBC 上传 | [部分客观已验证] | `/www/index.html` 默认静态页可访问，静态页读取已改为 512 字节循环分块；`POST /api/dbc/upload` 可保存到 `/dbc/candidate.dbc` 并返回 portable parser 报告；`POST /api/dbc/active` 最小激活已烧录验证；启动/激活后 active DBC 运行态快照和 `GET /api/dbc/runtime` 已烧录验证 |
+| 9 | TF 静态文件和 DBC 上传 | [客观已验证] | `/www/index.html` 静态文件512字节循环分块、`POST /api/dbc/upload`候选保存与portable parser报告、`POST /api/dbc/active`最小激活、启动/激活后的运行态快照和`GET /api/dbc/runtime`均已烧录验证；multipart、分片和DBC列表/删除属于未来非一期范围 |
 | 10 | 实时解码、日志、规则 | [部分客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、LogTask 默认路径已验证；TF 卡明确为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围。格式化/重新挂载/TF bring-up 均返回 0，恢复标准 DBC 后默认 LogTask `write/flush=8→10`、文件大小 `4142→5282`、failure=0；单规则 HTTP 读写、QSPI 保存、RuleTask reload 和复位恢复已验证；RuleFile v1 已完成有效文件启动覆盖、缺失文件创建和顺序回归，非法文件仅主机解析验证 |
 | 11 | TF 驻留 Web 控制台 | [一期核心三项客观已验证] | 用户固定的一期核心为CAN刷新显示、规则设置和继电器操作：板端冷启动页面哈希一致；独立pcap中首页最终ACK至首API SYN=`303.503 ms`，1次首页+14次CAN状态+14次signals全部200、RST=0；浏览器把slot1 threshold `42435→42436→42435`保存并读回；浏览器手动覆盖`relay1=0/relay2=1`后RuleTask `request/applied=1/1`且GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复规则。DBC区域保留并复用既有已验证API，但本次未以浏览器重新执行上传/激活，不计入上述三项现场结论 |
-| 12 | 稳定性基线 | [进行中；日志耐久、断网、HTTP RST、400错误响应、冷启动恢复、bus-off 恢复和 CSV 内容均已通过；HTTP响应交付异常待修复] | F-11/12 HWFC 固件已完成30分17秒插卡日志耐久；F-14 已验证 W5500 网线恢复；F-17 已修复成功响应后 `DISCON→CLOSE` 的主机RST；F-19 第二次真实冷启动已验证 DBC、v3两规则、外部CAN解码和默认日志恢复；F-20 已验证非法规则 HTTP 400 后 `+0/+50/+100/+250/+500 ms` 新连接均为200；F-25 已在错误250k形成真实bus-off并在恢复500k后通过 Abort→Stop→Start 自动恢复，外部收发恢复；F-26 已完全下电取卡并只读验收 CSV。F-71-r05已复现空闲后GET超时，F-74取得有效唯一会话分类；F-75首次手动页面提交又出现handler记录200但浏览器未收到且网络需复位恢复，下一步固定F-76复现和最小修复。运行中插拔仍为非支持操作 |
+| 12 | 稳定性基线 | [主体客观已验证；F-76已关闭，待阶段G最终全量审计] | F-11/12 HWFC 固件已完成30分17秒插卡日志耐久；F-14 已验证 W5500 网线恢复；F-17 已修复成功响应后 `DISCON→CLOSE` 的主机RST；F-19 第二次真实冷启动已验证 DBC、v3两规则、外部CAN解码和默认日志恢复；F-20 已验证非法规则 HTTP 400 后 `+0/+50/+100/+250/+500 ms` 新连接均为200；F-25 已完成真实bus-off恢复；F-26 已下电取卡只读验收 CSV。F-76最终以TX_FSR非阻塞ACK门控和CLOSE_WAIT graceful DISCON修复响应交付，最终63包/5连接全部HTTP200、响应ACK、双向FIN，RST/HTTP数据重传均为0；当前进入阶段G，不新增功能。运行中插拔仍为非支持操作 |
 
 ## 阶段 C 当前状态
 
