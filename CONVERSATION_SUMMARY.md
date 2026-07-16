@@ -2897,3 +2897,5 @@
 - 已派送的只读审计明确确认：按用户固定的CAN刷新、规则设置、继电器操作三项，一期Web功能证据满足提交门槛；同时指出治理文档仍停留在待验收，且本次没有浏览器DBC upload/active证据。主会话据此同步`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、`PROJECT_FINAL_ACCEPTANCE.md`和`05_Lessons.md`，把三项核心通过、DBC页面未复验及首次HTTP交付异常分开记录。
 - 提交前再次执行`./scripts/verify.sh`：host 15/15 CTest全部通过，host和STM32 Ninja均报告`no work to do`，因此这一步没有发生新的编译。仍对当前最终ELF执行目标反汇编复核：`rule_task`调用顺序保持`rule_engine_evaluate→rule_apply_relays→manual_relay_state_mark_applied`；`rule_task_manual_override_submit`只调用纯状态提交；运行态PE7/PE8写入仍集中在`rule_apply_relays`，另有启动GPIO初始化调用。ELF尺寸`text/data/bss=91440/372/242104`。
 - 当前HEX SHA-256=`9ba6906eb6da04549eb8dc1eab14e7d5d7a30406a4d7083428e7359640b926dd`，ELF SHA-256=`d9e20ad31a812d74f0def99b29abc45e4d7590601a4b895cfd1335a8d807bd6f`，与本次检查前完全一致，故仍是此前OpenOCD `Verified OK`烧录并完成现场验收的同一固件映像；没有因文档收口产生新固件，也未重复烧录。`git diff --check`通过，OpenOCD进程和3333/4444/6666监听为空。
+
+- F-75功能、页面、测试与治理同步已提交为`fe0f98b Add verified TF web control console`，并成功推送到`origin/codex/W5500`。下一阶段不得自行选择目标，固定派送F-76：只复现、定位并最小修复“handler记录200但浏览器Failed to fetch、后续网络暂时不可达且需复位恢复”的单socket响应交付异常；不得扩展Web功能、并发HTTP、API或规则/继电器业务语义。
