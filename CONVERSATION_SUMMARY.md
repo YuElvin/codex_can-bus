@@ -2492,3 +2492,408 @@
 - 用户按固定协议取得第二次完整空闲60秒单GET证据：pcap中GET=`00:02:24.035869`、HTTP header=`.042546`（`6.677 ms`）、733 B body=`.046198`（`10.329 ms`）；SYN/SYN-ACK、ACK、FIN四次挥手均完整，无RST和重传。curl记录HTTP200，首字节/总时长=`11.275/15.011 ms`，与pcap的相对时序一致。
 - 连接结束后用户获得完整F-69串口行：`seq=1 p=181468 g=50 ss=181468 se=181468 is=181468 ie=181468 rs=181468 re=181468 bs=181468 be=181468 cs=181468 ce=181468 us=181468 ue=181468 hs=181468 hi=181469 hk=181469`。因此轮询、SR/IR/RX_RSR读取、请求buffer读取、RX_RD+RECV、status body构造和header发送进入均在同一系统tick内；`SEND`命令写入与`SENDOK`均在下一tick。请求自身JSON中的后续字段为零仍是预期采样顺序，完成态UART行已补全该缺口。
 - F-69“最小端到端观测可与pcap对照”的阶段目标已实际满足：源码仅增加trace字段与独立UART短行，`git diff --check`、`verify.sh`/host CTest=`14/14`、关键反汇编、OpenOCD `Programming Finished/Verified OK/Resetting Target`（`3.250368 V`）均已完成；ELF/HEX SHA-256=`be4e69cdbdfb70fc8583a4b4167a01b539cb9c5181f09284882652ce563f4754`/`e345a3d460a8570acfb1767575f9b423b1723fc1a40ecf3a2abc2b3cf6a5355b`。本次正常样本不推翻F-67的约2.20秒延迟，不能把根因或G-1联合耐久写为通过；但F-69观测功能可按规则提交。下一阶段必须只针对间歇延迟的可重复复现/分类，不直接改状态机或重试。
+
+## 2026-07-16 阶段 F-71：间歇空闲延迟复现协议（只读，等待用户执行）
+
+- F-71只读审计确认当前HEAD=`e6c77a2`且工作区在派送时干净；本阶段不编辑、构建、烧录、访问HTTP/CANtest或Git。唯一目标是以F-69完成态trace尝试复现F-67类空闲后长延迟，不以两次正常样本声称HTTP稳定。
+- 固定最多10个独立轮次：每轮先由用户交互启动单独pcap，严格60秒没有其它TCP/80，再唯一执行一次`curl --http1.0 --max-time 3 /api/status`，请求后串口连续保留至少5秒的原始输出。每轮分别保存pcap、curl trace/退出码和新完成态`[http-trace]`，只有有效完成态trace后才能进入下一轮；CANtest持续500k，TF/网线/电源不动。
+- 判定只以pcap的`L_header=首个板端HTTP header时间-GET时间`：`<0.5s`为短样本；`0.5–<2s`保留后继续；`2–<3s`且HTTP200为F67类延迟，立即停止并以`hk-p`及各tick子段判读；GET后3秒无header/curl超时、RST/无body/非200、或成功后5秒仍无完成态trace均立即停止。10轮都短只能记录“本预算未复现”，不能写为G-1或根因消失。F69 trace从`RX_RSR>0`才开始，故完全未入HTTP处理路径的超时是有效故障分类但不是trace覆盖通过。
+- 用户下一步只执行`r01`，不自行循环到r10。主会话根据r01证据决定继续下一轮或停止；本次只记录协议，未编译、反汇编、烧录或提交。
+
+## 2026-07-16 阶段 F-71：r01现场结果（pcap解码证据不完整）
+
+- 用户已执行r01：抓包终端停止显示`12 packets captured/0 dropped`；curl为`HTTP200`、connect=`4.234 ms`、首字节=`34.625 ms`、总时长=`38.287 ms`、退出码=`0`。请求后串口得到完成态`[http-trace] seq=2 p=946625 ... us=946625 ue=946625 hs=946625 hi=946626 hk=946626`；相邻状态行的CAN2 RX=`8961→9058`持续增长、CAN2 error/bus-off/TEC/REC均为0、HTTP为listener且`hreq=2/herr=0`。这些真实证据说明该轮curl与trace为短样本，没有复现F67类异常。
+- 但用户粘贴的离线pcap解码只含`reading from file /tmp/f71-r01.pcap`，没有SYN/GET/HTTP packet行；因此无法按F71定义计算`L_header=HTTP header-GET`，也无法确认唯一TCP/80连接边界。即使抓包停止时显示12 packets，也不能用包计数替代报文内容。r01暂不作为有效轮次，不能直接进入r02或写为未复现成功。
+- F-71a已明确派送只读审计，目标是在不访问开发板、不开新连接的前提下核对已保存pcap文件的存在、大小和可读包数，并给出最小离线补证命令；若文件确实无法读取，必须记录该主机采集失败而非猜测网络或固件问题。此次主会话未编译、反汇编、烧录、HTTP/CANtest或提交。
+
+## 2026-07-16 阶段 F-71a：r01已保存pcap只读恢复（r01有效短样本）
+
+- F-71a未修改、构建、烧录、访问HTTP/CANtest或Git。只读检查确认`/tmp/f71-r01.pcap`存在、大小=`1815 B`、格式为microsecond little-endian Ethernet pcap v2.4；`tcpdump -r`实际解出12包，`/tmp/f71-r01.pcap.txt`也存在且包含完整报文。用户粘贴只有`reading from file`是展示不完整，不能据此判定pcap丢失。
+- 已恢复的r01精确报文时间：GET=`00:15:06.398671`、首个HTTP200 header=`.428754`，所以`L_header=30.083 ms`；733B body=`.432346`、四次挥手=`.434452`完成，无RST或重传。结合用户curl=`200/connect=4.234 ms/start=34.625 ms/total=38.287 ms/exit=0`和完成态UART `seq=2/p=946625/hi=hk=946626`，r01满足F71的唯一TCP/80连接、唯一GET、200完整body、完成trace的有效轮次条件。
+- r01是短延迟正常样本，不是F67类`>=2s`延迟，不能证明F69覆盖间歇长延迟，也不能写为HTTP稳定或G-1通过。用户已确认其`/bin/sleep 60`操作；pcap静默段本身不独立证明空闲长度。现在允许进入r02，仍执行相同60秒单请求/5秒串口规则；任何`L_header>=2s`、超时、RST、非200或trace不完整立即停止。F71a只恢复证据边界，本次未编译、反汇编、烧录或提交。
+
+## 2026-07-16 阶段 F-71：r02有效短样本
+
+- 用户按相同60秒空闲/唯一GET协议完成r02。pcap为12包：GET=`00:22:42.457285`、HTTP200 header=`.476845`，`L_header=19.560 ms`；751B body=`.480568`，四次挥手于`.482484`完成，无RST或重传。curl为`200/connect=3.785 ms/start=23.554 ms/total=27.302 ms/exit=0`，与pcap相对时序一致。
+- 请求后串口出现完成态`[http-trace] seq=3 p=1404282 ... us=1404282 ue=1404282 hs=1404282 hi=1404283 hk=1404283`；相邻状态行CAN2 RX=`13490→13609`持续增长、CAN2 errors/bus-off/TEC/REC保持0，HTTP listener且`hreq=3/herr=0`。r02满足有效轮次和短样本分类，未复现F67类异常；累计r01/r02仅为两个短样本，不能推断稳定、根因消失或G-1通过。
+- F71继续，下一步仅执行r03，保持完全相同的60秒/唯一GET/5秒串口/单pcap边界；任一轮`L_header>=2s`、3秒无header、RST、非200或trace不完整立即停止。本次只记录现场结果，未编译、反汇编、烧录、改源码或提交。
+
+## 2026-07-16 阶段 F-71：r03有效短样本
+
+- 用户按相同协议完成r03。pcap为12包：GET=`00:28:21.888336`、HTTP200 header=`.929775`，`L_header=41.439 ms`；750B body=`.933460`，四次挥手于`.935407`完成，无RST或重传。curl为`200/connect=3.804 ms/start=45.636 ms/total=49.498 ms/exit=0`，与pcap相对时序一致。
+- 请求后串口出现完成态`[http-trace] seq=4 p=1744889 ... us=1744889 ue=1744889 hs=1744889 hi=1744890 hk=1744890`；相邻状态行CAN2 RX=`16854→17525`持续增长、CAN2 errors/bus-off/TEC/REC保持0，HTTP listener且`hreq=4/herr=0`。r03是有效短样本，累计r01/r02/r03均未复现F67；这不构成稳定性或G-1验收。
+- F71继续，下一步仅执行r04，保持同一独立60秒/唯一GET/5秒串口/单pcap边界；任一异常立即停止。本次只记录现场结果，未编译、反汇编、烧录、改源码或提交。
+
+## 2026-07-16 阶段 F-71：用户询问停止抓包后的操作
+
+- 已明确：终端A按`Ctrl-C`停止tcpdump后，仍需只读解码已保存的该轮pcap，并保留curl最终两行、curl trace及请求后5秒串口输出；这些本地读取不会访问开发板，也不产生第二个HTTP请求。只有完整证据用于计算`L_header`后，主会话才允许判定该轮并决定下一轮。此次问答未编译、反汇编、烧录、HTTP/CANtest、Git或源码修改。
+
+## 2026-07-16 阶段 F-71：测试终止与判定标准
+
+- 用户询问需要测试到什么状态。已明确本阶段不是以单轮或连续若干轮HTTP 200作为通过条件，而是执行最多10个独立轮次；每轮必须是严格60秒无TCP/80流量后唯一一次`GET /api/status`，并同时保存pcap、curl结果和请求后5秒内的完整`[http-trace]`。
+- 任一轮`L_header=首个板端HTTP响应头时间-GET时间 >=2 s`、curl在3秒内未得到响应头/超时、RST、非200、不是单一GET/单一TCP连接、或无完整trace，即为复现或采集异常：立即停止F71，不做后续轮次，并依据该轮证据决定是否需要最小固件修复与一次新的构建/反汇编/烧录验证阶段。
+- 只有累计10轮均满足HTTP 200、单连接单GET、无RST/重传、完整body和四次挥手、完成态trace，以及`L_header <2 s`，才可写为“本10轮预算未复现F67间歇延迟”；这仍不能单独证明G-1耐久稳定通过或根因已消失。当前仅有r01-r03三轮短样本，下一步为r04。本次未编译、反汇编、烧录、HTTP/CANtest、Git或源码修改。
+
+## 2026-07-16 阶段 F-71：r04现场终端准备
+
+- 用户授权主会话打开终端执行r04抓包，并要求在sudo密码提示时由用户本人输入后再接管。图形控制通道禁止直接操控`com.apple.Terminal`，因此在用户明确授权的范围内通过本机Terminal脚本只输入了不含密码的命令：`sudo /usr/sbin/tcpdump -i en2 -nn -s 0 -U -w /tmp/f71-r04.pcap 'host 192.168.1.88 and tcp port 80'`，并将Terminal置前台。
+- 密码未被读取、记录或代填；当前等待用户确认已输入密码且终端出现`listening on en2`。用户使用COMtool监视串口；确认后才允许启动本轮唯一的60秒后curl请求。本次未编译、反汇编、烧录、HTTP/CANtest、Git或源码修改。
+
+## 2026-07-16 阶段 F-71：r04请求已启动，待采集结果
+
+- 用户已确认抓包终端显示`listening on en2`。主会话已在第二个Terminal输入唯一请求命令：先`/bin/sleep 60`，后以`--http1.0 --noproxy '*' --connect-timeout 3 --max-time 3`请求`http://192.168.1.88/api/status`，并保存`/tmp/f71-r04.curl.trace`、headers和body；该命令尚在用户终端中执行，结果待回传。
+- 用户继续用COMtool观察串口。curl完成后必须等待5秒获得完成态trace，再停止抓包终端并离线解码pcap；在这三类证据到齐前不得判定r04或启动r05。本次未编译、反汇编、烧录、Git或源码修改。
+
+## 2026-07-16 阶段 F-71：r04网络证据已完成，待串口完成态
+
+- 本机只读检查确认curl已完成，trace显示首字节相对发送为`42.816 ms`、body为750 B；pcap完整解出12包：GET=`00:39:39.525494`、首个HTTP200 header=`.568499`，故`L_header=43.005 ms`；750 B body=`.572151`，四次挥手于`.574076`完成，无RST或重传。JSON中的进行中trace为`seq=5/active=1`，其`ue/hs/hi/hk=0`符合响应尚未结束时的status快照，不能替代完成态UART行。
+- 请求结束后已等待超过5秒。主会话尝试以`sudo -n kill -INT 81970`停止抓包，但不同TTY未复用sudo认证票据，输出为`sudo: a password is required`，未触碰密码且未停止进程；随后按用户明确终端接管授权，定位运行抓包的`/dev/ttys004` Terminal窗口并发送一次`Ctrl-C`，已确认无`f71-r04` tcpdump进程，pcap固定为`1832 B`且含完整连接关闭。
+- r04网络部分为短样本，仍必须由用户从COMtool提供请求后完成态`[http-trace] seq=5 ...`及相邻CAN状态，才能判为F71有效轮次并允许启动r05。此次未编译、反汇编、烧录、源码修改或Git提交。
+
+## 2026-07-16 阶段 F-71：r04有效短样本
+
+- 已读取用户附带串口文本并以COMtool实时只读界面交叉确认完成态：`[http-trace] seq=5 p=2424896 ... us=ue=2424896 hs=2424896 hi=hk=2424897`。相邻`[bringup] run`已为`hreq=5/htseq=5/htact=0`，HTTP listener、`herr=0`；CAN2 RX=`23638→23670`持续增长，CAN2 errors/bus-off/TEC/REC均为0。
+- 与已固定的本机pcap/curl证据组合，r04满足单TCP连接、单GET、HTTP 200、无RST/重传、750 B完整body、四次挥手、完成trace的有效轮次条件。`L_header=43.005 ms`，curl首字节=`42.816 ms`，归类为短样本；累计r01-r04均未复现F67，但不能说明稳定、根因消失或G-1通过。
+- F71下一步仅执行r05，仍采用严格60秒空闲、唯一GET、请求后5秒完成trace和单pcap边界；任何异常立即停止。此次只记录和核对现场证据，未编译、反汇编、烧录、源码修改或Git提交。
+
+## 2026-07-16 阶段 F-71：r05采样已启动
+
+- 在已确认r04完整闭合后，主会话通过用户授权的Terminal复用当前抓包流程启动`/tmp/f71-r05.pcap`；终端显示`tcpdump: listening on en2`。随后已启动第二个Terminal的唯一请求命令：严格`/bin/sleep 60`后才执行一次保存curl trace/headers/body的`GET /api/status`。COMtool仅作串口监视，未改变其配置或发送任何数据。
+- 当前等待r05请求完成、请求后5秒完成态trace和pcap关闭；在证据完成前不得启动r06。此次未编译、反汇编、烧录、源码修改或Git提交。
+
+## 2026-07-16 阶段 F-71：r05复现超时，停止后续轮次
+
+- r05严格空闲后的唯一curl已复现异常：curl已连接并发送85 B GET，`00:44:39.484973`报告`Operation timed out after 3005 milliseconds with 0 bytes received`，headers为0 B且无body。固定pcap为8包：GET=`00:44:36.717197`，板端仅在`.919804`回传零长度ACK（GET后`202.607 ms`），之后没有HTTP header/body/RST；客户端FIN=`.716710`（GET后`2.999513 s`），板端ACK FIN。该边界与F67的“TCP层仍存活但应用HTTP未在客户端时限内输出”现象一致，但不能据此断言相同根因。
+- 请求后超过5秒的COMtool全量只读状态仍为`hreq=5/htseq=5/htact=0`，无`[http-trace] seq=6`；`hclose=0000011c`，且最后正常trace仍为seq5。CAN2 RX继续增长至`27327`，CAN2 errors/bus-off/TEC/REC均为0。缺少seq6本身是故障分类证据，不能把之前seq5完成态套用于r05。
+- 抓包曾先定位错误TTY发送Ctrl-C而未停止；随后定位当前`/dev/ttys004`窗口发送一次Ctrl-C，进程检查确认无`f71-r05` tcpdump，pcap已固定并解码。F71按异常停止条件终止，禁止r06-r10或重发请求。已明确派送F71b只读路径审计，目标是以现有pcap、curl、COMtool及源码/反汇编定位最小下一步诊断或修复边界；本次未编译、反汇编、烧录、源码修改或Git提交。
+
+## 2026-07-16 阶段 F-71b：r05只读路径审计与 F72 定义
+
+- F71b只读审计确认：pcap的W5500纯ACK使接收窗口由`2048`变为`1963`，恰少85 B GET，故可证实请求已被W5500 TCP/RX窗口接收。源码中HTTP任务每50 ms取得W5500互斥锁后调用`w5500_http_status_poll()`；现有F69 trace只有在`ESTABLISHED/CLOSE_WAIT`且稳定`RX_RSR>0`时才`http_trace_begin()`。r05没有seq6，故最窄事实边界是固件未进入该`RX_RSR>0`的trace/handler/record/send路径。
+- 不能由此区分HTTP任务未运行或锁等待、Socket SR不为ESTABLISHED/CLOSE_WAIT、`RX_RSR`稳定读失败，或稳定读返回0；PA7 EXTI虽配置但没有`HAL_GPIO_EXTI_Callback`业务处理，HTTP仍只依赖轮询。`hclose=0000011c`解码为`http_open_listener`（source=1）曾见`CLOSE_WAIT`（0x1c），更符合客户端FIN后的清理记录，不能反推请求已被处理。
+- F72已明确派送：只在“观察到Socket IR的RECV且当前没有活动HTTP trace”时，锁存一次SR、IR、稳定RX_RSR读取结果/值、poll tick/gap和mutex wait；该锁存必须可从既有串口状态读出。不得增加SPI命令、额外重试、延时、状态机、任务优先级或协议行为。完成后由主会话执行构建、反汇编、烧录，并以同一F71异常协议验证；本次审计未编译、反汇编、烧录、源码修改或Git提交。
+
+## 2026-07-16 阶段 F-72：RECV而无RX_RSR预诊断已构建烧录，待运行复验
+
+- 派送实现已最小化完成：在既有SR/IR/稳定`RX_RSR`读取之后，仅当`IR.RECV=1`、无活动HTTP trace且该稳定读取失败或返回0时，首次锁存`hps/hpsr/hpir/hprr/hpr/hpp/hpg/hpwm`；`[bringup] run`输出新增这些字段，缓冲由1536 B增至1792 B以避免尾部截断。没有新增W5500读写/命令、重试、延时、状态机、任务优先级或协议行为。
+- `git diff --check`与`./scripts/verify.sh`通过，host CTest=`14/14`；正式ELF为`build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`89552 B/128 KB=68.32%`、RAM_D1=`240360 B/512 KB=45.85%`、`text/data/bss=89208/332/240024`。定向反汇编确认锁存指令位于原`S0_RX_RSR`稳定读取调用之后，先比较IR bit2、trace inactive和“结果非0或RX_RSR=0”，只写新增全局；原读取错误仍走`http=4/herr++`，原非零路径仍进入HTTP处理，无新增`s0_write`、`s0_command`或延时调用。
+- 已通过OpenOCD/ST-Link烧录当前HEX，实际输出`Programming Finished`、`Verified OK`、`Resetting Target`，目标电压=`3.267470 V`。随后尝试只读COMtool启动基线时，图形串口会话被用户停止；因此尚未确认新增字段的运行输出，也未执行F72空闲60秒复现，当前不得提交或启动F73。
+
+## 2026-07-16 阶段 F-72：r01运行复验（正常样本，诊断未触发）
+
+- 用户确认抓包终端已启动后，主会话仅启动一条固定命令：`/bin/sleep 60` 后唯一执行一次 `GET /api/status`；未操作CANtest、TF、网线或电源。抓包随后已停止，离线pcap为12包：GET=`00:57:01.619780`，首个HTTP 200 header=`.625335`，所以`L_header=5.555 ms`；733 B body=`.628848`，四次挥手于`.630937`完成，无RST或重传。curl trace显示HTTP200，响应体为733 B，正常HTTP trace的`rxSize=85`。
+- COMtool实时只读串口的对应完成态为`[http-trace] seq=1 p=217514 ... hi=217515 hk=217515`；相邻状态为`hreq=1/htseq=1/htact=0/herr=0`，新增预诊断字段为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。这说明正常`RX_RSR>0`路径没有误锁存，新增字段可被UART完整观察；它没有复现F-71 r05故障，因而也没有得到F72所需的锁存分类，不能以此把G-1或F72根因诊断写为通过。
+- 本次只进行已烧录固件的现场运行验证和本地pcap解码，未改源码、未编译、未执行新的反汇编、未再次烧录或提交。前一轮F72的构建、关键反汇编和烧录验证仍保持有效；下一步必须先取得已派送只读审计对“是否继续r02”的固定边界，再决定是否开始下一条唯一请求。
+
+## 2026-07-16 阶段 F-72：r02-r10固定复现边界（派送只读审计）
+
+- 已派送的只读审计根据F72-r01的正常证据确认：应继续相同的独立`60秒空闲→唯一GET→5秒UART→停止抓包`协议，从r02执行，累计最多10轮；CANtest保持既有500 kbit/s持续发送，前一轮完整trace出现前不得进入下一轮。
+- 任一轮出现`hps!=0`、GET后3秒无HTTP header/curl超时、`GET→header>=2秒`、非200、RST、body不完整、无完成态trace、`htseq`不递增、5秒后`htact!=0`，或pcap含额外TCP/80流量，即立即停止，不静默补跑。r05类故障时必须保存pcap/curl/UART并优先读取`hps/hpsr/hpir/hprr/hpr/hpp/hpg/hpwm`。即使r02-r10均短且`hps=0`，结论也只能是该10轮预算未复现，不能写成根因消失或G-1通过。
+- 本次为派送后的只读方案判定；未改源码、编译、反汇编、烧录、HTTP、CANtest或Git提交。
+
+## 2026-07-16 阶段 F-72：r02运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话按固定协议仅执行一条`/bin/sleep 60`后的GET。离线pcap完整为12包：GET=`01:01:18.831569`、首个HTTP 200 header=`.853272`，`L_header=21.703 ms`；733 B body=`.856870`，四次挥手于`.858965`结束，无RST和重传。curl trace为HTTP200、完整733 B body；该连接是唯一GET/唯一TCP/80会话。
+- COMtool完成态为`[http-trace] seq=2 p=475671 ... hi=475672 hk=475672`；连续状态行均为`hreq=2/htseq=2/htact=0/herr=0`，新增预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX继续增长`5212→5234`，CAN2 error/bus-off/TEC/REC均为0。该轮满足r02有效短样本边界，未触发F72锁存，也未复现r05。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。按已派送的固定协议，允许进入r03；任何异常或`hps!=0`即终止后续轮次并保留证据。
+
+## 2026-07-16 阶段 F-72：r03运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定的`/bin/sleep 60`后唯一GET。离线pcap完整为12包：GET=`01:03:50.816501`、首个HTTP 200 header=`.823326`，`L_header=6.825 ms`；733 B body=`.827000`，四次挥手于`.829241`结束，无RST和重传。curl trace为HTTP200、完整733 B body，且该文件仅含一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=3 p=628178 ... hi=628179 hk=628179`；连续状态为`hreq=3/htseq=3/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX继续增长`6540→6561`，CAN2 error/bus-off/TEC/REC均为0。r03满足有效短样本边界，F72锁存没有触发，未复现r05。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。固定协议允许进入r04；任何异常或`hps!=0`立即终止后续轮次并保留证据。
+
+## 2026-07-16 阶段 F-72：r04运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后唯一GET。离线pcap完整为12包：GET=`01:06:06.925345`、首个HTTP 200 header=`.946480`，`L_header=21.135 ms`；733 B body=`.949956`，四次挥手于`.952074`结束，无RST和重传。curl trace为HTTP200、完整733 B body；该pcap没有额外TCP/80流量。
+- 停止抓包时首次按旧TTY定位到错误终端，未产生网络请求或改动现场；随后通过Terminal busy状态定位实际父终端`/dev/ttys002`，发送一次Ctrl-C后进程检查确认无`f72-r04` tcpdump。pcap仍为单一完整12包会话，故不影响本轮有效性。
+- COMtool完成态为`[http-trace] seq=4 p=764785 ... hi=764786 hk=764786`；状态为`hreq=4/htseq=4/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX=`8161→8183`持续增长，CAN2 error/bus-off/TEC/REC均为0。r04为有效短样本，F72锁存未触发，未复现r05。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。固定协议允许进入r05；任何异常或`hps!=0`立即终止后续轮次并保留证据。
+
+## 2026-07-16 阶段 F-72：r05运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:08:53.903690`、首个HTTP 200 header=`.933033`，`L_header=29.343 ms`；733 B body=`.936501`，四次挥手于`.938577`结束，无RST和重传。curl trace为HTTP200、完整733 B body，且仅含一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=5 p=932342 ... hi=932343 hk=932343`；连续状态为`hreq=5/htseq=5/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX=`9607→9618`持续增长，CAN2 error/bus-off/TEC/REC均为0。r05为有效短样本，F72锁存未触发，未复现F71-r05故障。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。F72累计r01-r05均为短样本，但不能推断间歇故障消失；固定协议允许进入r06。
+
+## 2026-07-16 阶段 F-72：r06运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:11:14.009546`、首个HTTP 200 header=`.188302`，`L_header=178.756 ms`；749 B body=`.191940`，四次挥手于`.193905`结束，无RST和重传。curl trace为HTTP200、完整749 B body，且pcap仅含一条TCP/80会话和一条GET。
+- `178.756 ms`高于前五轮但仍低于F72/F71固定的`0.5 s`短样本边界，未达到`>=2 s`或超时停止条件。COMtool完成态为`[http-trace] seq=6 p=1073049 ... hi=1073050 hk=1073050`；状态为`hreq=6/htseq=6/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX=`11001→11012`持续增长，CAN2 error/bus-off/TEC/REC均为0。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。F72累计r01-r06未获得r05类锁存，且不能据此写成根因消失；固定协议允许进入r07。
+
+## 2026-07-16 阶段 F-72：r07运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:13:40.440861`、首个HTTP 200 header=`.473589`，`L_header=32.728 ms`；750 B body=`.477242`，四次挥手于`.479379`结束，无RST和重传。curl trace为HTTP200、完整750 B body，且仅有一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=7 p=1219806 ... hi=1219807 hk=1219807`；状态为`hreq=7/htseq=7/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX持续增长且CAN2 error/bus-off/TEC/REC均为0。r07为有效短样本，F72锁存未触发。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。累计r01-r07均未复现r05，但不能声明根因消失；固定协议允许进入r08。
+
+## 2026-07-16 阶段 F-72：r08运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:16:02.001367`、首个HTTP 200 header=`.051677`，`L_header=50.310 ms`；750 B body=`.055312`，四次挥手于`.057053`结束，无RST和重传。curl trace为HTTP200、完整750 B body，且仅有一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=8 p=1361863 ... hi=1361864 hk=1361864`；状态为`hreq=8/htseq=8/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX持续增长且CAN2 error/bus-off/TEC/REC均为0。r08为有效短样本，F72锁存未触发。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。累计r01-r08均未复现r05，不能声明根因消失；固定协议允许进入r09。
+
+## 2026-07-16 阶段 F-72：r09运行复验（有效短样本，诊断未触发）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:18:18.366890`、首个HTTP 200 header=`.392540`，`L_header=25.650 ms`；750 B body=`.396211`，四次挥手于`.398158`结束，无RST和重传。curl trace为HTTP200、完整750 B body，且仅有一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=9 p=1498670 ... hi=1498671 hk=1498671`；状态为`hreq=9/htseq=9/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX持续增长且CAN2 error/bus-off/TEC/REC均为0。r09为有效短样本，F72锁存未触发。
+- 本次仅运行验证与离线pcap/串口读取；未改源码、编译、反汇编、烧录、CANtest、Git或提交。固定预算仅余r10；无论该轮正常或异常，均需先闭合证据再决定下一阶段。
+
+## 2026-07-16 阶段 F-72：r10运行复验及十轮预算结论（未捕获目标条件）
+
+- 用户确认抓包启动后，主会话只执行固定`/bin/sleep 60`后的唯一GET。离线pcap完整为12包：GET=`01:20:52.592153`、首个HTTP 200 header=`.628416`，`L_header=36.263 ms`；751 B body=`.632148`，四次挥手于`.634178`结束，无RST和重传。curl trace为HTTP200、完整751 B body，且仅有一条TCP/80会话和一条GET。
+- COMtool完成态为`[http-trace] seq=10 p=1653427 ... hi=1653428 hk=1653428`；状态为`hreq=10/htseq=10/htact=0/herr=0`，预诊断字段仍为`hps=0 hpsr=ffffffff hpir=ffffffff hprr=ffffffff hpr=4294967295 hpp=0 hpg=0 hpwm=0`。CAN2 RX持续增长且CAN2 error/bus-off/TEC/REC均为0。r10为有效短样本，F72锁存未触发。
+- F72-r01至r10均严格按“60秒空闲、唯一GET、单pcap、5秒UART观察”边界闭合；每轮HTTP200、无RST/重传、完成trace存在、`hps=0`。十轮`L_header`为`5.555/21.703/6.825/21.135/29.343/178.756/32.728/50.310/25.650/36.263 ms`，均低于`0.5 s`短样本阈值。结论仅是“该F72映像的本10轮预算未复现F71-r05条件”；历史r05的TCP接收但无HTTP处理现象仍是已存在故障证据，根因未消失，新增锁存的异常分支也尚未现场覆盖。
+- 本轮只运行已烧录固件、离线解码和读取COMtool；未改源码、编译、反汇编、烧录、CANtest或Git提交。F72源文件改动虽然已完成构建/反汇编/烧录且正常路径不回归，但未验证其目标异常锁存，不满足提交门槛。下一阶段必须先以现有r05和F72十轮结果定义更窄的、不会改变协议行为的可复现诊断边界；不得把此十轮结果写为HTTP稳定或G-1通过。
+
+## 2026-07-16 阶段 F-73：无trace连接快照与HTTP任务时序上界（派送只读审计）
+
+- F73只读审计确认F72未在十轮正常样本中触发并不否定F72：F72仅覆盖“SR为ESTABLISHED/CLOSE_WAIT、IR读取成功且`IR.RECV=1`、无活动trace、随后`RX_RSR`读取失败或为0”的窄条件。F71-r05的`hclose=0000011c`只说明客户端FIN后见到CLOSE_WAIT，不能证明此前命中F72条件。
+- 下一最小开发边界必须只增加观测：HTTP任务已有mutex取得前、取得后、poll返回后三个边界的最大`poll gap/mutex wait/poll exec`；以及单连接“从未创建F69 trace但到达CLOSE_WAIT”的一次性冻结快照，字段为`no_trace_seq`、该连接`sr_seen_mask`、最后SR、IR读取结果和值、`RX_RSR`读取结果和值和最后poll gap。socket回LISTEN时重置该连接状态；一旦创建F69 trace，正常连接不得触发无trace关闭快照。
+- 设计约束：不得新增任何W5500写命令、SPI读取、重试、延时、优先级或状态机；只复用现有SR/IR/RX_RSR读取结果。复现r05时，任务时序上界与冻结快照才能区分HTTP任务未被调度、mutex等待、poll执行卡住、SR未进EST/CLOSE_WAIT、IR未见/读取失败、或IR.RECV与RX_RSR异常；未复现只可记录覆盖缺口，不能写根因或稳定性结论。本轮仅派送审计，未改源码、编译、反汇编、烧录、HTTP、CANtest或Git提交。
+
+## 2026-07-16 阶段 F-74：无trace连接快照与HTTP任务时序上界（实现、构建、烧录、串口基线）
+
+- 按F73的固定最小边界实现：HTTP任务只记录`poll gap`、mutex等待、poll执行的启动以来最大值`hpmg/hpmw/hpme`；Socket0只复用既有SR/IR/`RX_RSR`读取结果，若一个从未建立F69 trace的连接最终到达`CLOSE_WAIT`，一次性冻结`hnseq/hnmask/hnsr/hnirr/hnir/hnrr/hnr/hngap`。回到LISTEN只重置该连接的内部观测状态。没有增加W5500写命令、SPI读取、重试、延时、优先级或任务状态机。
+- 代码审查中发现把状态行自动缓冲从1536 B直接增至2048 B会令`bringup_print_status`栈帧达到3108 B，而MonitorTask仅为1024个FreeRTOS words（4096 B）。该风险已以最小方式修正为函数内`static char line[2048]`：反汇编显示函数栈帧降为1060 B（加保存寄存器约1096 B），状态缓冲改为BSS；该函数只在启动序列和唯一MonitorTask中调用，不存在并发写者。
+- `git diff --check`通过；`./scripts/verify.sh`通过，host CTest=14/14；固件为`build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`90336 B/128 KB=68.92%`、RAM_D1=`242472 B/512 KB=46.25%`。反汇编确认`http_periodic_task`保留`w5500_mutex_take → w5500_http_status_poll → w5500_mutex_give → vTaskDelay(50)`顺序，新增仅为三段`xTaskGetTickCount`差值/最大值存储；`w5500_http_status_poll`仍复用既有`SR`、`IR`、稳定`RX_RSR`读取，并只在CLOSE_WAIT无trace分支调用冻结函数，未新增`S0`写命令或SPI操作。
+- 已用OpenOCD烧录该HEX，输出`Verified OK`和`Resetting Target`后正常退出；随后确认无残留OpenOCD监听。COMtool只读基线显示RTOS、W5500、HTTP任务、CAN2队列持续运行，新增字段完整输出：早期稳定样本为`hpmg=50 hpmw=0 hpme=0`、`hnseq=0 hnmask=00000000 hnsr=ffffffff hnirr=ffffffff hnir=ffffffff hnrr=ffffffff hnr=4294967295 hngap=0`。这证明F74正常路径未误冻结、UART行未截断；尚未执行F74的严格60秒空闲单GET，未复现F71-r05，因而不能把F74异常分支、根因、G-1或提交门槛写为通过。
+
+## 2026-07-16 项目全量完成度问答盘点
+
+- 依据`PROJECT_FINAL_ACCEPTANCE.md`、`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`和当前工作树核对：硬件启动、外部CAN收发、DBC上传/激活/解码、TF静态页与下电取卡CSV内容、QSPI双槽规则持久化、v2/v3两规则文件和受限HTTP CRUD、规则优先级/安全态、30分钟日志耐久、物理断网恢复、真实CAN bus-off恢复、冷启动配置/DBC/日志恢复均已有现场证据。运行中TF热插拔、无界规则、并发HTTP、鉴权、前端和在线CSV下载是明确非目标，不能列为“缺失功能”。
+- 当前未完成的是稳定性收口而非一组未开发业务功能：历史F71-r05已客观复现“60秒空闲后GET被W5500接收但3秒无HTTP字节”；F72十轮正常预算未捕获，F74已烧录更窄的无trace/CLOSE_WAIT和HTTP任务时序诊断，尚待严格F74-r01取得正常或异常现场证据。异常出现后才能按冻结字段确定最小修复；没有异常则只能记录覆盖缺口，不能宣布根因消失。
+- F74诊断闭合并被现场覆盖后，仍须执行G阶段最终全量复验：同一最终提交重新完成构建/反汇编/烧录，顺序HTTP/API与400语义、外部CAN RX/TX和SignalCache、DBC/runtime、规则v3持久化/继电器、日志计数与下电CSV、网线恢复、250k→500k bus-off恢复、冷启动恢复；最后清洁工作树、文档同步、提交推送、固件/提交哈希汇总。当前F74工作树含未提交源码与文档，故发布完整性也尚未通过。
+- 本条为现状审计问答，未改功能源码、未编译、未执行新的反汇编、烧录、HTTP或CANtest操作；本轮前半段F74构建/反汇编/烧录证据保持有效。
+
+## 2026-07-16 阶段 F-74：r01 抓包准备
+
+- 主会话在启动F74-r01前只读检查本机进程，未发现运行中的`tcpdump`；当前工作树为F74未提交源码和治理文档改动。为取得严格“60秒无TCP/80→唯一GET”的唯一会话证据，需要用户在可输入sudo密码的可见终端启动指定pcap抓包；主会话在收到“抓包已启动”前不发送HTTP请求。CANtest保持当前500 kbit/s持续发送，不要求用户操作CANtest。
+- 本条未改功能源码、未编译、未执行新的反汇编、烧录、HTTP、CANtest或Git操作。
+
+## 2026-07-16 阶段 F-74：r01 无效样本（双请求，保留正常路径观测）
+
+- 用户完成sudo输入后，`/tmp/f74-r01.pcap`抓包成功停止且无残留tcpdump。主会话原计划的60秒等待任务未生成预期curl产物，但其后离线pcap显示它实际已经发送了一条GET；主会话在发现文件为空时又发送了第二条GET。因此该pcap包含两条TCP/80会话，不能冒充“唯一GET”的F74-r01有效样本，也不得据此推进提交。
+- 两条会话本身均正常：第一条GET=`01:35:39.001452`、HTTP header=`.044368`，`L_header=42.916 ms`、body=733 B；第二条GET=`01:35:44.614246`、HTTP header=`.631013`，`L_header=16.767 ms`、body=734 B。两条均为HTTP 200、完整body和正常四次挥手，无RST或重传。显式curl的记录为`http=200/connect=2.602 ms/start=19.550 ms/total=23.411 ms`；其命令尾部使用zsh保留变量`status`产生报错，但curl已经完成，不能错误解释为HTTP失败。
+- COMtool在第二条完成后连续显示`hreq=2/htseq=2/htact=0/herr=0`、`hps=0`和`hnseq=0/hnmask=00000000`，表明无预诊断误锁存、无无trace关闭冻结；任务上界更新为`hpmg=57 ms/hpmw=0/hpme=7 ms`。CAN2 RX=`3189→3321`持续增长，CAN错误/bus-off/TEC/REC均为0。该信息仅是F74正常路径的辅助观测，不覆盖目标异常，也不满足唯一会话验收。
+- 本条仅运行已烧录F74、读取pcap/curl/COMtool；未改功能源码、未编译、未执行新的反汇编、烧录、CANtest或Git操作。下一步必须使用新的pcap文件重新执行一次严格60秒空闲且唯一GET的F74-r02；启动前不得存在其他HTTP命令或遗留测试任务。
+
+## 2026-07-16 一期Web范围扩展：CAN刷新、继电器操作与规则设置
+
+- 用户明确把一期Web目标扩展为：CAN数据刷新显示、继电器操作和规则设置。已据当前实际代码固定为F-75：TF驻留原生单页页面；可见时每1000 ms严格串行读取`/api/can/status`后`/api/signals`；规则设置复用已存在的两槽`/api/rules` CRUD；DBC管理仍复用既有upload/active。
+- 代码实查显示继电器只能由`main.c`的RuleTask经`rule_apply_relays()`写GPIOE7/E8，已有`g_rule_task_manual_enabled/relay1/relay2`手动覆盖输入但尚无HTTP接口。因此F-75允许新增唯一`GET/POST /api/relay/manual`，POST完整提交`enabled/relay1/relay2`，在短临界区原子更新现有覆盖，关闭覆盖后恢复规则；禁止浏览器或HTTP路径直写GPIO。
+- 已同步`PROJECT_FINAL_ACCEPTANCE.md`、`01_Project_Plan.md`、`ARCHITECTURE_DESIGN.md`和`04_Features_ADR.md`。本条为范围/验收定义及只读源码审查，未改功能源码、未编译、未反汇编、未烧录、未操作CANtest或提交。F-75仍以前置F-74获得有效唯一会话诊断分类为条件，不能以新增页面掩盖空闲HTTP故障。
+
+## 2026-07-16 阶段 F-75：Web/继电器接口只读审计
+
+- 派送只读审计确认：现有`GET /`仅服务TF的`/www/index.html`，没有`app.js/style.css`静态路由，故页面必须是单一内嵌CSS/JS HTML；signals最多两项。两槽规则可直接复用`GET /api/rules[/0|/1]`、POST完整表单（含`slot`）和PUT完整表单（不含`slot`）及DELETE空body；解析不URL decode，值必须是数字或`on/off`、`enabled=0/1`。
+- 继电器现有手动覆盖变量为`g_rule_task_manual_enabled/relay1/relay2`，RuleTask每50 ms读取后经`rule_apply_relays()`成为唯一GPIOE7/E8写者，当前无HTTP路由。F-75最小新增固定为`GET/POST /api/relay/manual`：POST完整`enabled/relay1/relay2`，短临界区原子提交并递增request sequence；RuleTask应用后写applied sequence，HTTP最多等100 ms再返回实际输出，超时500；关闭覆盖恢复自动规则。禁止HTTP或页面直写GPIO。
+- CAN页面固定为可见时至多每1000 ms一轮`can/status→等待完整body→至少250 ms→signals→等待完整body→至少250 ms`；任一失败停止自动刷新，用户手动恢复。该窗口沿用既有单socket重监听边界，不能以并发或持续请求掩盖F71-r05。
+- 本审计未改功能源码、未编译、反汇编、烧录、HTTP、CANtest或提交；已同步前端范围文档。F-75仍等待F-74有效唯一会话分类后才可实施。
+
+## 2026-07-16 阶段 F-74：r02 无效样本（抓包认证未完成）
+
+- 为避免r01双请求，主会话把“60秒等待+唯一GET”放入独立终端B执行。curl产物客观为HTTP200、`connect=1.363 ms`、`start=15.734 ms`、`total=19.445 ms`、body=750 B，响应内`httpTrace.seq=3`；这只说明该单次curl正常。
+- 抓包终端的实际文本显示`sudo: a password is required`，`/tmp/f74-r02.pcap`不存在。因此没有有效pcap，无法证明唯一TCP会话、无RST/重传或严格60秒空闲条件，r02不能作为F74验收样本，也不能据此提交。此前进程表中出现的root `sudo tcpdump`不能替代实际终端输出和pcap文件。
+- 本条仅运行已烧录F74、读取curl与终端文本；未改功能源码、未编译、反汇编、烧录、CANtest或Git操作。下一次必须在可见终端确认`listening on en2`后才启动独立终端B；用户输入sudo密码时终端不回显字符，按Return后需实际出现该提示。
+
+## 2026-07-16 一期 Web 功能验收范围确认
+
+- 用户明确一期 Web 必须具备三项可验收功能：CAN 数据刷新显示、继电器操作、规则设置。现有 F-75 边界与此一致：单个 TF 驻留原生页面，页面可见时每 1000 ms 严格串行请求`/api/can/status`、等待至少 250 ms 后请求`/api/signals`；规则页只调用既有两槽`/api/rules` CRUD；继电器只新增`GET/POST /api/relay/manual`，交接给 RuleTask，禁止 HTTP 直接写 GPIO。
+- 每项最终现场验收都必须基于浏览器实际页面、对应顺序 HTTP/pcap、CANtest 外部持续 RX、API 回读及继电器实际输出/寄存器读数；尚未实现、编译、反汇编、烧录或验收。F-75 仍在 F-74 取得有效唯一会话诊断分类之后执行，避免用页面轮询干扰当前间歇 HTTP 问题。
+- 本条为范围与验收记录，未改功能源码、未编译，因此未执行新的反汇编、烧录或 CANtest 操作。
+
+## 2026-07-16 阶段 F-74：r03 抓包准备
+
+- 已确认本机没有残留的目标`tcpdump`进程，也不存在`/tmp/f74-r03.pcap`，随后在可见 Terminal 新开 r03 抓包命令：`sudo tcpdump -i en2 -nn -s 0 -U -w /tmp/f74-r03.pcap 'host 192.168.1.88 and tcp port 80'`。该命令当前等待用户本人完成 sudo 认证；在终端出现`listening on en2`前，主会话不得启动 curl 或任何其他 HTTP 请求。
+- 本条只启动待认证的抓包终端，尚未生成 pcap、未发送 HTTP 请求；未改功能源码、未编译，因此未执行新的反汇编、烧录或 CANtest 操作。
+
+## 2026-07-16 阶段 F-74：r03 唯一会话执行中
+
+- 用户确认抓包已启动；主会话读取可见终端，实际显示`tcpdump: listening on en2, link-type EN10MB`，因此 r03 的 sudo 认证与监听前置已成立。
+- 已在独立终端启动且仅启动一次固定命令：`sleep 60`后运行单个`curl --http1.0 --noproxy '*' --connect-timeout 3 --max-time 3 http://192.168.1.88/api/status`，curl trace/header/body 统一落到`/tmp/f74-r03.*`。在该命令结束前主会话不发送其他 HTTP 请求。
+- 当前仅进入现场等待与抓包阶段，结果尚未产生；未改功能源码、未编译，因此未执行新的反汇编、烧录或 CANtest 操作。
+
+## 2026-07-16 阶段 F-74：r03 有效唯一会话（正常路径分类）
+
+- 可见终端B的唯一curl完成为`http=200/connect=5.531 ms/start=52.365 ms/total=56.846 ms/curl_exit=0`，产生完整`headers`、`body`（750 B）和trace。离线解码`/tmp/f74-r03.pcap`为唯一12包TCP/80会话：GET=`01:53:36.427350`、首个HTTP 200 header=`.473814`，所以`L_header=46.464 ms`；750 B body=`.477631`，四次挥手于`.479406`完成；无RST或重传。
+- COMtool只读状态在同一请求后显示`hreq=4/htseq=4/htact=0/herr=0`、`hps=0`、`hnseq=0/hnmask=00000000`、`hpmg=57/hpmw=0/hpme=7`；`httpTrace.seq=4`存在，CAN2 RX继续从`13937`增长至`14092`，CAN错误、bus-off、TEC、REC均为0。该轮证明F74正常路径、UART状态行和唯一会话协议均有效，且无误冻结。
+- r03未复现F71-r05，故不能把它写成根因消失、异常分支覆盖、HTTP稳定或G-1通过；F74诊断源码不单独提交。F74已取得F-75所要求的有效唯一会话分类，下一阶段可实施受限Web功能，但仍必须保持单请求/重监听限制。
+- 本轮只运行已烧录F74、读取pcap/curl/COMtool；未改功能源码、未编译、反汇编、烧录、CANtest或Git提交。
+
+## 2026-07-16 阶段 F-75：一期 Web/手动继电器源码实现（待烧录）
+
+- 本轮假设：现有socket0仅接受顺序短连接，现有RuleTask仍是PE7/PE8唯一GPIO写者；用户定义的一期功能为CAN刷新显示、继电器操作与两槽规则设置，DBC现有upload/active同步保留。成功标准：仓库存在可部署的单页源，页面不会并发fetch；新手动路由只交接RuleTask覆盖并在100 ms内以序号确认；主机构建与测试通过。现场验证方式留待主会话：关键ELF反汇编、OpenOCD Verify、用户下电覆盖TF`/www/index.html`、浏览器/pcap/API/CANtest/GPIO联合验收。
+- 新增可追溯部署源`www/index.html`（10615 B）：内嵌CSS/JS、无框架/CDN/外部资源。概览手动串行读取`/api/status`与`/api/dbc/runtime`；页面可见时仅以`setTimeout`每1000 ms发起一轮CAN刷新，严格完成`GET /api/can/status`后等待250 ms、再`GET /api/signals`后等待250 ms；页面隐藏、请求失败或任一在途请求时不再发起下一轮。规则页复用`/api/rules`两槽GET/POST/PUT/DELETE，继电器页回读和提交`/api/relay/manual`，DBC页复用现有upload/active。该源尚未写入实际TF，必须由用户下电取卡部署。
+- 新增最小纯模块`include/manual_relay.h`/`src/core/manual_relay.c`和`tests/test_manual_relay.c`，只定义二值手动状态、request/applied序号、零序号绕过；`main.c`在短临界区调用该模块提交或复制覆盖快照，同时保留既有`g_rule_task_manual_*`诊断变量并新增request/applied序号。RuleTask读取一次快照、调用既有`rule_engine_set_manual()`和`rule_apply_relays()`，随后才回写应用序号；`rg`核对GPIOE7/E8的`HAL_GPIO_WritePin`仍只在`rule_apply_relays()`。HTTP路径未直接写GPIO。
+- `w5500_bringup.c`新增唯一`GET/POST /api/relay/manual`（path=10）。POST只接受恰好一次的`enabled`、`relay1`、`relay2`完整`application/x-www-form-urlencoded`二值字段，空值、重复、未知字段、尾随`&`、非二值或不完整请求返回400；合法请求只调用`rule_task_manual_override_submit()`，轮询应用序号最多100 ms，成功200返回实际输入、requestSeq/appliedSeq和两路输出，超时500。未增加GPIO写入、HTTP并发或其他控制路由。
+- 首次主机构建报`src/core/manual_relay.c: NULL undeclared`，原因是缺少`<stddef.h>`；已仅添加该标准头并重跑。之后`git diff --check`通过；`cmake --build build/host`及`ctest --test-dir build/host --output-on-failure`为15/15通过（新增`manual_relay`）；最终`./scripts/verify.sh`再次15/15并成功链接`build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH=`91904 B / 128 KB=70.12%`、RAM_D1=`242480 B / 512 KB=46.25%`、`text/data/bss=91520/372/242104`。另以Node仅解析`www/index.html`内嵌脚本，语法通过；未访问网络或页面。
+- 本派送边界明确禁止反汇编、OpenOCD/GDB、烧录、CANtest/TF现场操作和Git提交，因此本轮已编译但未执行反汇编；后续主会话必须先完成手动交接和HTTP路由的目标ELF反汇编，再烧录Verify及上述现场验收，通过后才可提交推送。当前仅能表述“F-75源码已实现、待目标验证”。
+
+## 2026-07-16 阶段 F-75：主会话独立构建与反汇编复核（待烧录）
+
+- 主会话复核`git diff --check`通过；`./scripts/verify.sh`重新配置并确认host CTest=15/15、链接最终STM32H750 ELF。紧接着独立`ctest --test-dir build/host --output-on-failure`因当前shell未加载工具链环境而首次报`ctest: command not found`；重新`source ./env.sh`后复跑为15/15通过。这是环境PATH问题，不是测试失败。当前目标ELF为`build/stm32h750/can_bus_gateway_stm32h750.elf`，`arm-none-eabi-size`为`text=91520/data=372/bss=242104`。
+- 已生成`objdump -d -S`并检查：`rule_task_manual_override_submit`与snapshot只进入/退出短FreeRTOS临界区并读写手动快照/序号；POST处理路径只调用它们、最多循环`vTaskDelay(1)`至100 ms、没有`HAL_GPIO_WritePin`；`rule_task`先`rule_engine_evaluate`、再唯一调用`rule_apply_relays`，之后才写applied序号。ELF中GPIOE7/PE8的`HAL_GPIO_WritePin`调用仍只位于`rule_apply_relays`。页面内嵌JS已用Node构造检查通过，源码只出现一个`fetch`，没有`setInterval`、`WebSocket`、`EventSource`或`Promise.all`。
+- 结论：F-75静态和主机验证通过，尚未烧录；下一步是OpenOCD烧录`Verified OK`，随后分别验证新API、RuleTask/GPIO状态及用户下电部署后的浏览器页面。未操作CANtest、TF、浏览器或Git提交。
+
+## 2026-07-16 阶段 F-75：烧录与手动继电器 HTTP API 现场验证
+
+- OpenOCD烧录`build/stm32h750/can_bus_gateway_stm32h750.hex`完成，目标电压`3.248193 V`，输出`Programming Finished`、`Verified OK`、`Resetting Target`；烧录会话已`shutdown`且未保留OCD进程。一次短暂停机的连续地址`mdw`虽输出六个字，但其起始地址之后并非全部是手动状态变量，不能据此映射各字段；此前无输出的`mdw`也同样不作为证据。该调试观察不影响已执行的HTTP回读证据。
+- 在保持顺序短连接前提下完成新路由验证：初始`GET /api/relay/manual`为HTTP200，`enabled=0/relay1=0/relay2=0/requestSeq=0/appliedSeq=0/relay1Output=1/relay2Output=0`；`POST enabled=1&relay1=1&relay2=0`为HTTP200、`start=96.638 ms/total=97.227 ms`，回包`requestSeq=1/appliedSeq=1`且两路输出`1/0`；300ms后GET仍回读相同状态。缺少`relay2`的POST为HTTP400且返回`invalid_manual_override`；再等待300ms后`POST enabled=0&relay1=1&relay2=0`为HTTP200、`requestSeq=2/appliedSeq=2`，证明关闭覆盖请求也已由RuleTask确认。关闭后输出仍为`1/0`是自动规则当前结果，不可误写为仍处于手动覆盖。
+- 用户随后要求“操作COMtool先清空当前历史数据，重新读取COMtool”。清空是本机GUI中的局部历史删除；主会话已准备执行，但按操作安全门槛等待用户在动作前确认后才点击清空。当前尚未部署TF页面、未进行浏览器/pcap/CAN页面或规则页面验收，未提交Git。
+
+## 2026-07-16 COMtool 串口监视清理请求
+
+- 用户进一步指定：若COMtool数据过大，应先关闭串口监视，再清空监视页数据，最后重新打开同一串口监视。主会话已确认COMtool可访问文本超过工具返回上限，符合该操作条件；尚未关闭、清空或重开串口。由于“清空”会删除本机监视历史，已在动作前请求用户最终确认，确认后严格按指定顺序执行并读取新的干净输出。
+- 本条仅记录用户操作要求，未改源码、未编译、反汇编、烧录、CANtest、TF或Git操作。
+
+## 2026-07-16 COMtool 关闭、清空、重开操作演示记录
+
+- 用户已自行完成一次“关闭串口监视→清空监视页→重新打开同一串口监视”演示。主会话在演示后只读COMtool，监视页当前从`02:24:24.054`开始共有70条新`[bringup]`行，证明串口监视已重新打开且页面内容为演示后新接收数据；该窗口没有把旧长历史重新返回。
+- 新数据中`rtc=703→737`、`ctsk/wtsk/htsk/dtsk/ttsk/mtsk=1`持续，CAN2 RX=`7722→8095`持续增长，`c2e/c2bo/ctec/crec=0`；HTTP已完成F75关闭覆盖请求，显示`hreq=5/hpath=10/hcode=200/htseq=5/htact=0/herr=0`、`hps=0/hnseq=0`。这仅是当前已烧录旧F75映像的重新监视基线。
+- 后续COMtool历史过大时按用户演示的固定流程执行：先关闭串口监视，清空监视页历史，再用原串口和115200设置重新打开；随后只读取新的`[bringup]`行。主会话不将页面清理等同于固件重启或功能验证。
+
+## 2026-07-16 阶段 F-75：严格合同修复（待重新构建烧录）
+
+- 只读审计发现两个严格验收缺口：旧页面需用户点击才开始CAN刷新，且手动表单解析会接受`00/01`。已最小修复：页面首次可见自动启动、隐藏暂停并在重新可见时只恢复此前被自动暂停的刷新；用户手动停止或请求失败不会自动恢复。手动POST的三个值现必须恰为单字符`0`或`1`，而通用规则数字解析未改。
+- 此修复尚未编译、反汇编、烧录或现场验证；旧烧录映像不含该修复，不能把前述F75 API结果延伸到严格新行为。下一步为`verify.sh`、关键ELF反汇编、OpenOCD烧录及重新验证。
+
+## 2026-07-16 阶段 F-75：严格前端启动与手动表单字面值修复（待重建烧录）
+
+- 应主会话明确边界，仅修改两处功能源码且未执行构建、反汇编、烧录、HTTP、TF、COMtool或Git操作。`www/index.html`首次在可见状态自动调用既有`startCan()`；隐藏时改为仅暂停并记住自动刷新意图，重新可见时自动恢复。原有1000 ms节奏、`/api/can/status → 等待至少250 ms → /api/signals → 等待至少250 ms`、单个`busy`互斥、失败停止和开始/停止按钮均未改变；用户手动停止或失败后不会在可见性变化时自动重启。
+- `w5500_bringup.c`的`http_form_parse_manual_override()`现只接受值跨度恰为一个字符、且字符精确为`'0'`或`'1'`；因此`00`、`01`、`10`及其他多字符/非二值输入均返回400。该收紧只位于手动继电器POST解析器，未改动规则表单仍使用的通用多位数字`http_form_parse_u32()`。既有`tests/test_manual_relay.c`已覆盖纯`ManualRelayState`的二值语义，但它不能调用该文件静态HTTP解析器；本轮未虚构对静态解析器的主机覆盖，也未新增会改变两处最小修复边界的测试装配。
+- 当前开发板已烧录映像不含以上严格修复；主会话必须对当前源码重新构建、检查目标ELF反汇编、OpenOCD `Verified OK`烧录后，才可进行新的HTTP/TF/浏览器/COMtool现场验收或提交。
+
+## 2026-07-16 阶段 F-75：严格修复重建、反汇编与烧录
+
+- 主会话已对严格修复后的当前源码执行`git diff --check`和`./scripts/verify.sh`，后者完成host CTest=15/15并链接目标ELF；再在加载`env.sh`后复跑`ctest --test-dir build/host --output-on-failure`同为15/15。最终ELF为`build/stm32h750/can_bus_gateway_stm32h750.elf`，链接统计FLASH=`91824 B / 128 KB=70.06%`、RAM_D1=`242480 B / 512 KB=46.25%`、`text/data/bss=91440/372/242104`。
+- 已对该最终ELF生成`objdump -d -S`复核：RuleTask先执行`rule_engine_evaluate()`，再调用唯一的`rule_apply_relays()`，再更新应用序号；PE7/PE8写入仍集中在`rule_apply_relays()`。手动POST解析分支先比较值跨度为1，再将字符减去`'0'`并限制结果不大于1，因而多字符`00/01/10`会走400分支；合法POST仍只提交请求并以`vTaskDelay(1)`最多约100 ms等待RuleTask应用。
+- OpenOCD已烧录`build/stm32h750/can_bus_gateway_stm32h750.hex`，目标电压`3.249799 V`，实际输出`Programming Finished`、`Verified OK`和`Resetting Target`；随后进程检查没有残留OpenOCD。严格映像已在板运行，但严格字面值HTTP和复位后串口基线尚待重新读取，不能使用旧映像的API结果代替。
+
+## 2026-07-16 COMtool 清理演示复现准备
+
+- 用户要求主会话实际复现其演示流程。只读检查显示COMtool当前串口为已连接状态（界面按钮为“关闭”），且监视页仍以约每秒一行接收`[bringup]`，页面历史已继续累积；读取到的内容表明当前监视未中断。
+- 预定且仅允许的顺序为“关闭串口监视→清空监视页数据→按原串口和115200重新打开→仅读取新行”。其中清空属于GUI本地历史删除；主会话已在即将执行前请求最终确认，目前未点击关闭、未清空、未重开。因此本条没有源码、构建、反汇编、烧录、CANtest、TF或Git操作。
+
+## 2026-07-16 COMtool 清理演示已由主会话复现
+
+- 用户在动作前明确回复“确认清空”后，主会话实际按固定顺序点击COMtool：先关闭`/dev/cu.usbserial-12230`监视（界面状态“已关闭”），再点击接收区清理按钮使历史输入区变为空，最后以原`115200`设置重新打开。该GUI删除仅影响COMtool当前监视历史，不改变固件、TF或CANtest。
+- 重开后监视页从新映像的`02:30:10.703/rtc=206`开始而非旧历史；其后连续接收至`rtc=231`，`ctsk/wtsk/htsk/dtsk/ttsk/mtsk=1`，CAN2 RX=`2257→2532`，`c2e/c2bo/ctec/crec=0`。说明串口监视已恢复且新页可用。以后数据过大继续按同一流程，不用shell串口读取器与COMtool并行占用串口。
+
+## 2026-07-16 阶段 F-75：严格映像重新现场验证
+
+- 在严格映像复位后，顺序短连接`GET /api/relay/manual`返回200与`enabled=0/relay1=0/relay2=0/requestSeq=0/appliedSeq=0`。合法POST `enabled=1&relay1=1&relay2=0`返回200、`requestSeq=1/appliedSeq=1`与输出`1/0`，后续GET仍为该状态；耗时分别为`84.119 ms`和`22.573 ms`。字面值严格性实测：POST `enabled=01&relay1=1&relay2=0`返回400 `invalid_manual_override`，说明多字符值已拒绝。关闭覆盖POST返回200、`requestSeq=2/appliedSeq=2`；输出`1/0`是当时自动规则结果，不能误称为手动仍生效。
+- 新清空的COMtool窗口末态为`hreq=5/hpath=10/hcode=200/htseq=5/htact=0/herr=0`，CAN2 RX继续增长且错误为0；它与上述五次HTTP请求顺序一致。此轮已完成严格固件的构建、反汇编、OpenOCD `Verified OK`与API/串口现场证据，但没有部署TF页面、浏览器、pcap、规则UI或实际GPIO读数，F-75仍不具备提交条件。
+
+## 2026-07-16 阶段 F-75：等待TF部署外部条件
+
+- 在用户尚未确认“已插入读卡器”期间，主会话仅只读检查`/Volumes`和`diskutil list external physical`；实际只看到`/Volumes`根目录，没有识别到外接TF卷。因此不能复制`www/index.html`，也不能绕过下电取卡条件开始浏览器验收。
+- 本条未改源码、未编译、反汇编、烧录、CANtest、TF或Git；继续等待用户完成下电、取卡并插入读卡器的确认。
+
+## 2026-07-16 阶段 F-75：TF 单页资产已部署，待插回上电
+
+- 用户确认TF已插入读卡器后，只读识别到`/dev/disk4s1`挂载为`/Volumes/NO NAME`（FAT32，15.6 GB），卡内已有`/www`目录。覆盖前仓库`www/index.html`为`10935 B`、SHA-256=`d15e7c502736bab112145e8c45f94dea493d378c3e253ea3d1aca33f7996bdc7`，卡内旧占位页仅`171 B`、SHA-256不同。
+- 已将仓库页面复制到`/Volumes/NO NAME/www/index.html`，执行`sync`后复读为`10935 B`、SHA-256与源文件相同，`cmp -s`退出码0，证明卡内文件逐字节一致；随后`diskutil unmount disk4s1`实际返回`Volume NO NAME on disk4s1 unmounted`，`/Volumes`只剩根目录。此操作只写入用户已授权的TF页面文件，不改固件源码、未触发新的编译/反汇编/烧录、CANtest或Git操作。
+- 下一现场动作必须由用户取出已安全卸载的卡、插回开发板并上电。随后主会话才能确认TF初始化和网页静态服务，并执行浏览器、pcap、CAN刷新、规则UI和继电器联合验收。
+
+## 2026-07-16 阶段 F-75：等待插回上电的只读探测
+
+- 在未收到“已插回并上电”确认时，为避免无谓等待仅执行一次只读网络探测：`ping -c 1 -W 1000 192.168.1.88`为0/1，顺序HTTP `GET /api/status`在连接阶段2.002813秒超时（`http=000`）。该结果只说明此刻开发板未在网络上响应，不能判断TF文件、固件或页面功能失败。
+- 未改源码、未编译、反汇编、烧录、CANtest、TF或Git；继续等待用户插回TF并上电。
+
+## 2026-07-16 F-75 网页本地备份确认
+
+- 用户要求部署网页在本地项目文件夹同时保留备份。实际可追溯源已是仓库`www/index.html`，本次部署正是从该文件复制到TF`/www/index.html`；部署时两者均为`10935 B`、SHA-256均为`d15e7c502736bab112145e8c45f94dea493d378c3e253ea3d1aca33f7996bdc7`、`cmp -s=0`。因此该仓库文件即为本地备份与后续唯一维护源，避免新增易漂移的第二份HTML副本。
+- 本条为文件归属确认，未改网页内容、未编译、反汇编、烧录、CANtest、TF或Git操作。
+
+## 2026-07-16 阶段 F-75：插卡冷启动后的静态页与浏览器初验
+
+- 用户确认TF插回并上电后，等待5秒执行冷启动只读检查：ping=`2/2`（平均`0.905 ms`）；`GET /`为HTTP200、`Content-Type: text/html; charset=utf-8`、`Content-Length=10935`、下载SHA-256=`d15e7c502736bab112145e8c45f94dea493d378c3e253ea3d1aca33f7996bdc7`，与仓库/部署源完全一致；`GET /api/status`为200，`tf.status=0`、W5500 link=1、RTOS ready=1。因此TF页面已在板端被实际服务，不是读卡器侧文件验证。
+- 已用实际浏览器打开`http://192.168.1.88/`，可见标题“CAN 网关控制台”、概览、实时CAN、继电器、两槽规则和DBC区；页面首次可见自动显示“自动 CAN 刷新已启动”。最初外部CAN尚未恢复时页面显示`rx=0/signals=[]`；用户随后确认“已发送信号”后，同一页面显示`can2.rx=240/errors=0/busOff=0/tec=0/rec=0`及`Can2Data.marker=42434`、`Can2Data.sequence=4660`两项`quality=ok`，证明浏览器实际自动刷新可读取外部CAN数据。
+- 为避免在没有抓包证据时持续施压socket0，主会话随后点击页面“停止刷新”，页面明确显示“自动 CAN 刷新已由用户停止”。COMtool同一启动窗口也显示任务均存活、TF初始化成功、`wwwl=10935`，并在用户开始发送前外部RX=0；该先后关系说明早期空signals是输入尚未到达而非页面故障。
+- 浏览器两槽规则“读取”点击未在当前可见DOM中形成规则卡片且无浏览器error日志；因刚停止自动循环时可能仍有在途请求，该观察不能写为规则UI通过或失败，后续在独立、抓包的空闲窗口重新读取。浏览器抓包需要sudo而当前终端授权已过期（`sudo -n`返回需要密码），且Computer Use安全策略不允许代操作macOS Terminal；下一步等待用户在终端启动固定tcpdump后，再进行严格顺序页面/规则/继电器验收。
+
+## 2026-07-16 F-75：外部 CAN 输入恢复确认
+
+- 用户再次确认“已发送信号”，因此后续浏览器轮询与COMtool复核可把CANtest持续输入作为已具备的外部条件；主会话没有请求停止CANtest，也没有据此虚构新的抓包、规则UI或继电器UI结果。
+- 当前仅缺少用户在本机Terminal输入sudo密码启动HTTP抓包；该权限动作必须由用户完成，抓包启动后主会话才会恢复网页自动刷新并采集串行请求证据。本条未改源码、未编译、反汇编、烧录、TF或Git操作。
+
+## 2026-07-16 F-75：抓包终端启动协助
+
+- 用户反馈未看到抓包终端。主会话尝试经Computer Use读取/启动`com.apple.Terminal`，工具明确拒绝（安全策略不允许接管Terminal）；随后仅执行本机`open -a Terminal`请求新开终端窗口，命令正常返回。主会话未能也不会代填sudo密码、运行tcpdump或读取用户终端内容。
+- 仍需用户在新终端粘贴既定tcpdump命令、于`Password:`自行输入密码，并以看到`listening on en2`作为抓包已真正开始的唯一确认。未改源码、未编译、反汇编、烧录、TF、CANtest或Git。
+
+## 2026-07-16 F-75：抓包已启动，浏览器自动化会话受限
+
+- 用户确认抓包已启动；本轮按验收范围只计划恢复网页自动CAN刷新约3秒并停止，不提交规则或继电器写操作。内置浏览器原标签页已不在当前可控会话中，重新创建后其导航报“Tab 1 is not part of browser session”；按浏览器恢复指引检查，当前无受控或用户可认领标签页。Chrome自动化扩展也明确返回不可用。该现象是本机浏览器控制面故障，不能据此推断板端网页、HTTP或抓包异常。
+- 因抓包仍在运行，下一最小外部动作改为用户手动在任意浏览器只打开一次`http://192.168.1.88/`、静候约4秒让页面自动刷新，再告知主会话；主会话将读取本机`/tmp/f75-web-can.pcap`作顺序HTTP证据。未改源码、未编译、反汇编、烧录、TF、CANtest或Git。
+
+## 2026-07-16 阶段 F-75：浏览器抓包发现首启连接竞态并最小修复
+
+- 用户启动`/tmp/f75-web-can.pcap`抓包后，主会话重新取得内置浏览器并实测：首次可见自动刷新显示`can2.rx=5913`、`errors/busOff/tec/rec=0`，两项信号为`marker=42434`、`sequence=4660`、`quality=ok`；手动停止刷新后页面明确显示停止。规则“读取两槽规则”实际返回`source=v3`、两张槽位表单（slot0=`42434/on/1000/1500/priority10`，slot1=`42435/off/0/1500/priority20`）。继电器“读取实际状态”返回`enabled=0/requestSeq=appliedSeq=0/relay1Output=1/relay2Output=0`。本轮没有点击规则保存、删除、DBC激活或继电器提交，故未制造运行态写入。
+- pcap静态页`GET /`为200/`10935 B`；静态连接最终ACK为`02:47:53.921286`，3.797ms后的端口64013 SYN被RST，且该连接没有HTTP负载。首个成功`GET /api/can/status`在约259ms后，随后`/api/signals`在前一响应完整关闭后约253ms发起；24组`can/status→signals`均HTTP200，约1秒周期，规则和手动只读GET也均200。捕获另有端口64018的两次无HTTP负载RST；因此不能把该样本写成“无RST通过”，但HTTP请求本身没有并发或失败证据。
+- 依据上述可复现的首页关闭窗口，仅修改`www/index.html`：首次可见自动启动由立即`startCan()`改为300ms定时启动；`stopCan()`与隐藏暂停会取消该定时器，隐藏发生在首次启动前仍会在恢复可见时自动启动。该300ms由成功首API距静态页关闭约259ms的实测下界加一个50ms任务轮询余量得出；不改CAN节拍、250ms请求间隔、规则/继电器API或固件GPIO路径。
+- 修复后`git diff --check`、内嵌脚本`new Function`语法检查和`./scripts/verify.sh`通过，host CTest=15/15；纯TF资产不参与STM32链接，目标ELF仍为`text/data/bss=91440/372/242104`。反汇编仍确认RuleTask在`rule_engine_evaluate()`后唯一调用`rule_apply_relays()`写PE7/PE8，HTTP手动入口只提交快照。按每步烧录规则，已重新烧录当前HEX，OpenOCD真实输出`Programming Finished`、`Verified OK`、`Resetting Target`，电压`3.268051 V`，随后无残留OpenOCD。当前TF卡内页面仍是修复前版本；必须下电部署新HTML并重新抓包后才可判断首启RST是否消除，未提交Git。
+
+## 2026-07-16 阶段 F-75：300 ms 首启修复页面重新部署到 TF
+
+- 用户确认“TF已插入读卡器”后，主会话重新以实际磁盘状态核对：`/dev/disk4`为15.6 GB外接物理盘，FAT32分区`/dev/disk4s1`挂载到`/Volumes/NO NAME`；仓库实际工作目录仍解析为`/Users/elvin/Desktop/project/can_bus_W5500`，分支`codex/W5500`。
+- 覆盖前卡内页面仍是旧版`10935 B`、SHA-256=`d15e7c502736bab112145e8c45f94dea493d378c3e253ea3d1aca33f7996bdc7`；包含300 ms首启延时修复的仓库`www/index.html`为`11143 B`、SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`。
+- 已只覆盖TF的`/www/index.html`并执行`sync`；复读源与目标均为`11143 B`且SHA-256完全一致，`cmp -s`退出码为0。随后`diskutil unmount disk4s1`实际返回`Volume NO NAME on disk4s1 unmounted`，`/Volumes`中不再存在该挂载点，卡已安全卸载。
+- 本步只部署已验证的网页资产，没有修改固件源码，因此本次未重新编译，也没有产生新的反汇编；该资产修复此前已完成`verify.sh`、15/15 CTest、最终ELF反汇编和同HEX OpenOCD `Verified OK`烧录。本步尚未形成板端冷启动静态页哈希或修复后pcap证据，下一步必须由用户把卡插回仍处于断电状态的开发板并上电，再继续验证；当前仍不可提交。
+
+## 2026-07-16 阶段 F-75：等待插回上电状态复核
+
+- 在尚未收到用户“已插回并上电”的明确确认时，目标续行只进行一次只读外部状态复核：`diskutil`仍识别`/dev/disk4s1`但该分区未挂载，`/Volumes`不存在`NO NAME`；这与卡仍位于读卡器且已安全卸载的状态一致。
+- 同次`ping -c 1`为0/1，顺序`GET /api/status`在连接阶段约1.004秒超时并返回`http=000`。该结果只证明开发板此刻尚未恢复网络，不能解释为TF页面、固件或300 ms修复失败。
+- 本次未改源码或TF内容，未编译、反汇编、烧录、操作CANtest、浏览器或Git；仍等待用户从读卡器拔出卡，在开发板断电状态插回并上电后回复确认。
+
+## 2026-07-16 阶段 F-75：外部插卡上电条件连续阻断
+
+- 在页面已写入并安全卸载后，连续三个目标轮次均未收到“已插回并上电”的用户确认；板端冷启动静态页哈希、`tf.status=0`及300 ms修复后pcap都必须依赖该现场动作，主会话不能代替用户完成物理插卡和上电。
+- 该同一外部条件已达到目标的连续三轮阻断阈值，因此本次将持续目标标记为`blocked`。这不是代码或网页失败，也不撤销已完成的TF部署、构建、反汇编和烧录证据；用户完成插回上电并回复后，应作为新的阻断审计立即恢复F-75验证。
+- 本次未改源码或TF，未编译、反汇编、烧录、操作CANtest、浏览器或Git。
+
+## 2026-07-16 阶段 F-75：300 ms 修复页面冷启动服务验证
+
+- 用户明确回复“已插回并上电”，因此此前外部阻断条件解除并按新的阻断审计恢复F-75。等待5秒后，`diskutil list external physical`不再列出TF读卡器磁盘；开发板`ping`为2/2，平均`0.743 ms`。
+- 板端冷启动后的`GET /`实际返回HTTP200；下载页面与仓库`www/index.html`均为`11143 B`、SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`，`cmp -s`退出码0，证明运行板实际服务的是包含300 ms修复的页面，而不是读卡器缓存或旧页面。
+- 顺序`GET /api/status`返回HTTP200，`rtos.started/ready=1/1`、W5500 `status/link/version=0/1/4`、`tf.status=0`、QSPI状态0。该请求本次首字节约1.054秒但在4秒预算内完整返回；这不是首启页面抓包，不能用来判断300 ms窗口或RST。
+- 本次未改源码、TF或CANtest，未重新编译、反汇编或烧录，也未提交Git。下一步必须启动全新pcap，只重载页面一次并验证静态连接结束至首API SYN至少300 ms、成功CAN/status和signals及全窗口RST=0。
+
+## 2026-07-16 阶段 F-75：300 ms 修复页面独立抓包窗口已执行
+
+- 用户确认抓包终端已显示启动后，只读进程检查确认`/tmp/f75-delay300.pcap`存在且由tcpdump持有；开始前文件只有24 B全局头，没有既存测试报文。主会话随后取得当前内置浏览器标签页，只执行一次页面重载，等待约4秒让自动刷新运行，再点击唯一“停止刷新”按钮；没有读取/提交规则、继电器或DBC写操作。
+- 重载后页面明确显示“自动 CAN 刷新已启动”，可见CAN2状态为`rx=1826/tx=242/errors=0/busOff=0/tec=0/rec=0/sendResult=0`，两项signals为`marker=42434`、`sequence=4660`、`quality=ok`。停止时页面明确显示“自动 CAN 刷新已由用户停止”，CAN2已增长至`rx=1925/tx=252/poll=251`且错误字段仍全0，两项signals更新时间继续推进。
+- 本次页面行为已证明修复后资产能自动串行刷新外部CAN数据并可停止；但tcpdump尚未由用户按Ctrl-C结束，因此不能提前解析pcap、断言静态连接到首API的间隔或宣称RST=0。下一步仅等待用户停止抓包并回复，随后离线分析固定pcap。
+- 本次未改源码、TF或CANtest，未重新编译、反汇编、烧录或提交Git。
+
+## 2026-07-16 阶段 F-75：等待抓包封口复核
+
+- 在尚未收到用户“抓包已停止”确认时，只读检查显示`/tmp/f75-delay300.pcap`已增长到`58213 B`，但tcpdump相关进程仍存在，说明文件尚未由用户按Ctrl-C正常封口。主会话没有读取该活动pcap，也没有继续制造浏览器HTTP流量。
+- 本次未改源码、TF或CANtest，未编译、反汇编、烧录、浏览器操作或Git；继续等待用户在抓包终端按`Control+C`并回复“抓包已停止”。
+
+- 第二次目标续行复核仍显示实际`tcpdump` PID 41022运行约2分36秒，其父级sudo进程也在，pcap大小保持`58213 B`；因此不能把没有`lsof`输出误判为已停止。主会话仍未读取活动pcap或制造新HTTP流量。本次同样未改源码、TF、CANtest或Git，未编译、反汇编、烧录或浏览器操作。
+
+## 2026-07-16 阶段 F-75：300 ms 首启修复独立pcap通过
+
+- 用户明确确认“抓包已停止”后，主会话才离线读取封口的`/tmp/f75-delay300.pcap`；固定文本解码保存为`/tmp/f75-delay300.pcap.txt`。该包共391帧、29个客户端新建连接，内容严格为1次`GET /`、14次`GET /api/can/status`和14次`GET /api/signals`，29个响应全部为`HTTP/1.1 200 OK`。
+- 静态页连接最终ACK时间为`20:51:57.924004`，首个CAN状态API SYN为`20:51:58.227507`，精确间隔`303.503 ms`，达到修复设定的至少300 ms门槛。所有后续连接都在前一连接最后一个包之后再发起；按相邻最终包到下一SYN统计最小间隔`252.646 ms`、最大`694.199 ms`，与页面两个API间至少250 ms及每轮约1秒节奏一致。
+- 全包按TCP RST标志过滤为0，文本中无retransmission/duplicate ACK/out-of-order标记。结合页面可见CAN RX增长、两项signals正确和所有HTTP200，F-75的“修复后首页首次自动启动、严格顺序CAN刷新、全窗口零RST”网络验收通过；该结论只覆盖本次固定抓包窗口，不扩大为无限期HTTP稳定性。
+- 本次未改源码、TF或CANtest，未重新编译、反汇编、烧录或提交Git。下一步是浏览器规则保存/恢复和手动继电器提交；这些动作会写入开发板配置或GPIO，必须在动作前取得明确确认并在完成后恢复原始状态。
+
+## 2026-07-16 阶段 F-75：规则页面与手动继电器/GPIO最终验收
+
+- 用户明确回复“确认执行”后，主会话按预先说明的可恢复动作顺序操作实际浏览器页面。规则页读取两槽基线后，把slot1 threshold从`42435`临时改为`42436`，保存并重新读取确认；随后恢复`42435`并再次回读，其他字段未改。最终顺序`GET /api/rules`确认slot0/slot1回到原始配置。
+- 第一次浏览器手动提交`enabled=1/relay1=0/relay2=1`时，串口已记录`hreq=41/hpath=10/hcode=200`且RTOS任务、CAN收发和错误计数持续正常，但浏览器最终显示`Failed to fetch`，随后主机ping/curl暂时不通。该现象不能写成MCU崩溃，也不能把handler 200冒充浏览器成功；一次明确OpenOCD `reset run`后，ping恢复2/2，规则持久配置保持原值，手动状态恢复为disabled、输出`1/0`。
+- 浏览器重新载入并停止自动刷新后，第二次实际提交相同手动值成功：页面显示“RuleTask已确认应用请求1”，API为`enabled=1/relay1=0/relay2=1/requestSeq=1/appliedSeq=1/outputRelay1=0/outputRelay2=1`。一次把多个OpenOCD子命令放入同一字符串的读取只完成halt、未输出mdw或resume，立即改用分离`-c`命令重做；成功读数为`g_rule_task_manual_applied_seq/request_seq=1/1`、manual active/relay2/relay1=`1/1/0`、GPIO快照/实际GPIOE ODR均=`0x100`，随后显式resume/shutdown。
+- 浏览器随后关闭手动覆盖并提交`relay1=0/relay2=0`，页面显示请求2；最终API为`enabled=0/requestSeq=2/appliedSeq=2/outputRelay1=1/outputRelay2=0`，精确ELF地址和GPIOE ODR均为`0x80`，证明RuleTask恢复自动规则，而非固定手动值。最终ping=2/2，规则API保持原始值，`pgrep -x openocd`及3333/4444/6666监听均为空。
+- F-75按用户固定的一期Web三项核心达到功能提交门槛：CAN刷新、规则设置、继电器操作均由实际页面和板端证据闭环。该结论不覆盖HTTP长期稳定性；首次手动提交的响应交付异常保留为下一阶段F-76唯一目标。DBC页面区域仍存在并复用既有API，但本次未通过浏览器重新执行upload/active，不把历史API结果冒充本次页面证据。
+- 本次收口只修改治理/记录文档，没有再次修改固件源码，也未重新编译，因此未执行新的反汇编检查或烧录；F-75功能源码此前已完成`./scripts/verify.sh`、15/15 CTest、最终ELF关键反汇编与OpenOCD `Verified OK`烧录，页面300 ms资产也已重新部署并以哈希/pcap验证。
+
+## 2026-07-16 阶段 F-75：提交前独立门槛审计与最终检查
+
+- 已派送的只读审计明确确认：按用户固定的CAN刷新、规则设置、继电器操作三项，一期Web功能证据满足提交门槛；同时指出治理文档仍停留在待验收，且本次没有浏览器DBC upload/active证据。主会话据此同步`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、`PROJECT_FINAL_ACCEPTANCE.md`和`05_Lessons.md`，把三项核心通过、DBC页面未复验及首次HTTP交付异常分开记录。
+- 提交前再次执行`./scripts/verify.sh`：host 15/15 CTest全部通过，host和STM32 Ninja均报告`no work to do`，因此这一步没有发生新的编译。仍对当前最终ELF执行目标反汇编复核：`rule_task`调用顺序保持`rule_engine_evaluate→rule_apply_relays→manual_relay_state_mark_applied`；`rule_task_manual_override_submit`只调用纯状态提交；运行态PE7/PE8写入仍集中在`rule_apply_relays`，另有启动GPIO初始化调用。ELF尺寸`text/data/bss=91440/372/242104`。
+- 当前HEX SHA-256=`9ba6906eb6da04549eb8dc1eab14e7d5d7a30406a4d7083428e7359640b926dd`，ELF SHA-256=`d9e20ad31a812d74f0def99b29abc45e4d7590601a4b895cfd1335a8d807bd6f`，与本次检查前完全一致，故仍是此前OpenOCD `Verified OK`烧录并完成现场验收的同一固件映像；没有因文档收口产生新固件，也未重复烧录。`git diff --check`通过，OpenOCD进程和3333/4444/6666监听为空。

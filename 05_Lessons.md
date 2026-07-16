@@ -55,6 +55,7 @@
 - L-070：W5500 物理链路恢复不能用启动配置状态代替。F-14 只有同时观察到 `g_w5500_link_up/PHYCFGR bit0` 的 `1→0→1`、W5500/HTTP任务循环持续增长、断网 curl 超时、恢复后的 ping/API成功和 HTTP request 增长/error不增，才可写为网线断开恢复通过；`network_configured=1`、`init_result=0` 与 `last_code=200` 单独均不足以证明恢复。
 - L-071：W5500 的 `SENDOK`/内部HTTP200仅证明芯片接受发送，不保证TCP优雅完成。成功响应同轮 `DISCON→CLOSE` 会在实板形成主机RST；必须等待 `Sn_SR` 进入 CLOSED/INIT 后才重新监听。当前单 socket/50ms轮询在关闭重监听间有短窗口，验收和客户端操作应在短连接间留至少一个轮询周期（本轮250ms）；这不是并发HTTP能力。
 - L-072：zsh 的 `path` 是连接到 `PATH` 的保留数组，不能用作脚本循环变量。F-17 首轮因此在主机端得到 curl exit=127，但未访问或写入目标；此类主机脚本错误必须明确排除，不得作为固件回归或成功证据。
+- L-073：页面显示`Failed to fetch`时，板端handler记录HTTP 200只证明业务处理完成，不证明响应已被浏览器收到，也不证明socket已恢复监听。必须把浏览器结果、同一连接pcap、后续ping/API、串口trace和W5500寄存器分层记录；若以OpenOCD停机读取，命令应分步执行并显式`resume`/`shutdown`，不能把遗漏恢复造成的网络中断算作固件故障。
 - L-026：新建 Codex 会话的短时无 shell 进程、长推理或延后显示工具输出不能证明其异常关闭。排查时应先读取 turn 的 `status/error`；只有明确错误、用户要求或不可恢复冲突才归档。2026-07-11 两个 `interrupted/error=null` 会话均由根会话手动归档，而非系统自动关闭。
 - L-027：尚未定义正式配置数据和备份地址时，最小 ConfigTask 只能拥有既有的显式 QSPI 诊断写路径；用默认启动的 `erase_count=0` 与单次请求后的 `erase_count=1/diagnostic_count=1` 分别证明默认安全和任务实际执行，不能把它表述为配置保存。
 - L-028：单规则持久化的第一份正式 QSPI 记录固定使用独立扇区 `0x00FFE000`，绝不复用 `0x00FFF000` 诊断区。启动加载只能读；保存必须经 ConfigTask 显式请求，校验 magic/version/checksum/参数关系并读回比较。验收至少要覆盖空扇区、非默认配置跨复位恢复，以及恢复默认配置，不能只凭一次写入成功声称持久化。

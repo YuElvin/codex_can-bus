@@ -186,15 +186,20 @@ API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列
 
 ## 9. 前端页面计划
 
-SPA 使用 hash tab：概览、实时数据、DBC 管理、CAN 发送、日志、规则、系统设置。
+一期前端固定为TF驻留的单页原生HTML/CSS/JS控制台，入口仅为`/`和`/index.html`，实际文件为`/www/index.html`。页面必须只使用当前已实现的HTTP路由，不能把本设计中的未来CAN发送、日志下载、系统设置等路线当作已交付API。
 
-资源限制：
+- 概览页：手动读取并显示`/api/status`和`/api/dbc/runtime`。
+- 实时数据页：页面可见时每1000 ms严格依次读取`/api/can/status`、`/api/signals`，每个完整响应后至少等待250 ms重监听窗口；只渲染当前响应中的有限项；任一请求未完成或失败时停止自动刷新，等待用户手动恢复。
+- DBC页：本地文本文件在当前`POST /api/dbc/upload`请求体上限内上传，展示既有parser报告；用户明确确认后调用既有`POST /api/dbc/active`，并读取`/api/dbc/runtime`确认激活。
+- 规则页：读取`/api/rules`和详情；通过既有`POST /api/rules`、`PUT/DELETE /api/rules/0|1`提交两槽规则，随后重新读取列表/详情。页面必须原样展示400/404/409/500响应，不能在浏览器伪造成功。
+- 继电器页：新增唯一`GET/POST /api/relay/manual`。POST必须提交`enabled`、`relay1`、`relay2`三个完整`0|1`字段；固件在短临界区原子更新现有手动覆盖快照并递增请求序号，RuleTask实际应用后回写应用序号。GET和成功POST返回`enabled/relay1/relay2/requestSeq/appliedSeq/relay1Output/relay2Output`；HTTP最多等待100 ms确认`appliedSeq==requestSeq`，否则返回500。RuleTask仍为唯一`rule_apply_relays()`和GPIOE写入者。`enabled=0`只取消覆盖并恢复规则计算，页面不得直接写GPIO或把请求已发出显示成继电器已切换。
 
-- HTML/CSS/JS 总量建议 <150KB，压缩后放 `/www/`。
-- 不引入大型框架和图标库。
-- 表格分页，不一次渲染数千信号。
-- 实时数据默认 1s 轮询，二期再换 SSE/WebSocket。
-- 错误提示中文化，上传显示字节进度。
+资源与并发边界：
+
+- 页面使用内嵌CSS/JS或同文件资源，不使用框架、CDN、字体库或第三方网络资源；最终跟踪源资产放仓库，TF部署过程可复现。
+- 所有`fetch`必须串行：前一个请求完成并消费响应后才能开始下一个；仅CAN/信号允许页面可见时1000 ms低频顺序刷新，其他刷新由用户点击触发。不得并发请求、SSE/WebSocket、后台高频刷新或用页面掩盖socket0重监听窗口。
+- 页面不实现CAN原始发送、周期发送、日志浏览/下载、系统设置、鉴权、TLS或无限规则模型；这些不是一期目标。
+- 每次前端源码变更仍按固件阶段流程构建、反汇编、烧录；TF上实际页面更新只允许用户在开发板下电后取卡完成，重新插卡上电后再由浏览器、pcap和现有API联合验收。
 
 ## 10. 文件系统与配置
 
@@ -337,3 +342,11 @@ F-17 修复了 CAN错误被动恢复后观察到的 socket0 HTTP RST：正常响
 F-25 在 `capture_can2_status()` 的真实 BO 分支加入最小恢复状态机：逐位 Abort 已挂起的 `TXBRP` 请求后 `HAL_FDCAN_Stop()`，且仅 Stop 成功时 `HAL_FDCAN_Start()`；首次立即、持续 BO 每1000ms最多一次，正常状态清除私有 latch。不采用 DeInit/Init，不改 CAN 参数、过滤器、任务或队列。错误250k现场实测真实 BO 后 `attempt=44/result=0`、`CCCR.INIT=0/PSR.BO=0/TXBRP=0`，恢复500k后外部 RX 与 SignalCache 持续更新、TEC降至0，完成不复位 bus-off 恢复验证。
 
 F-26 只读审计确认静态文件服务只映射 `/` 和 `/index.html`，没有 `/log/*` 或 CSV 下载 API；不为最终验收扩大 HTTP 范围。外部 CAN 正常输入、两次 LogTask write/flush/size 增长后，用户完全下电取卡；主机只读 `/log/signal.csv` 为 `971532 B/16975`行，唯一表头、零字段错误、7024组 marker/sequence 同时间戳 `quality=ok` 记录并以完整对结束。文件比最近板端 `968052 B` 多3480 B，符合人工断电间隔的继续追加；由于读数和人工断电不可原子同步，验收采用“文件不小于最近读数且完整成对尾部”，不强求绝对相等。该证据不覆盖热插拔、在线下载或并发文件服务。
+
+## F-75 一期 Web 控制台实现与验收
+
+TF中的`/www/index.html`由仓库`www/index.html`唯一维护，使用原生HTML/CSS/JS和单一`fetch`调度；首次自动CAN刷新在静态连接结束后延迟300 ms，之后按`/api/can/status→至少250 ms→/api/signals→至少250 ms`串行执行，页面隐藏、用户停止或请求失败均不继续发起新轮次。规则界面复用两槽`/api/rules`；手动继电器只经`GET/POST /api/relay/manual`提交完整快照，HTTP不写GPIO，RuleTask仍通过`rule_apply_relays()`唯一写PE7/PE8。
+
+一期三项核心已经客观闭环：板端页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap中1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；规则页面实际完成slot1 threshold `42435→42436→42435`保存、读取和恢复；手动继电器页面提交`enabled=1/relay1=0/relay2=1`后RuleTask请求/应用序号=`1/1`、GPIOE ODR=`0x100`，关闭覆盖后序号=`2/2`、ODR=`0x80`并恢复自动规则。
+
+首次手动页面提交曾出现handler记录200但浏览器`Failed to fetch`且网络需复位恢复，因此架构结论仅覆盖功能路径，不覆盖HTTP长期稳定。下一阶段F-76必须在单socket边界内复现和修复响应交付异常，禁止扩展Web功能。DBC页面控制保留并复用既有API，但本次未在浏览器重做upload/active，不将历史API验证写成本次页面证据。

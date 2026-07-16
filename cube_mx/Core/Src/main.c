@@ -33,6 +33,7 @@
 
 #include "FreeRTOS.h"
 #include "platform/stm32h750_bringup.h"
+#include "manual_relay.h"
 #include "rule_config.h"
 #include "rule_engine.h"
 #include "rule_file.h"
@@ -100,6 +101,9 @@ volatile uint32_t g_w5500_task_started;
 volatile uint32_t g_w5500_task_loop_count;
 volatile uint32_t g_http_task_started;
 volatile uint32_t g_http_task_loop_count;
+volatile uint32_t g_http_task_poll_gap_max_ms;
+volatile uint32_t g_http_task_mutex_wait_max_ms;
+volatile uint32_t g_http_task_poll_exec_max_ms;
 volatile uint32_t g_w5500_mutex_ready;
 volatile uint32_t g_dbc_task_started;
 volatile uint32_t g_dbc_task_loop_count;
@@ -153,6 +157,8 @@ volatile uint32_t g_rule_task_manual_enabled;
 volatile uint32_t g_rule_task_manual_relay1;
 volatile uint32_t g_rule_task_manual_relay2;
 volatile uint32_t g_rule_task_manual_active;
+volatile uint32_t g_rule_task_manual_request_seq;
+volatile uint32_t g_rule_task_manual_applied_seq;
 volatile uint32_t g_rule_task_condition_since_ms;
 volatile uint32_t g_rule_task_delay_pending;
 volatile uint32_t g_rule_task_hysteresis_latched;
@@ -274,6 +280,22 @@ extern volatile uint32_t g_w5500_http_trace_status_body_end_tick;
 extern volatile uint32_t g_w5500_http_trace_header_send_enter_tick;
 extern volatile uint32_t g_w5500_http_trace_header_send_issued_tick;
 extern volatile uint32_t g_w5500_http_trace_header_sendok_tick;
+extern volatile uint32_t g_w5500_http_pretrace_seq;
+extern volatile uint32_t g_w5500_http_pretrace_sr;
+extern volatile uint32_t g_w5500_http_pretrace_ir;
+extern volatile uint32_t g_w5500_http_pretrace_rx_rsr_result;
+extern volatile uint32_t g_w5500_http_pretrace_rx_rsr;
+extern volatile uint32_t g_w5500_http_pretrace_poll_tick;
+extern volatile uint32_t g_w5500_http_pretrace_poll_gap_ms;
+extern volatile uint32_t g_w5500_http_pretrace_mutex_wait_ms;
+extern volatile uint32_t g_w5500_http_no_trace_seq;
+extern volatile uint32_t g_w5500_http_no_trace_sr_seen_mask;
+extern volatile uint32_t g_w5500_http_no_trace_last_sr;
+extern volatile uint32_t g_w5500_http_no_trace_last_ir_result;
+extern volatile uint32_t g_w5500_http_no_trace_last_ir;
+extern volatile uint32_t g_w5500_http_no_trace_last_rx_rsr_result;
+extern volatile uint32_t g_w5500_http_no_trace_last_rx_rsr;
+extern volatile uint32_t g_w5500_http_no_trace_last_poll_gap_ms;
 extern volatile uint32_t g_w5500_http_static_count;
 extern volatile uint32_t g_w5500_http_static_read_result;
 extern volatile uint32_t g_w25q128_jedec_id;
@@ -333,10 +355,10 @@ static void bringup_uart_write(const char *text)
 
 static void bringup_print_status(const char *phase)
 {
-  char line[1536];
+  static char line[2048];
   (void)snprintf(line,
                  sizeof(line),
-                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu cfgqr=%lu cfgqe=%lu cfgqd=%lu cfgdrop=%lu cfgcmd=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hir=%08lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu hclose=%08lx htseq=%lu htact=%lu htm0=%lu htm1=%lu htmm=%lu htrx=%lu htrxs=%lu hthe=%lu htrc=%lu htre=%lu htrs=%08lx htds=%lu htde=%lu htwc=%lu htwf=%lu htwl=%lu\r\n",
+                 "[bringup] %s rtos=%lu rtc=%lu rdy=%lu ctsk=%lu ctlp=%lu c2dts=%lu c2dtl=%lu c2qr=%lu c2qe=%lu c2qd=%lu c2qdrop=%lu c2tqr=%lu c2tqe=%lu c2tqd=%lu c2tqdrop=%lu wtsk=%lu wtlp=%lu htsk=%lu htlp=%lu hpmg=%lu hpmw=%lu hpme=%lu wm=%lu dtsk=%lu dtlp=%lu dreq=%lu dcmp=%lu dr=%lu dq=%lu denq=%lu ddrop=%lu ttsk=%lu tdone=%lu tres=%lu mtsk=%lu mtlp=%lu cfgqr=%lu cfgqe=%lu cfgqd=%lu cfgdrop=%lu cfgcmd=%lu can=%d ctx=%lu crx=%lu ce=%lu cbo=%lu ctec=%lu crec=%lu cid=%08lx cdl=%lu cd0=%02lx cext=%d extx=%lu exrx=%lu exe=%lu exbo=%lu extec=%lu exrec=%lu exid=%08lx exdl=%lu exd0=%02lx can2=%d c2tx=%lu c2rx=%lu c2e=%lu c2bo=%lu c2tec=%lu c2rec=%lu c2id=%08lx c2dl=%lu c2d0=%02lx c2sr=%lu c2pc=%lu qspi=%d qid=%06lx qsr=%02lx qaddr=%06lx qmi=%lu qe=%02lx qa=%02lx qhs=%lu tf=%d fsm=%lu fsl=%lu www=%lu wwwl=%lu w=%d wir=%lu wv=%02lx wp=%02lx wl=%lu wn=%lu http=%lu hsr=%02lx hir=%08lx hreq=%lu hpath=%lu hcode=%lu hstatic=%lu hsrd=%lu herr=%lu sdh=%lu sde=%08lx sds=%08lx sdc=%lu hclose=%08lx htseq=%lu htact=%lu hps=%lu hpsr=%02lx hpir=%08lx hprr=%08lx hpr=%lu hpp=%lu hpg=%lu hpwm=%lu hnseq=%lu hnmask=%08lx hnsr=%02lx hnirr=%08lx hnir=%08lx hnrr=%08lx hnr=%lu hngap=%lu htm0=%lu htm1=%lu htmm=%lu htrx=%lu htrxs=%lu hthe=%lu htrc=%lu htre=%lu htrs=%08lx htds=%lu htde=%lu htwc=%lu htwf=%lu htwl=%lu\r\n",
                  phase,
                  (unsigned long)g_freertos_task_started,
                  (unsigned long)g_freertos_loop_count,
@@ -357,6 +379,9 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_w5500_task_loop_count,
                  (unsigned long)g_http_task_started,
                  (unsigned long)g_http_task_loop_count,
+                 (unsigned long)g_http_task_poll_gap_max_ms,
+                 (unsigned long)g_http_task_mutex_wait_max_ms,
+                 (unsigned long)g_http_task_poll_exec_max_ms,
                  (unsigned long)g_w5500_mutex_ready,
                  (unsigned long)g_dbc_task_started,
                  (unsigned long)g_dbc_task_loop_count,
@@ -443,6 +468,22 @@ static void bringup_print_status(const char *phase)
                  (unsigned long)g_w5500_http_last_nonclosed_close,
                  (unsigned long)g_w5500_http_trace_seq,
                  (unsigned long)g_w5500_http_trace_active,
+                 (unsigned long)g_w5500_http_pretrace_seq,
+                 (unsigned long)g_w5500_http_pretrace_sr,
+                 (unsigned long)g_w5500_http_pretrace_ir,
+                 (unsigned long)g_w5500_http_pretrace_rx_rsr_result,
+                 (unsigned long)g_w5500_http_pretrace_rx_rsr,
+                 (unsigned long)g_w5500_http_pretrace_poll_tick,
+                 (unsigned long)g_w5500_http_pretrace_poll_gap_ms,
+                 (unsigned long)g_w5500_http_pretrace_mutex_wait_ms,
+                 (unsigned long)g_w5500_http_no_trace_seq,
+                 (unsigned long)g_w5500_http_no_trace_sr_seen_mask,
+                 (unsigned long)g_w5500_http_no_trace_last_sr,
+                 (unsigned long)g_w5500_http_no_trace_last_ir_result,
+                 (unsigned long)g_w5500_http_no_trace_last_ir,
+                 (unsigned long)g_w5500_http_no_trace_last_rx_rsr_result,
+                 (unsigned long)g_w5500_http_no_trace_last_rx_rsr,
+                 (unsigned long)g_w5500_http_no_trace_last_poll_gap_ms,
                  (unsigned long)g_w5500_http_trace_mutex_wait_start_tick,
                  (unsigned long)g_w5500_http_trace_mutex_wait_end_tick,
                  (unsigned long)g_w5500_http_trace_mutex_wait_ms,
@@ -502,6 +543,53 @@ static void rule_apply_relays(const RelayState relays[RULE_RELAY_COUNT])
   g_rule_task_relay1_output = (uint32_t)relays[0];
   g_rule_task_relay2_output = (uint32_t)relays[1];
   g_rule_task_gpioe_odr = GPIOE->ODR;
+}
+
+int rule_task_manual_override_submit(uint32_t enabled,
+                                     uint32_t relay1,
+                                     uint32_t relay2,
+                                     uint32_t *request_seq)
+{
+  ManualRelayState state;
+  int result = 1;
+
+  taskENTER_CRITICAL();
+  state.enabled = g_rule_task_manual_enabled;
+  state.relay1 = g_rule_task_manual_relay1;
+  state.relay2 = g_rule_task_manual_relay2;
+  state.request_seq = g_rule_task_manual_request_seq;
+  state.applied_seq = g_rule_task_manual_applied_seq;
+  if (manual_relay_state_submit(&state, enabled, relay1, relay2)) {
+    g_rule_task_manual_enabled = state.enabled;
+    g_rule_task_manual_relay1 = state.relay1;
+    g_rule_task_manual_relay2 = state.relay2;
+    g_rule_task_manual_request_seq = state.request_seq;
+    if (request_seq != NULL) {
+      *request_seq = state.request_seq;
+    }
+    result = 0;
+  }
+  taskEXIT_CRITICAL();
+  return result;
+}
+
+void rule_task_manual_override_snapshot(uint32_t *enabled,
+                                        uint32_t *relay1,
+                                        uint32_t *relay2,
+                                        uint32_t *request_seq,
+                                        uint32_t *applied_seq,
+                                        uint32_t *relay1_output,
+                                        uint32_t *relay2_output)
+{
+  taskENTER_CRITICAL();
+  if (enabled != NULL) *enabled = g_rule_task_manual_enabled;
+  if (relay1 != NULL) *relay1 = g_rule_task_manual_relay1;
+  if (relay2 != NULL) *relay2 = g_rule_task_manual_relay2;
+  if (request_seq != NULL) *request_seq = g_rule_task_manual_request_seq;
+  if (applied_seq != NULL) *applied_seq = g_rule_task_manual_applied_seq;
+  if (relay1_output != NULL) *relay1_output = g_rule_task_relay1_output;
+  if (relay2_output != NULL) *relay2_output = g_rule_task_relay2_output;
+  taskEXIT_CRITICAL();
 }
 
 static bool rule_task_load_config(RuleEngine *engine)
@@ -744,11 +832,16 @@ static void rule_task(void *argument)
 
   for (;;) {
     SignalSnapshot signals[2];
-    const RelayState manual_relays[RULE_RELAY_COUNT] = {
-      g_rule_task_manual_relay1 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF,
-      g_rule_task_manual_relay2 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF,
-    };
-    const bool manual_enabled = g_rule_task_manual_enabled != 0u;
+    uint32_t manual_request_seq;
+    RelayState manual_relays[RULE_RELAY_COUNT];
+    bool manual_enabled;
+
+    taskENTER_CRITICAL();
+    manual_relays[0] = g_rule_task_manual_relay1 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF;
+    manual_relays[1] = g_rule_task_manual_relay2 != 0u ? RELAY_STATE_ON : RELAY_STATE_OFF;
+    manual_enabled = g_rule_task_manual_enabled != 0u;
+    manual_request_seq = g_rule_task_manual_request_seq;
+    taskEXIT_CRITICAL();
     const uint32_t now_ms = HAL_GetTick();
     const size_t count = can2_signal_cache_export_rule_snapshots(signals, 2u);
     bool marker_safe = true;
@@ -770,6 +863,13 @@ static void rule_task(void *argument)
     rule_engine_set_manual(&engine, manual_enabled, manual_relays);
     rule_engine_evaluate(&engine, signals, count, now_ms, relays);
     rule_apply_relays(relays);
+    taskENTER_CRITICAL();
+    {
+      ManualRelayState state = {.applied_seq = g_rule_task_manual_applied_seq};
+      manual_relay_state_mark_applied(&state, manual_request_seq);
+      g_rule_task_manual_applied_seq = state.applied_seq;
+    }
+    taskEXIT_CRITICAL();
     g_rule_task_rule_matched = g_rule_task_relay1_output == (uint32_t)RELAY_STATE_ON ? 1u : 0u;
     g_rule_task_rule_count = (uint32_t)engine.rule_count;
     g_rule_task_winner_rule0 = engine.winner_rule[0];
@@ -962,13 +1062,30 @@ static void w5500_periodic_task(void *argument)
 static void http_periodic_task(void *argument)
 {
   (void)argument;
+  TickType_t last_poll_start = 0u;
 
   g_http_task_started = 1u;
   for (;;) {
     const TickType_t mutex_wait_start = xTaskGetTickCount();
+    if (last_poll_start != 0u) {
+      const uint32_t poll_gap_ms = (uint32_t)(mutex_wait_start - last_poll_start) * portTICK_PERIOD_MS;
+      if (poll_gap_ms > g_http_task_poll_gap_max_ms) {
+        g_http_task_poll_gap_max_ms = poll_gap_ms;
+      }
+    }
+    last_poll_start = mutex_wait_start;
     w5500_mutex_take();
-    w5500_http_trace_mutex_wait((uint32_t)mutex_wait_start, (uint32_t)xTaskGetTickCount());
+    const TickType_t mutex_wait_end = xTaskGetTickCount();
+    const uint32_t mutex_wait_ms = (uint32_t)(mutex_wait_end - mutex_wait_start) * portTICK_PERIOD_MS;
+    if (mutex_wait_ms > g_http_task_mutex_wait_max_ms) {
+      g_http_task_mutex_wait_max_ms = mutex_wait_ms;
+    }
+    w5500_http_trace_mutex_wait((uint32_t)mutex_wait_start, (uint32_t)mutex_wait_end);
     (void)w5500_http_status_poll();
+    const uint32_t poll_exec_ms = (uint32_t)(xTaskGetTickCount() - mutex_wait_end) * portTICK_PERIOD_MS;
+    if (poll_exec_ms > g_http_task_poll_exec_max_ms) {
+      g_http_task_poll_exec_max_ms = poll_exec_ms;
+    }
     w5500_mutex_give();
     g_http_task_loop_count++;
     vTaskDelay(pdMS_TO_TICKS(50u));

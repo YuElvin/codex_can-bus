@@ -64,6 +64,22 @@ volatile uint32_t g_w5500_http_trace_status_body_end_tick = 0u;
 volatile uint32_t g_w5500_http_trace_header_send_enter_tick = 0u;
 volatile uint32_t g_w5500_http_trace_header_send_issued_tick = 0u;
 volatile uint32_t g_w5500_http_trace_header_sendok_tick = 0u;
+volatile uint32_t g_w5500_http_pretrace_seq = 0u;
+volatile uint32_t g_w5500_http_pretrace_sr = 0xffffffffu;
+volatile uint32_t g_w5500_http_pretrace_ir = 0xffffffffu;
+volatile uint32_t g_w5500_http_pretrace_rx_rsr_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_pretrace_rx_rsr = 0xffffffffu;
+volatile uint32_t g_w5500_http_pretrace_poll_tick = 0u;
+volatile uint32_t g_w5500_http_pretrace_poll_gap_ms = 0u;
+volatile uint32_t g_w5500_http_pretrace_mutex_wait_ms = 0u;
+volatile uint32_t g_w5500_http_no_trace_seq = 0u;
+volatile uint32_t g_w5500_http_no_trace_sr_seen_mask = 0u;
+volatile uint32_t g_w5500_http_no_trace_last_sr = 0xffffffffu;
+volatile uint32_t g_w5500_http_no_trace_last_ir_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_no_trace_last_ir = 0xffffffffu;
+volatile uint32_t g_w5500_http_no_trace_last_rx_rsr_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_no_trace_last_rx_rsr = 0xffffffffu;
+volatile uint32_t g_w5500_http_no_trace_last_poll_gap_ms = 0u;
 volatile uint32_t g_w5500_http_static_count = 0u;
 volatile uint32_t g_w5500_http_static_read_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_static_file_size = 0u;
@@ -167,6 +183,13 @@ extern RuleFileV3 g_rule_file_v3_pending;
 
 #define W5500_S0_IR_SENDOK 0x10u
 #define W5500_S0_IR_TIMEOUT 0x08u
+#define W5500_S0_IR_RECV 0x04u
+
+#define W5500_HTTP_SR_SEEN_LISTEN (1u << 0)
+#define W5500_HTTP_SR_SEEN_SYNRECV (1u << 1)
+#define W5500_HTTP_SR_SEEN_ESTABLISHED (1u << 2)
+#define W5500_HTTP_SR_SEEN_CLOSE_WAIT (1u << 3)
+#define W5500_HTTP_SR_SEEN_OTHER (1u << 4)
 
 #define W5500_S0_MR_TCP 0x01u
 #define W5500_S0_SR_CLOSED 0x00u
@@ -185,10 +208,12 @@ extern RuleFileV3 g_rule_file_v3_pending;
 #define W5500_HTTP_PATH_SIGNALS 7u
 #define W5500_HTTP_PATH_RULE_CONFIG 8u
 #define W5500_HTTP_PATH_RULES 9u
+#define W5500_HTTP_PATH_RELAY_MANUAL 10u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
 #define W5500_HTTP_RULES_BODY_MAX 384u
+#define W5500_HTTP_MANUAL_BODY_MAX 64u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
@@ -229,6 +254,15 @@ static uint32_t g_w5500_http_last_mutex_wait_end_tick;
 static uint32_t g_w5500_http_last_mutex_wait_ms;
 static uint32_t g_w5500_http_last_poll_enter_tick;
 static uint8_t g_w5500_http_trace_header_send_active;
+static uint32_t g_w5500_http_connection_sr_seen_mask;
+static uint32_t g_w5500_http_connection_last_sr = 0xffffffffu;
+static uint32_t g_w5500_http_connection_last_ir_result = 0xffffffffu;
+static uint32_t g_w5500_http_connection_last_ir = 0xffffffffu;
+static uint32_t g_w5500_http_connection_last_rx_rsr_result = 0xffffffffu;
+static uint32_t g_w5500_http_connection_last_rx_rsr = 0xffffffffu;
+static uint32_t g_w5500_http_connection_last_poll_gap_ms;
+static uint8_t g_w5500_http_connection_trace_started;
+static uint8_t g_w5500_http_no_trace_frozen;
 
 void w5500_http_trace_mutex_wait(uint32_t start_tick, uint32_t end_tick) {
   g_w5500_http_last_mutex_wait_start_tick = start_tick;
@@ -292,6 +326,75 @@ static void http_trace_finish(void) {
     }
     g_w5500_http_trace_active = 0u;
   }
+}
+
+static void http_pretrace_latch(uint8_t sr,
+                                uint8_t ir,
+                                W5500Result rx_rsr_result,
+                                uint16_t rx_rsr,
+                                uint32_t poll_tick,
+                                uint32_t poll_gap_ms) {
+  if (g_w5500_http_pretrace_seq != 0u) {
+    return;
+  }
+  g_w5500_http_pretrace_sr = sr;
+  g_w5500_http_pretrace_ir = ir;
+  g_w5500_http_pretrace_rx_rsr_result = (uint32_t)rx_rsr_result;
+  g_w5500_http_pretrace_rx_rsr = rx_rsr;
+  g_w5500_http_pretrace_poll_tick = poll_tick;
+  g_w5500_http_pretrace_poll_gap_ms = poll_gap_ms;
+  g_w5500_http_pretrace_mutex_wait_ms = g_w5500_http_last_mutex_wait_ms;
+  ++g_w5500_http_pretrace_seq;
+}
+
+static uint32_t http_connection_sr_seen_bit(uint8_t sr) {
+  if (sr == W5500_S0_SR_LISTEN) return W5500_HTTP_SR_SEEN_LISTEN;
+  if (sr == W5500_S0_SR_SYNRECV) return W5500_HTTP_SR_SEEN_SYNRECV;
+  if (sr == W5500_S0_SR_ESTABLISHED) return W5500_HTTP_SR_SEEN_ESTABLISHED;
+  if (sr == W5500_S0_SR_CLOSE_WAIT) return W5500_HTTP_SR_SEEN_CLOSE_WAIT;
+  return W5500_HTTP_SR_SEEN_OTHER;
+}
+
+static void http_connection_reset(void) {
+  g_w5500_http_connection_sr_seen_mask = W5500_HTTP_SR_SEEN_LISTEN;
+  g_w5500_http_connection_last_sr = W5500_S0_SR_LISTEN;
+  g_w5500_http_connection_last_ir_result = 0xffffffffu;
+  g_w5500_http_connection_last_ir = 0xffffffffu;
+  g_w5500_http_connection_last_rx_rsr_result = 0xffffffffu;
+  g_w5500_http_connection_last_rx_rsr = 0xffffffffu;
+  g_w5500_http_connection_last_poll_gap_ms = 0u;
+  g_w5500_http_connection_trace_started = 0u;
+  g_w5500_http_no_trace_frozen = 0u;
+}
+
+static void http_connection_observe(uint8_t sr,
+                                    W5500Result ir_result,
+                                    uint8_t ir,
+                                    uint32_t poll_gap_ms) {
+  if (sr == W5500_S0_SR_LISTEN) {
+    http_connection_reset();
+    return;
+  }
+  g_w5500_http_connection_sr_seen_mask |= http_connection_sr_seen_bit(sr);
+  g_w5500_http_connection_last_sr = sr;
+  g_w5500_http_connection_last_ir_result = (uint32_t)ir_result;
+  g_w5500_http_connection_last_ir = ir_result == W5500_OK ? ir : 0xffffffffu;
+  g_w5500_http_connection_last_poll_gap_ms = poll_gap_ms;
+}
+
+static void http_no_trace_freeze(void) {
+  if (g_w5500_http_no_trace_frozen != 0u) {
+    return;
+  }
+  g_w5500_http_no_trace_sr_seen_mask = g_w5500_http_connection_sr_seen_mask;
+  g_w5500_http_no_trace_last_sr = g_w5500_http_connection_last_sr;
+  g_w5500_http_no_trace_last_ir_result = g_w5500_http_connection_last_ir_result;
+  g_w5500_http_no_trace_last_ir = g_w5500_http_connection_last_ir;
+  g_w5500_http_no_trace_last_rx_rsr_result = g_w5500_http_connection_last_rx_rsr_result;
+  g_w5500_http_no_trace_last_rx_rsr = g_w5500_http_connection_last_rx_rsr;
+  g_w5500_http_no_trace_last_poll_gap_ms = g_w5500_http_connection_last_poll_gap_ms;
+  g_w5500_http_no_trace_frozen = 1u;
+  ++g_w5500_http_no_trace_seq;
 }
 
 static W5500Result s0_read_u8(uint16_t address, uint8_t *value) {
@@ -661,6 +764,35 @@ static size_t build_rule_config_body(char *body, size_t len) {
                           (unsigned long)g_rule_task_config_delay_ms,
                           (unsigned long)g_rule_task_config_timeout_ms,
                           (unsigned long)g_rule_task_config_generation);
+}
+
+static size_t build_manual_relay_body(char *body, size_t len) {
+  uint32_t enabled = 0u;
+  uint32_t relay1 = 0u;
+  uint32_t relay2 = 0u;
+  uint32_t request_seq = 0u;
+  uint32_t applied_seq = 0u;
+  uint32_t relay1_output = 0u;
+  uint32_t relay2_output = 0u;
+
+  rule_task_manual_override_snapshot(&enabled,
+                                     &relay1,
+                                     &relay2,
+                                     &request_seq,
+                                     &applied_seq,
+                                     &relay1_output,
+                                     &relay2_output);
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"enabled\":%lu,\"relay1\":%lu,\"relay2\":%lu,"
+                          "\"requestSeq\":%lu,\"appliedSeq\":%lu,\"relay1Output\":%lu,\"relay2Output\":%lu}}",
+                          (unsigned long)enabled,
+                          (unsigned long)relay1,
+                          (unsigned long)relay2,
+                          (unsigned long)request_seq,
+                          (unsigned long)applied_seq,
+                          (unsigned long)relay1_output,
+                          (unsigned long)relay2_output);
 }
 
 static size_t build_rules_body(char *body, size_t len, int slot) {
@@ -1177,6 +1309,90 @@ static bool http_form_parse_u32(const char *text, size_t len, uint32_t *value) {
   return true;
 }
 
+enum {
+  HTTP_MANUAL_FIELD_ENABLED = 1u << 0,
+  HTTP_MANUAL_FIELD_RELAY1 = 1u << 1,
+  HTTP_MANUAL_FIELD_RELAY2 = 1u << 2,
+  HTTP_MANUAL_FIELD_ALL = HTTP_MANUAL_FIELD_ENABLED | HTTP_MANUAL_FIELD_RELAY1 |
+                          HTTP_MANUAL_FIELD_RELAY2,
+};
+
+static bool http_form_parse_manual_override(const char *body,
+                                            size_t body_len,
+                                            uint32_t *enabled,
+                                            uint32_t *relay1,
+                                            uint32_t *relay2) {
+  uint32_t fields = 0u;
+  size_t offset = 0u;
+
+  if (body == NULL || enabled == NULL || relay1 == NULL || relay2 == NULL || body_len == 0u ||
+      body[body_len - 1u] == '&') {
+    return false;
+  }
+  while (offset < body_len) {
+    size_t equals = offset;
+    size_t entry_end = offset;
+    while (equals < body_len && body[equals] != '=' && body[equals] != '&') ++equals;
+    if (equals == offset || equals == body_len || body[equals] != '=') return false;
+    entry_end = equals + 1u;
+    while (entry_end < body_len && body[entry_end] != '&') ++entry_end;
+    if (entry_end != equals + 2u ||
+        (body[equals + 1u] != '0' && body[equals + 1u] != '1')) {
+      return false;
+    }
+    const uint32_t value = (uint32_t)(body[equals + 1u] - '0');
+    if (http_form_span_is(&body[offset], equals - offset, "enabled")) {
+      if ((fields & HTTP_MANUAL_FIELD_ENABLED) != 0u) return false;
+      *enabled = value;
+      fields |= HTTP_MANUAL_FIELD_ENABLED;
+    } else if (http_form_span_is(&body[offset], equals - offset, "relay1")) {
+      if ((fields & HTTP_MANUAL_FIELD_RELAY1) != 0u) return false;
+      *relay1 = value;
+      fields |= HTTP_MANUAL_FIELD_RELAY1;
+    } else if (http_form_span_is(&body[offset], equals - offset, "relay2")) {
+      if ((fields & HTTP_MANUAL_FIELD_RELAY2) != 0u) return false;
+      *relay2 = value;
+      fields |= HTTP_MANUAL_FIELD_RELAY2;
+    } else {
+      return false;
+    }
+    offset = entry_end + (entry_end < body_len ? 1u : 0u);
+  }
+  return fields == HTTP_MANUAL_FIELD_ALL;
+}
+
+static int http_handle_manual_override(const char *body, size_t body_len) {
+  uint32_t enabled = 0u;
+  uint32_t relay1 = 0u;
+  uint32_t relay2 = 0u;
+  uint32_t request_seq = 0u;
+  uint32_t applied_seq = 0u;
+  const uint32_t start_tick = HAL_GetTick();
+
+  if (!http_form_parse_manual_override(body, body_len, &enabled, &relay1, &relay2)) {
+    http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 400u);
+    return http_send_json_error(400u, "invalid_manual_override", "enabled relay1 relay2 must be 0 or 1");
+  }
+  if (rule_task_manual_override_submit(enabled, relay1, relay2, &request_seq) != 0) {
+    http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 500u);
+    return http_send_json_error(500u, "manual_override_submit_failed", "manual override submit failed");
+  }
+  do {
+    rule_task_manual_override_snapshot(NULL, NULL, NULL, NULL, &applied_seq, NULL, NULL);
+    if (applied_seq == request_seq) {
+      const size_t response_len = build_manual_relay_body(g_http_response_body,
+                                                          sizeof(g_http_response_body));
+      if (response_len >= sizeof(g_http_response_body)) return 1;
+      http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 200u);
+      return http_send_response(200u, "application/json", g_http_response_body, response_len);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  } while ((uint32_t)(HAL_GetTick() - start_tick) < 100u);
+
+  http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 500u);
+  return http_send_json_error(500u, "manual_override_timeout", "rule task did not apply manual override");
+}
+
 static bool http_form_parse_rule(const char *body,
                                  size_t body_len,
                                  bool include_slot,
@@ -1515,6 +1731,38 @@ static int http_handle_request(uint16_t rx_size) {
              ? W5500_HTTP_HANDLE_OK
              : W5500_HTTP_HANDLE_ERROR;
   }
+  if (request_path_is(request, "POST", "/api/relay/manual")) {
+    size_t content_length = 0u;
+    size_t body_offset;
+
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 400u);
+      return http_send_json_error(400u, "bad_request", "manual override header too large");
+    }
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u ||
+        content_length > W5500_HTTP_MANUAL_BODY_MAX || (size_t)rx_size < body_offset + content_length) {
+      if ((size_t)rx_size < body_offset + content_length && read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid manual override body");
+    }
+    if (body_offset + content_length > read_len || (size_t)rx_size != body_offset + content_length) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_RELAY_MANUAL, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid manual override body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_manual_override(&request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
   if (request_path_is(request, "POST", "/api/rule/config")) {
     if (header_end == NULL) {
       return W5500_HTTP_HANDLE_WAIT;
@@ -1663,6 +1911,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_RULES;
     body_len = build_rules_body(body, sizeof(g_http_response_body), 1);
+  } else if (request_path_is(request, "GET", "/api/relay/manual")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_RELAY_MANUAL;
+    body_len = build_manual_relay_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/") || request_path_is(request, "GET", "/index.html")) {
     const int static_result = http_send_static_index();
     if (static_result == W5500_HTTP_STATIC_OK) {
@@ -1772,6 +2024,7 @@ int w5500_http_status_poll(void) {
   } else {
     g_w5500_http_socket_ir = 0xffffffffu;
   }
+  http_connection_observe(sr, ir_result, ir, poll_gap_ms);
 
   if (g_w5500_http_disconnect_pending != 0u) {
     if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT || sr == W5500_S0_SR_CLOSE_WAIT ||
@@ -1798,7 +2051,18 @@ int w5500_http_status_poll(void) {
   if (sr == W5500_S0_SR_ESTABLISHED || sr == W5500_S0_SR_CLOSE_WAIT) {
     uint16_t rx_size = 0u;
     const uint32_t rx_rsr_read_start_tick = HAL_GetTick();
-    if (s0_read_u16_stable(W5500_S0_RX_RSR, &rx_size) != W5500_OK) {
+    const W5500Result rx_rsr_result = s0_read_u16_stable(W5500_S0_RX_RSR, &rx_size);
+    g_w5500_http_connection_last_rx_rsr_result = (uint32_t)rx_rsr_result;
+    g_w5500_http_connection_last_rx_rsr = rx_rsr_result == W5500_OK ? rx_size : 0xffffffffu;
+    if (ir_result == W5500_OK && (ir & W5500_S0_IR_RECV) != 0u &&
+        g_w5500_http_trace_active == 0u &&
+        (rx_rsr_result != W5500_OK || rx_size == 0u)) {
+      http_pretrace_latch(sr, ir, rx_rsr_result, rx_size, poll_enter_tick, poll_gap_ms);
+    }
+    if (rx_rsr_result != W5500_OK) {
+      if (sr == W5500_S0_SR_CLOSE_WAIT && g_w5500_http_connection_trace_started == 0u) {
+        http_no_trace_freeze();
+      }
       g_w5500_http_status = 4u;
       g_w5500_http_error_count++;
       return 1;
@@ -1816,6 +2080,7 @@ int w5500_http_status_poll(void) {
                          rx_rsr_read_start_tick,
                          rx_rsr_read_end_tick);
       }
+      g_w5500_http_connection_trace_started = 1u;
       g_w5500_http_trace_handle_enter_tick = HAL_GetTick();
       const int request_result = http_handle_request(rx_size);
       g_w5500_http_trace_handler_return_tick = HAL_GetTick();
@@ -1843,6 +2108,9 @@ int w5500_http_status_poll(void) {
       return 0;
     }
     if (sr == W5500_S0_SR_CLOSE_WAIT) {
+      if (g_w5500_http_connection_trace_started == 0u) {
+        http_no_trace_freeze();
+      }
       if (http_begin_graceful_disconnect() != 0) {
         g_w5500_http_status = 5u;
         g_w5500_http_error_count++;

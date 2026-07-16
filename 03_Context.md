@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-15（F-25 已完成真实 CAN bus-off 的不复位自动恢复验证；F-26 已完成 TF CSV 下电内容复查；下一步为最终全量复验）
+更新时间：2026-07-16（F-75一期Web核心三项已客观验收；首次手动页面提交曾出现HTTP响应交付异常，下一阶段固定复现并修复该稳定性问题）
 
 ## 当前仓库
 
@@ -19,7 +19,7 @@
 | 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
-| TF 静态文件服务 | [部分客观已验证] | 已启用 FatFs mutex，缺省创建 `/www/index.html`；`GET /` 和 `GET /index.html` 返回 `text/html` 默认页；固件已改为按文件大小循环 512 字节分块读取并多次 socket 发送 |
+| TF 静态文件服务 / Web一期 | [客观已验证] | FatFs mutex与512字节分块静态服务已验证；板端冷启动页面11143 B且哈希与仓库一致。一期Web三项已由浏览器、pcap、API与GPIO闭环：CAN严格串行刷新、两槽规则保存/恢复、RuleTask手动继电器及关闭后恢复规则 |
 | DBC 上传最小接口 | [客观已验证] | `POST /api/dbc/upload` 保存 `/dbc/candidate.dbc` 后从 TF 读回候选并调用 portable `dbc_parse_text()` 生成报告；已烧录验证返回 `bytes=164/lines=4/messages=1/signals=2/errors=0/valid=true`，ST-Link 读数 `candidate_load_result=0/candidate_valid=1` |
 | DBC 活动文件激活 | [客观已验证] | `POST /api/dbc/active` 无请求体最小命令已烧录验证：读回候选、portable parser 确认为 `errors=0` 后写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；有效候选返回 `activated=true`，无效候选返回 `HTTP 400 candidate_invalid` |
 | DBC 运行态快照 | [客观已验证] | active `0x321`/2 信号 DBC 启动加载正常；本轮 `POST /api/dbc/active` 返回 `activated=true/runtimeGeneration=2`，随后读到 `generation/load=2/2`、`valid=1/result=0` |
@@ -96,6 +96,24 @@ F-25 已在 `can_bringup.c` 实现并烧录最小 bus-off 恢复：持续 BO 时
 
 F-69 已完成最小端到端HTTP时序观测并烧录验收：空闲60秒后的重采样中，GET到HTTP header=`6.677 ms`、到body=`10.329 ms`、curl首字节/总时长=`11.275/15.011 ms`，无RST或重传；完成态串口trace显示轮询、RX读取、请求读取、RECV、body构造和header进入均在tick `181468`，SEND已写入与SENDOK均为`181469`。这证明F-69能在连接完成后给出SEND阶段的时序，且本次未见长延迟；它不推翻F-67约2.20秒样本，G-1仍未通过，下一阶段必须单独复现或排除间歇延迟。
 
+F-71 固定为不改固件的间歇延迟复现/分类：最多10个独立“严格60秒无TCP/80→唯一GET”轮次，CANtest保持500k持续发送；每轮保存pcap、curl和请求后5秒的完成态`[http-trace]`。任一轮GET到HTTP header为`>=2 s`、3秒无header、RST/非200或trace不完整即停止并保留证据；10轮均短只能写为本预算未复现，不能写为G-1或HTTP稳定通过。
+
+F-71 r01-r04均为有效短样本：`L_header`分别为`30.083/19.560/41.439/43.005 ms`，均为12包的单GET/200/正常四次挥手，无RST或重传；curl总时长已确认r01-r03为`38.287/27.302/49.498 ms`，r04首字节为`42.816 ms`；完成态trace分别为`seq=2/3/4/5`。r04相邻状态的CAN2 RX=`23638→23670`增长且errors/bus-off/TEC/REC均为0。四轮均未复现F67，但样本数不足，不能说明稳定、根因消失或G-1通过；下一步仅执行r05，同一异常停止条件保持不变。
+
+F-71 r05已复现F67类故障，阶段停止：严格60秒空闲后的唯一GET在pcap时间`.717197`发出，板端仅于`.919804`发出零长度ACK，3秒内始终无HTTP header/body/RST；客户端于`.716710`发送FIN，curl报告`Operation timed out after 3005 milliseconds with 0 bytes received`。COMtool在请求后继续保持`hreq=5/htseq=5`且无`seq=6`，`hclose=0000011c`；不能把该状态解释为已处理或根因。r05抓包已正常停止并保存，禁止r06-r10；下一步必须先完成只读F71b路径审计，再基于证据制定最小诊断/修复、构建/反汇编/烧录复验。
+
+F-72最小预诊断已烧录并完成F72-r01..r10固定十轮：全部为单GET/HTTP200/完整body/无RST或重传，`L_header=5.555..178.756 ms`均小于0.5秒，完成trace与`hps=0`均齐全。因此只可写为“该预算未复现F71-r05”，F72异常锁存未覆盖，严禁写为稳定、根因消失或G-1通过。F-73只读审计已固定下一最小F74：只添加HTTP任务`poll gap/mutex wait/poll exec`最大时序观测，和“无F69 trace连接到CLOSE_WAIT”的一次性SR/IR/RX_RSR冻结快照；不得新增W5500操作、重试、延时、优先级或状态机。F74须先实现、构建、反汇编、烧录；随后仅以同一60秒空闲单GET协议等待复现分类，未复现不得提交根因结论。
+
+F-74已实现并烧录，但尚未覆盖目标异常分支：HTTP任务现输出`hpmg/hpmw/hpme`启动以来最大值；一个无F69 trace而最终到CLOSE_WAIT的连接会一次性冻结`hnseq/hnmask/hnsr/hnirr/hnir/hnrr/hnr/hngap`，且只复用既有SR/IR/RX_RSR读取结果，不增加W5500写命令、SPI读取、重试、延时、优先级或状态机。由于2048 B UART行缓冲最初会令MonitorTask调用栈过窄，已移为函数内静态BSS；反汇编栈帧为1060 B，MonitorTask仍为4096 B。`verify.sh`/CTest=14/14、关键反汇编及OpenOCD `Verified OK`均已完成；F74-r03为首个有效唯一会话：60秒空闲后唯一GET=`01:53:36.427350`，HTTP200 header=`.473814`，`L_header=46.464 ms`，750 B body和四次挥手完整，无RST/重传；curl=`200/total=56.846 ms`。同轮COMtool为`hreq=4/htseq=4/htact=0/herr=0`、`hps=0`、`hnseq=0`、`hpmg=57/hpmw=0/hpme=7`，CAN2 RX继续增长、CAN错误为0。它确认F74正常路径无误冻结并完成“有效唯一会话分类”前置，但没有命中历史r05异常，不能宣布根因消失、G-1通过或异常分支已验收；F75可在保持严格顺序HTTP限制下进入源码实现，F74诊断源码暂不单独提交。
+
+一期范围已新增F-75 Web控制台：页面可见时每1000 ms严格串行刷新CAN状态再刷新signals，两个响应之间均留至少250 ms重监听窗口；规则设置使用既有两槽`/api/rules` CRUD；继电器操作新增唯一`GET/POST /api/relay/manual`，完整`enabled/relay1/relay2`覆盖快照在短临界区写入、RuleTask应用后以request/applied序号确认并最终写GPIO，关闭覆盖恢复规则。页面为TF驻留原生HTML/CSS/JS，不使用并发、第三方资源或高频轮询；F74-r03已完成有效唯一会话分类，现可进入F-75源码实现；TF实际页面部署仍必须由用户下电后取卡、覆盖文件、插回上电，再由浏览器/pcap/API/GPIO联合验收。
+
+F-75源码已完成、未烧录：新增可追溯`www/index.html`单文件资产（内嵌CSS/JS、无第三方资源），以及`GET/POST /api/relay/manual`与最小`ManualRelayState`主机测试；RuleTask仍经`rule_apply_relays()`唯一写GPIO，HTTP只短临界区提交/读取完整二值快照并至多等待100 ms应用序号。主会话已独立完成`git diff --check`、`./scripts/verify.sh`和再次`ctest`，15/15通过；当前ELF的`text/data/bss=91520/372/242104`。反汇编确认POST仅调用`rule_task_manual_override_submit`和snapshot、RuleTask在`rule_engine_evaluate`后调用`rule_apply_relays`才更新applied序号，PE7/PE8写入仍只在该函数。下一步必须烧录该ELF并取得API/RuleTask现场证据；用户下电部署TF页面前不得宣称Web已交付。
+
+F74-r02的curl虽为200（首字节15.734 ms），但抓包终端实际报`sudo: a password is required`、pcap不存在，故该轮无效且不作网络稳定性结论；下一轮必须先在终端显示`listening on en2`后才允许唯一GET。
+
+F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源为仓库`www/index.html`（10615 B，需用户下电取卡覆盖到TF的`/www/index.html`后再插回上电）；页面只使用内嵌CSS/JS，含概览/DBC、可见时每1000 ms严格串行`/api/can/status→250 ms→/api/signals→250 ms`、两槽规则CRUD和手动继电器。新增`GET/POST /api/relay/manual`；POST严格要求三个完整`0|1` form字段，在`main.c`短临界区提交手动状态/requestSeq，RuleTask完成既有`rule_apply_relays()`后回写appliedSeq，HTTP最多等100 ms且不直接写GPIO。主机CTest现为15/15（新增`manual_relay`验证0|1、应用序号及绕过0）；最终`verify.sh`已完成STM32 ELF链接，FLASH=`91904 B / 128 KB=70.12%`、RAM_D1=`242480 B / 512 KB=46.25%`。本阶段尚未执行反汇编、OpenOCD烧录、TF部署、浏览器/pcap/CANtest/GPIO验收，不能写成已交付或提交。
+
 ## 阶段 C 实际快照
 
 阶段 F 更新：F-8 关中断实验已失败并撤回；下一派送 F-9 只以 `vTaskSuspendAll/xTaskResumeAll` 保留 SysTick、抑制任务切换，比较同样的断电冷启动首错。不得改 DMA、timeout、块参数、重试、remount、热插拔或恢复策略。
@@ -119,3 +137,27 @@ F-69 已完成最小端到端HTTP时序观测并烧录验收：空闲60秒后的
 - 实机顺序证据：重新烧录 Verify 通过；ping 2/2；GET 初始 `42434/42432/1000/1500/generation=1`；POST `42435/42433/1100/1600` 返回 200、generation=2；GDB 读到 QSPI save result/count=`0/1`、ConfigTask enqueue/dequeue/drop=`1/1/0`、RuleTask generation/reload=`2/0`。
 - 复位后仍加载 `42435/42433/1100/1600`，`config_load_result=0`、RuleTask generation/load=`1/1`；随后通过 HTTP 已恢复默认 `42434/42432/1000/1500`，`/api/can/status` 仍为 200 且错误、bus-off、TEC、REC、sendResult 均为 0。
 - 本功能仍不是规则文件、多规则或完整 CRUD；本轮未人为破坏 TF 文件，LogTask recovery 仍未验证。
+
+## 2026-07-16 F-75 严格修复已烧录，TF页面验收待进行
+
+- `www/index.html`首次可见已自动启动既有严格串行CAN刷新，隐藏时暂停、重新可见时仅恢复此前自动暂停的刷新；用户手动停止或请求失败仍保持停止。`http_form_parse_manual_override()`已收紧为每个`enabled/relay1/relay2`值必须精确单字符`0`或`1`，拒绝`00/01/10`而不改变规则表单的多位数字解析。
+- 修复后`git diff --check`与`./scripts/verify.sh`通过，host CTest=15/15；最终ELF反汇编确认RuleTask仍经唯一`rule_apply_relays()`写PE7/PE8，手动解析器先要求值跨度1再限制字符转换结果为0或1。OpenOCD烧录输出`Programming Finished/Verified OK/Resetting Target`（`3.249799 V`）。
+- 复位后的严格映像现场顺序API为：初始GET返回`requestSeq/appliedSeq=0/0`；合法`enabled=1&relay1=1&relay2=0`返回200与`1/1`，后续GET保持一致；非法`enabled=01&relay1=1&relay2=0`返回400 `invalid_manual_override`；关闭覆盖POST返回200与`2/2`。COMtool新清空窗口从`rtc=206`开始，至`rtc=231`任务均持续、CAN2 RX=`2257→2532`、CAN错误/bus-off/TEC/REC=0，末态`hreq=5/hpath=10/hcode=200/htseq=5/htact=0/herr=0`。
+- 此证据闭合新手动HTTP严格值与RuleTask交接，但`www/index.html`尚未写入实际TF，故浏览器自动CAN刷新、规则UI和页面继电器操作还未验收，不能提交或写成一期Web已交付。下一步必须由用户下电取TF卡，将仓库`www/index.html`覆盖为卡内`/www/index.html`，插回上电后再进行浏览器、pcap、CANtest和GPIO联合验证。
+
+- 用户已在下电状态将TF插入读卡器；主会话确认卡为`disk4s1`/`/Volumes/NO NAME`，用SHA-256和`cmp`逐字节核对后已把仓库`www/index.html`（10935 B，`d15e7c...96bdc7`）覆盖到卡内`/www/index.html`，并已成功`diskutil unmount disk4s1`。页面资产部署完成但尚未插回上电，因此TF服务、浏览器、pcap、CAN刷新、规则UI、页面继电器和GPIO联合验收仍未完成，不能提交。
+
+- 用户已插回上电后的实际冷启动验证：TF状态0、`GET /`为200/10935 B且哈希与仓库`www/index.html`完全一致，证实板端静态服务已读到新页面。实际浏览器首次可见自动启动CAN刷新；用户恢复CANtest后页面实际显示RX=240和marker/sequence两项`quality=ok`。这只闭合TF部署、页面加载与自动CAN显示，不包括严格顺序pcap、规则UI读写、页面继电器POST/GPIO读数；自动页面已手动停止等待独立抓包，仍不可提交。
+
+- F-75独立浏览器pcap发现首页连接竞态：静态`GET /`最终ACK后3.797ms的首个无HTTP负载SYN被RST；首个成功`/api/can/status`距该关闭约259ms，随后24组`can/status→signals`均顺序200且规则/手动只读页面操作也实际200。另有两次无HTTP负载RST，故该抓包不能写成无RST通过。为只处理已证实的首启窗口，`www/index.html`首次自动启动现延后300ms，并使停止/隐藏取消该定时器、恢复可见保持自动启动语义；`verify.sh`/CTest=15/15、关键ELF反汇编和同HEX OpenOCD `Verified OK`（3.268051V）已完成。TF卡内仍为修复前页面，下一步必须由用户下电更新HTML、插回上电并重新抓包；在此之前F-75不可提交。
+
+- F-75的300 ms首启修复页面已重新部署到TF：源与卡内`/www/index.html`均为`11143 B`、SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`、`cmp=0`，`disk4s1`已安全卸载。当前开发板仍处于断电且未插回TF的外部等待状态；下一步固定为用户插回并上电，先验证板端`GET /`内容哈希和`tf.status=0`，再启动新的pcap并只重载页面一次，要求静态连接结束至首API SYN至少300 ms、CAN/status与signals均200且整个窗口RST=0，之后才进入规则/继电器页面写入与GPIO联合验收。
+
+- F-75过程记录：300 ms首启修复已完成板端与pcap验收；当时尚待规则与手动GPIO联合验证。该待办已由下方“F-75一期Web核心三项客观验收完成”更新并关闭。
+
+## 2026-07-16 F-75 一期Web核心三项客观验收完成
+
+- 本阶段验收边界以用户明确要求的三项为准：CAN数据刷新显示、规则设置、继电器操作。浏览器规则页已将slot1 threshold从`42435`临时改为`42436`，保存并重新读取确认，再恢复为`42435`并回读；其余字段保持原值，最终`GET /api/rules`确认两槽原始配置。
+- 浏览器手动继电器第二次实际提交`enabled=1/relay1=0/relay2=1`成功，页面显示RuleTask确认请求1，API为`requestSeq/appliedSeq=1/1`、实际输出`0/1`；按当前ELF精确地址停机读取后，RuleTask快照与GPIOE ODR均为`0x100`（PE8高、PE7低）。随后浏览器关闭覆盖，页面显示请求2，API为`2/2`；最终ODR=`0x80`（PE7高、PE8低），证明恢复自动规则而不是固定输出。每次OpenOCD读取后均显式resume/shutdown，最终3333/4444/6666无监听。
+- 第一次浏览器手动提交期间，板端串口已记录HTTP handler `hcode=200`且任务/CAN持续运行，但浏览器显示`Failed to fetch`，随后主机ping/curl暂时失败；一次明确`reset run`后网络、规则持久化和手动安全态恢复，第二次页面操作完整通过。该异常必须与无RST的CAN刷新pcap分开：F-75三项功能闭环通过，但不能据此宣称HTTP长期稳定或F-71间歇问题消失。
+- DBC页面区域继续复用已验证的upload/active/runtime API，但本次没有通过浏览器重新执行DBC上传/激活；不把既有API证据冒充本次页面操作。下一阶段固定为F-76，只复现、定位并修复“服务端记录200但浏览器未收到响应且网络需复位恢复”的单socket响应交付异常，禁止扩展Web功能。

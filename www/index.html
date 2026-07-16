@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CAN 网关控制台</title>
+<style>
+:root{color-scheme:dark;font:16px/1.45 system-ui,sans-serif;background:#10151c;color:#e8eef6}
+body{max-width:1050px;margin:auto;padding:18px}h1{margin:0 0 6px}h2{font-size:1.15rem;margin:0 0 10px}
+section{background:#18212c;border:1px solid #2d3a48;border-radius:10px;padding:15px;margin:14px 0}
+button,input,select{font:inherit;padding:6px;margin:3px}button{cursor:pointer;background:#2266a5;color:#fff;border:0;border-radius:5px}
+button.danger{background:#a43c3c}button:disabled{opacity:.55;cursor:not-allowed}label{display:inline-block;margin:3px}
+pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre-wrap;word-break:break-word}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}.notice{color:#94c9ff}.error{color:#ff9e9e}.ok{color:#98e6b0}
+</style>
+</head>
+<body>
+<h1>CAN 网关控制台</h1>
+<p id="notice" class="notice">所有请求串行执行；自动 CAN 刷新在页面隐藏或请求失败后停止。</p>
+
+<section>
+  <h2>概览</h2>
+  <button id="overview-refresh">读取状态与 DBC runtime</button>
+  <pre id="overview">尚未读取</pre>
+</section>
+
+<section>
+  <h2>实时 CAN 数据</h2>
+  <button id="can-start">开始每秒刷新</button><button id="can-stop">停止刷新</button>
+  <pre id="can-status">自动刷新未启动</pre>
+  <pre id="signals">尚未读取 signals</pre>
+</section>
+
+<section>
+  <h2>继电器手动覆盖</h2>
+  <p>启用后由 RuleTask 在下一 50 ms 周期写入继电器；关闭覆盖会恢复规则执行。</p>
+  <label>覆盖 <select id="manual-enabled"><option value="0">关闭</option><option value="1">启用</option></select></label>
+  <label>继电器 1 <select id="manual-relay1"><option value="0">关</option><option value="1">开</option></select></label>
+  <label>继电器 2 <select id="manual-relay2"><option value="0">关</option><option value="1">开</option></select></label>
+  <button id="manual-read">读取实际状态</button><button id="manual-save">提交并等待 RuleTask 应用</button>
+  <pre id="manual-state">尚未读取</pre>
+</section>
+
+<section>
+  <h2>两槽规则</h2>
+  <button id="rules-refresh">读取两槽规则</button>
+  <div id="rules" class="grid"></div>
+</section>
+
+<section>
+  <h2>DBC</h2>
+  <label>DBC 文本文件（最多 1024 B） <input id="dbc-file" type="file" accept=".dbc,text/plain"></label>
+  <button id="dbc-upload">上传候选</button><button id="dbc-activate">激活候选</button>
+  <pre id="dbc-result">尚未操作</pre>
+</section>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let busy = false;
+let canAuto = false;
+let canTimer = 0;
+let canInitialTimer = 0;
+let canResumeOnVisible = false;
+let ruleSlots = [];
+
+function show(message, kind = 'notice') { const node = $('notice'); node.className = kind; node.textContent = message; }
+function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+async function exclusive(label, work) {
+  if (busy) { throw new Error(label + '：已有请求进行中'); }
+  busy = true;
+  try { return await work(); } finally { busy = false; }
+}
+async function api(path, options = {}) {
+  const response = await fetch(path, Object.assign({cache:'no-store'}, options));
+  const text = await response.text();
+  let payload;
+  try { payload = JSON.parse(text); } catch (_) { throw new Error(path + ' 返回非 JSON：' + text); }
+  if (!response.ok || !payload.ok) { throw new Error(path + ' HTTP ' + response.status + '：' + text); }
+  return payload.data;
+}
+function form(slot) {
+  const fields = [
+    ['enabled','启用','checkbox'],['relay','继电器','number'],['threshold','阈值','number'],
+    ['action','动作','select'],['delayMs','延时 ms','number'],['timeoutMs','超时 ms','number'],
+    ['safeState','安全态','select'],['priority','优先级','number']
+  ];
+  const card = document.createElement('form'); card.dataset.slot = slot; card.innerHTML = '<h3>槽位 '+slot+'</h3>';
+  for (const [key,label,type] of fields) {
+    const labelNode = document.createElement('label'); labelNode.textContent = label + ' ';
+    let input;
+    if (type === 'select') { input = document.createElement('select'); for (const v of ['on','off']) { const o=document.createElement('option');o.value=v;o.textContent=v;input.append(o); } }
+    else { input = document.createElement('input'); input.type=type; if (type==='number') { input.min='0'; input.step='1'; } }
+    input.name=key; labelNode.append(input); card.append(labelNode);
+  }
+  const save = document.createElement('button'); save.type='submit'; save.textContent='保存/创建'; card.append(save);
+  const remove = document.createElement('button'); remove.type='button'; remove.className='danger'; remove.textContent='禁用/删除'; remove.onclick=()=>deleteRule(slot); card.append(remove);
+  card.onsubmit = event => { event.preventDefault(); saveRule(slot); };
+  return card;
+}
+function setRuleForm(slot, rule) {
+  const card = document.querySelector('form[data-slot="'+slot+'"]');
+  for (const [key,value] of Object.entries(rule)) {
+    const input = card.elements.namedItem(key); if (!input) continue;
+    if (input.type === 'checkbox') input.checked = Boolean(value); else input.value = String(value);
+  }
+}
+async function refreshRules() {
+  const data = await exclusive('读取规则', () => api('/api/rules'));
+  ruleSlots = data.rules || []; $('rules').replaceChildren(form(0), form(1));
+  for (const rule of ruleSlots) setRuleForm(rule.slot, rule);
+  show('规则已从 '+data.source+' 回读', 'ok');
+}
+function ruleFormData(slot) {
+  const card = document.querySelector('form[data-slot="'+slot+'"]'); const values = {};
+  for (const key of ['enabled','relay','threshold','delayMs','timeoutMs','priority']) {
+    const input = card.elements.namedItem(key); values[key] = input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value;
+  }
+  values.action = card.elements.namedItem('action').value; values.safeState = card.elements.namedItem('safeState').value;
+  return new URLSearchParams(values).toString();
+}
+async function saveRule(slot) {
+  try {
+    const card = document.querySelector('form[data-slot="'+slot+'"]'); const enabled = card.elements.namedItem('enabled').checked;
+    const existing = ruleSlots.find(rule => rule.slot === slot);
+    await exclusive('保存规则', async () => {
+      if (!enabled && existing && existing.enabled) await api('/api/rules/'+slot, {method:'DELETE'});
+      else if (enabled) {
+        const body = ruleFormData(slot) + (existing && existing.enabled ? '' : '&slot='+slot);
+        await api(existing && existing.enabled ? '/api/rules/'+slot : '/api/rules', {method:existing && existing.enabled?'PUT':'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+      }
+    });
+    await refreshRules();
+  } catch (error) { show(error.message, 'error'); }
+}
+async function deleteRule(slot) {
+  try { await exclusive('禁用规则', () => api('/api/rules/'+slot, {method:'DELETE'})); await refreshRules(); }
+  catch (error) { show(error.message, 'error'); }
+}
+async function refreshOverview() {
+  try { const data = await exclusive('读取概览', async () => ({status:await api('/api/status'), dbc:await api('/api/dbc/runtime')})); showJson('overview', data); show('概览已更新', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
+}
+async function refreshManual() {
+  try { const data = await exclusive('读取手动继电器', () => api('/api/relay/manual')); showJson('manual-state', data); $('manual-enabled').value=data.enabled; $('manual-relay1').value=data.relay1; $('manual-relay2').value=data.relay2; show('已读取实际继电器状态', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
+}
+async function saveManual() {
+  try {
+    const body = new URLSearchParams({enabled:$('manual-enabled').value,relay1:$('manual-relay1').value,relay2:$('manual-relay2').value}).toString();
+    const data = await exclusive('提交手动继电器', () => api('/api/relay/manual',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    showJson('manual-state', data); show('RuleTask 已确认应用请求 '+data.requestSeq, 'ok');
+  } catch (error) { show(error.message, 'error'); }
+}
+function stopCan(message) { canAuto=false; canResumeOnVisible=false; clearTimeout(canTimer); clearTimeout(canInitialTimer); canInitialTimer=0; if (message) show(message, 'error'); }
+function pauseCanForHidden() { canResumeOnVisible=canAuto || canInitialTimer!==0; canAuto=false; clearTimeout(canTimer); clearTimeout(canInitialTimer); canInitialTimer=0; show('页面隐藏，自动 CAN 刷新已暂停', 'notice'); }
+async function canCycle() {
+  if (!canAuto || document.hidden) return;
+  const started=Date.now();
+  try {
+    await exclusive('CAN 自动刷新', async () => {
+      const can=await api('/api/can/status'); showJson('can-status', can);
+      await sleep(250); if (!canAuto || document.hidden) return;
+      const signals=await api('/api/signals'); showJson('signals', signals);
+      await sleep(250);
+    });
+  } catch (error) { stopCan('自动 CAN 刷新已停止：'+error.message); return; }
+  if (!canAuto || document.hidden) return;
+  canTimer=setTimeout(canCycle, Math.max(0,1000-(Date.now()-started)));
+}
+function startCan() { if (canAuto) return; canAuto=true; show('自动 CAN 刷新已启动', 'ok'); canCycle(); }
+async function uploadDbc() {
+  try { const file=$('dbc-file').files[0]; if (!file) throw new Error('请选择 DBC 文件'); if (file.size>1024) throw new Error('DBC 文件超过 1024 B'); const text=await file.text(); const data=await exclusive('上传 DBC',()=>api('/api/dbc/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text})); showJson('dbc-result',data); show('DBC 候选已上传，请确认后激活', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
+}
+async function activateDbc() {
+  try { if (!confirm('确认激活当前 DBC 候选？')) return; const data=await exclusive('激活 DBC',()=>api('/api/dbc/active',{method:'POST'})); showJson('dbc-result',data); show('DBC 已激活并回读 runtime', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
+}
+$('overview-refresh').onclick=refreshOverview; $('can-start').onclick=startCan; $('can-stop').onclick=()=>stopCan('自动 CAN 刷新已由用户停止');
+$('manual-read').onclick=refreshManual; $('manual-save').onclick=saveManual; $('rules-refresh').onclick=()=>refreshRules().catch(error=>show(error.message,'error'));
+$('dbc-upload').onclick=uploadDbc; $('dbc-activate').onclick=activateDbc;
+document.addEventListener('visibilitychange',()=>{ if (document.hidden) pauseCanForHidden(); else if (canResumeOnVisible) { canResumeOnVisible=false; startCan(); } });
+if (document.hidden) canResumeOnVisible=true; else canInitialTimer=setTimeout(()=>{ canInitialTimer=0; startCan(); },300);
+</script>
+</body>
+</html>

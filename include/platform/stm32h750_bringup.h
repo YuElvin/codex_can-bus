@@ -102,6 +102,17 @@ int w5500_http_dbc_reload_result(void);
 const DbcDatabase *w5500_http_active_dbc_snapshot(void);
 int w5500_http_status_poll(void);
 void w5500_http_trace_mutex_wait(uint32_t start_tick, uint32_t end_tick);
+int rule_task_manual_override_submit(uint32_t enabled,
+                                     uint32_t relay1,
+                                     uint32_t relay2,
+                                     uint32_t *request_seq);
+void rule_task_manual_override_snapshot(uint32_t *enabled,
+                                        uint32_t *relay1,
+                                        uint32_t *relay2,
+                                        uint32_t *request_seq,
+                                        uint32_t *applied_seq,
+                                        uint32_t *relay1_output,
+                                        uint32_t *relay2_output);
 
 #endif
 
