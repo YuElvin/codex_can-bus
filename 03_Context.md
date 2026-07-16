@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-17（G-1正常联合烟雾与G-2安全HTTP 500样本均已通过；当前仅剩G-3最终发布审计与治理封口）
+更新时间：2026-07-17（G-1/G-2及G-3功能与现场域均已通过；当前仅剩治理封口提交、推送与远端一致性确认）
 
 ## 当前仓库
 
@@ -13,9 +13,9 @@
 | 模块 | 状态 | 证据摘要 |
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
-| W5500 HTTP/API | [客观已验证] | 已烧录验证 `GET /api/status`、`GET /api/can/status`、`POST /api/dbc/upload` 返回 `HTTP/1.1 200 OK` JSON；未知路径返回 404 JSON |
+| W5500 HTTP/API | [一期边界客观已验证] | 受限状态/CAN/signals/DBC/rules/manual/静态页API均已验证；F-76完整响应/双向FIN、G-1的200/400/404及G-2的500恢复通过，保持单socket非并发边界 |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
-| TF CSV 最小落盘 | [客观已验证] | 旧 bring-up 1 秒循环版本已验证：写入次数 `18→42`、文件大小 `4334→7070`、结果持续为 0；该直接写路径已被本轮 LogTask 源码替换 |
+| TF CSV 落盘 | [一期边界客观已验证] | 独立LogTask默认路径长跑、F-19冷启动、F-26下电取卡实体CSV及G-1同映像write/flush/size增长均通过，failure=0；运行中热插拔不支持 |
 | 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
@@ -23,7 +23,7 @@
 | DBC 上传最小接口 | [客观已验证] | `POST /api/dbc/upload` 保存 `/dbc/candidate.dbc` 后从 TF 读回候选并调用 portable `dbc_parse_text()` 生成报告；已烧录验证返回 `bytes=164/lines=4/messages=1/signals=2/errors=0/valid=true`，ST-Link 读数 `candidate_load_result=0/candidate_valid=1` |
 | DBC 活动文件激活 | [客观已验证] | `POST /api/dbc/active` 无请求体最小命令已烧录验证：读回候选、portable parser 确认为 `errors=0` 后写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；有效候选返回 `activated=true`，无效候选返回 `HTTP 400 candidate_invalid` |
 | DBC 运行态快照 | [客观已验证] | active `0x321`/2 信号 DBC 启动加载正常；本轮 `POST /api/dbc/active` 返回 `activated=true/runtimeGeneration=2`，随后读到 `generation/load=2/2`、`valid=1/result=0` |
-| 最小 DBC 解码到 SignalCache | [客观已验证] | active DBC 已接入 CAN2 TX self-test 和外部 RX；本轮新增 DBC mutex，reload 与 CAN 解码共享锁，TX self-test decode/matched/updates 增长、decode errors=0；外部 RX 本轮未验证 |
+| DBC 解码到 SignalCache | [一期边界客观已验证] | active DBC已接入独立TX self-test和外部RX缓存；G-1外部marker/sequence=`42434/4660`、DBC RX持续增长、decode errors=0，reload与CAN解码共享锁 |
 | W25Q128 | [客观已验证] | 默认启动只读 JEDEC ID `EF4018`，未触发擦除；保留诊断区 `0x00FFF000` 的显式 ST-Link 擦写读回匹配 |
 | FreeRTOS 单任务 | [客观已验证] | 已烧录验证 `g_freertos_task_started=1`、`g_freertos_loop_count` 递增，W5500/CAN/TF/W25Q128 状态保持通过 |
 | FreeRTOS 基础多任务拆分 | [客观已验证] | TfTask 已烧录接管一次性 TF mount/smoke/default-page 初始化并由 bring-up 有限等待；MonitorTask 已接管 1 s 状态打印；CAN2 仍保持每 50 ms FIFO 接收、每 1 s 诊断发送；W5500 状态轮询与 HTTP socket0 轮询已拆为两个 50 ms 任务并由 mutex 串行化 |
@@ -34,7 +34,9 @@
 
 ## 当前阻断项
 
-- 当前无外部阻断。F-76最终pcap已确认5/5 HTTP完整交付、5/5双向FIN最终确认、RST=0、HTTP数据重传=0；下一步只读形成阶段G验收矩阵，再合并最少人工现场窗口。未经矩阵明确，不操作CANtest、TF、网线或上下电。
+- 当前无外部阻断或功能缺口。G-3确认一期所有功能与现场验收域PASS；当前只执行治理封口提交和远端一致性确认，不再操作CANtest、TF、网线、上下电、烧录或故障注入。
+
+### 历史过程与已接受边界（以下不构成当前阻断）
 
 - 用户已明确 TF 卡为“仅支持下电后插拔”：运行中热插拔/recovery 不再是功能或验收目标。历史真实拔插的 `FR_DISK_ERR` 仅保留为硬件边界证据；正式无 gate 固件已烧录，当前插卡启动下默认路径 `write=5/size=9206/failure=0`、ping/API/SignalCache 均正常。PA8 无检测开关且插拔均读高，永久屏蔽；临时检测/重挂载/格式化/gate 代码均不得提交。阶段 D 已按新的硬件操作边界关闭；阶段 E 已确认历史 `0xffffffff/erase_count=0` 是未实际触发时的初始化哨兵值，正式单次诊断已成功，下一固定阶段为 F。
 - 阶段 F 的第一个“30 分钟无现场操作静态长跑”子项未通过，不能作为阶段 F 完成证据：同一正式固件已重新烧录，所有任务循环、CAN 队列、W5500 链路和顺序网络 API 曾保持正常，但默认 LogTask 从起始 `write/flush/failure/drop=4/4/0/0` 运行至终态 `15/396/381/1526`，最后 `g_log_last_result=1`、`g_tf_csv_write_result=1`、`g_tf_write_open_result=1`。F-6 已在 TF 保持插入、板级断电至少 10 秒再上电的干净基线捕获首次错误：约 32 秒，read failure `0→1`、call `51→102`，append stage/op=`2/2`，单扇区 `LBA=3826`；调用前 `State=1/Context=0/ErrorCode=0/STA=0/DCOUNT=0`，调用后 `State=1/Context=0/ErrorCode=0x20/HAL_SD_ERROR_RX_OVERRUN/STA=0x29000/DCOUNT=448`。F-7 只读审计确认该调用实际为 CPU polling `HAL_SD_ReadBlocks`（非 DMA/IDMA），故障时 `MASK=0`，不依赖 SDMMC IRQ；FDCAN2 没有 NVIC 接收中断且任务轮询，不能归因于 FDCAN2 ISR。F-8 的关中断实验会冻结 HAL tick，已撤回；F-9 的 `vTaskSuspendAll/xTaskResumeAll` 保留 tick/中断但在外部 `0x321` 输入下越过 F-6 call=102 后仍出现 read failure，终态 call/failure=`120/5`、LogTask failure=`6`、`HAL_TIMEOUT`，同样已撤回并重烧录正式 F-5 路径。任务切换不是已证实的充分原因；下一步只能只读审计 SD 传输/轮询参数与 HAL 机制，不直接改参数。其后网络回归未通过：主机 en2 对 `192.168.1.88` ARP 为 incomplete，ping/HTTP 均超时；但精确 ELF 读数 `bringup=0/VERSIONR=4/PHYCFGR=0xBF/link=1/network_configured=1` 且任务循环递增，不能写成固件或 SD 因果回归。
@@ -58,13 +60,17 @@
 - 当前 HTTP 服务仍是 socket0 单连接最小实现，不支持并发连接、目录映射、HTTP Range、分块传输编码或通用上传；当前只把 `/` 和 `/index.html` 映射到 `/www/index.html`，只支持 `POST /api/dbc/upload` 的 1024 字节以内单请求体 DBC 上传。
 - DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 接收服务、`SignalCache`、最多两项的只读实时信号 API、LogTask 和最小内置 RuleTask；RuleTask 额外保留默认关闭的 ST-Link 手动覆盖验收入口，ConfigTask 仅承载已验证的单规则 QSPI 双槽保存。
 - 当前最小解码器在成功发送的 `0x321` 周期诊断帧上执行 TX self-test，也在外部 RX while-loop 上执行同一函数；两条路径使用独立 `SignalCache`，HTTP/Log/RuleTask 只消费外部 RX 缓存，且仍必须用独立来源计数区分验证。
-- 当前固件保留候选 scratch `DbcDatabase`、运行态双槽 `DbcDatabase`、外部 RX 与 TX self-test 两个固定 `SignalCache`、768 B 日志缓冲和 LogTask 栈；阶段 A 最终构建 RAM_D1 为 `231144 B / 512 KB = 44.09%`。后续扩大缓存或引入并发读者前必须继续复查内存并补齐同步边界。
+- 当前固件保留候选scratch `DbcDatabase`、运行态双槽`DbcDatabase`、外部RX与TX self-test两个固定`SignalCache`、768 B日志缓冲和LogTask栈；一期最终RAM_D1=`242792 B/512 KB=46.31%`。后续扩大缓存或引入并发读者前必须继续复查内存并补齐同步边界。
 - LogTask 不再由 bring-up 监控循环直接写 CSV：它每 100 ms 调度、每 1 秒复制最多两项、缓冲达到 512 B 或 5 秒才在 `fs_mutex` 下单批 `f_open/f_lseek/f_write/f_close`。初始化只读一次默认文件：成功或 `FR_NO_FILE` 选 `/log/signal.csv`，其他失败选 `/log/signal-recovery.csv` 并记录 path mode/switch count/active size；随后不再切换。写失败后清空本批、累计失败和丢弃，不做重试、轮换、下载 API、HTTP 配置或通用队列。临时 probe 代码已移除。
 - 2026-07-08 22:34 当前复查中 `/api/can/status` 可访问，但现场读数为 `rx=0/errors=487/tec=128/sendResult=1`；2026-07-08 22:46 用户打开 CAN 分析仪收发后复查恢复为 `sendResult=0`、`rx_count=508`、`tx_count=728`、`tec=0`、`bus_off=0`。
 - `CONVERSATION_SUMMARY.md` 已经较长，但仍按用户要求保留为完整对话摘要；当前快照以本文件为准。
 - macOS 串口曾出现乱码，硬件结论优先用 ST-Link 变量和外部工具确认。
 
 ## 下一步建议
+
+当前唯一下一步是提交并推送G-3治理封口，确认工作树干净、本地/远端一致后标记一期全量功能完成。后续新需求必须重新定义阶段与验收，不从下列历史过程继续。
+
+### 历史阶段推进记录（均已被后续验收更新）
 
 阶段 C、D、E 已关闭；阶段 F 进行中。F-12 已完成当前固件的30分钟静态插卡日志耐久，原长跑子项现有通过证据。F-13 已只读固定 F-14 的网络断开/恢复现场协议：无需代码改动，实时链路以 `g_w5500_link_up/PHYCFGR bit0` 的 `1→0→1` 为准，启动配置字段不能替代它；HTTP 须以串行主机请求和 error 计数交叉确认。下一步 F-14 必须暂停等待用户只拔出 W5500 网线后确认，再按固定读数验证断网，之后再等待插回确认验证恢复；不得先行自行断网、重启、烧录、拔插 TF 或改变 CANtest。
 
@@ -183,3 +189,9 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 实际RAM原值为v3/v2 load result=`0/0xffffffff`。仅临时把v3改为1，发送12 B故意非法body`enabled=true`；命中完整HTTP500、Content-Length=98，错误码=`rules_source_unavailable`，body SHA-256=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`。若注入未生效，该body只会400，不会保存。
 - v3立即恢复为0后，同一请求返回400 `invalid_rule`。规则正文前后SHA-256均为`85fcd21ea3482d8a6888ec06cf495346b3c4a62d72bb545a7c4dba2bdd824e9d`；v3/v2=`0/0xffffffff`、save request/result=`0/0`、generation=4、socket=LISTEN，HTTP error/ACK timeout/W5500 recovery全0。
 - 最终CAN tx/rx=`1056/10468`、所有错误0，RTOS/W5500/TF/QSPI正常，ping 2/2、status HTTP200。所有halt都没有reset，已resume/shutdown并释放OCD/GDB。G-2判定PASS；下一固定阶段G-3只做最终发布完整性审计和治理封口。
+
+## 2026-07-17 G-3 功能与现场域审计通过（发布封口待推送）
+
+- `0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304..HEAD`仅有治理Markdown变化；最终ELF/HEX哈希保持`26b632...34bc5`/`d1ef383...968c`。G-3复用G-1的CTest 15/15构建证据，本轮只核对现有产物的size、哈希和四条关键反汇编路径，未重新构建。
+- G-3逐域复核F-76、G-1、G-2以及可复用的长跑、网线、冷启动、bus-off、TF实体CSV、QSPI/规则证据，全部一期验收域PASS，不需要重复现场操作或烧录。
+- 旧“部分验证/阶段F进行中/外部RX未验证/队列未建立”只属于历史过程或过时当前描述，本次已在计划、验收合同、Feature索引、架构和当前状态区统一修正。明确非目标继续作为边界，不计为缺口。

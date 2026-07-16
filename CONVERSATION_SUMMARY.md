@@ -3123,3 +3123,13 @@
 - 500响应完成后立即恢复v3=0并读回v3/v2=`0/0xffffffff`；同一非法请求随后返回400 `invalid_rule`。规则响应前后逐字节`cmp`相同，SHA-256均为`85fcd21ea3482d8a6888ec06cf495346b3c4a62d72bb545a7c4dba2bdd824e9d`；`g_rule_file_v3_save_request/save_result=0/0`、generation=4，证明未发起TF规则保存。
 - 恢复快照为socket=`0x14 LISTEN`、HTTP error=0、ACK pending/timeout=`0/0`、W5500 recovery=0。最终CAN status=`tx/rx 1056/10468`且errors/busOff/TEC/REC/sendResult全0；RTOS ready、W5500 status/link/version=`0/1/4`、TF/QSPI status=`0/0`，ping 2/2、最终status HTTP200。所有halt无reset且已resume/shutdown，最终OCD/GDB与端口释放。
 - G-2判定PASS。本阶段只做RAM-only现场验证和Markdown治理同步，没有固件源码变化，因此没有新固件，不重复编译、反汇编或烧录。下一固定阶段G-3只读审计最终验收矩阵、Git/远端、最终固件哈希/烧录证据、治理一致性和非目标；不再重复高成本现场故障。
+
+## 2026-07-17 阶段 G-3：功能与现场域审计通过，发布封口待推送
+
+- G-2治理记录已提交推送为`0f11b95e7d24151a5d288bab2abd7705ea879930`。按用户要求继续以`fork_turns=none`派送固定G-3只读审计；G-3复用G-1同一最终映像的`verify.sh`/host CTest=15/15构建证据，本轮只执行`git diff --check`、现有ELF/HEX哈希、size、nm/objdump和Git发布核对，未重新构建。
+- 现有ELF `text/data/bss=92232/384/242408`；ELF/HEX仍为`26b632...34bc5`/`d1ef383...968c`，页面仍为`2ed23b...17da`。`0ef7d3e1...HEAD`只有治理Markdown变化，没有固件源码差异。
+- 定向反汇编确认HTTP的CLOSE_WAIT graceful DISCON、FSR=2048、500 ms完整恢复；LogTask的1000 ms/512 B/5000 ms与TF append；RuleFile v3栈帧120 B且调用`rule_engine_add_rule`；bus-off逐位Abort、Stop成功后Start及1000 ms限流。
+- 外派审计复核最终F-76 pcap、G-1原始19连接/DBC/Web/规则/日志证据、G-2原始500/恢复证据以及历史长跑、网线、冷启动、bus-off、实体CSV和QSPI证据，结论为所有功能与现场域PASS，无需重复CANtest、TF、网线、上下电、烧录或故障注入。
+- 审计发现唯一剩余项是治理一致性：`03_Context.md`顶部仍有旧G/F下一步，计划阶段10、验收合同多行、Feature F006-F009和架构CAN队列说明仍是过时“部分/未验证”。本轮保留历史记录并明确其已被后续证据更新，同时把当前计划、验收合同、Feature索引、架构和CURRENT_TASK统一为一期完成。
+- 本轮只修改Markdown治理文件；固件源码未变，未重新构建，也未生成新固件；G-3只核对现有最终ELF的哈希、size和定向反汇编，因此不重复烧录。治理提交推送并确认工作树干净、本地/远端ahead/behind=`0/0`后，发布完整性才转为PASS并可宣布一期全量功能完成。
+- 提交前最终核对：`git diff --check`通过，`0ef7d3e1..worktree`除治理Markdown外没有源码差异；现有ELF/HEX/page SHA-256分别为`26b632...34bc5`/`d1ef383...968c`/`2ed23b...17da`，ELF `text/data/bss=92232/384/242408`。经验编号无重复，`openocd`、`arm-none-eabi-gdb`、`gdb-multiarch`及3333/4444/6666监听均已释放。

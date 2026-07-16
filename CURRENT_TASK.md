@@ -8,8 +8,8 @@
 
 ## 当前阶段
 
-- 固定阶段：`G-3`。
-- G-1最终提交同映像正常联合烟雾和G-2安全HTTP 500现场样本均已通过；当前唯一目标是最终发布完整性只读审计与治理封口，不再做功能或故障注入。
+- 固定阶段：`一期全量功能已验收，发布封口待提交推送`。
+- G-1最终映像联合烟雾、G-2安全HTTP 500和G-3功能/现场域审计均已通过；唯一剩余动作是提交治理封口并确认远端一致。
 
 ## 成功标准
 
@@ -20,9 +20,9 @@
 
 ## Git 基线与工作树
 
-- F-76 已验收提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`。
+- 最终固件源码提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`；之后只有治理Markdown变化。
 - 分支：`codex/W5500`，跟踪 `origin/codex/W5500`。
-- 上述提交已推送，提交后工作树干净且与远端 ahead/behind=`0/0`。
+- G-3治理封口以提交后的当前HEAD为发布基线；发布完整性只在提交推送后工作树干净且与远端ahead/behind=`0/0`时生效。
 
 ## F-76 已验收基线
 
@@ -38,7 +38,13 @@
 
 ## 唯一下一动作
 
-以`fork_turns=none`外派G-3最终发布只读审计：逐项核对最终验收矩阵、提交/远端、固件哈希、已烧录证据、反汇编、现场G-1/G-2证据、非目标和治理文件一致性；只列真实未关闭缺口，不重复现场故障，不修改文件。
+提交并推送G-3治理封口，确认工作树干净、本地与远端ahead/behind=`0/0`；完成后无一期必做开发任务。
+
+## G-3 最终结论
+
+- 最终固件源码提交为`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`，之后只有治理Markdown变化；ELF/HEX SHA-256=`26b63222463e9c0cd31d55e5dc40b0ad1c86e2d2ca6d10a8f9b3d0f276b34bc5`/`d1ef3838757beb8478aea6413eb3b12c5f9fdf41f5196b96bfd2d7e8ddb7968c`。
+- G-3复用G-1同一最终映像的`verify.sh`/CTest=15/15证据；本轮只核对现有ELF/HEX哈希、`text/data/bss=92232/384/242408`以及HTTP、LogTask、RuleFile v3和bus-off关键`nm/objdump`结果，未重新构建。
+- F-76烧录/pcap、G-1同映像联合烟雾、G-2安全500以及历史长跑/网线/冷启动/bus-off/TF/QSPI证据共同覆盖最终验收矩阵。G-3判定所有一期域PASS。
 
 ## G-2 已验收基线
 
@@ -50,7 +56,7 @@
 
 ## G-1 已验收基线
 
-- 当前HEAD=`1e31213aa414c3bb11ede79e251ab02a37c58311`，工作树/远端一致；`verify.sh`与CTest=`15/15`通过，ELF/HEX哈希保持F-76已烧录值不变，HTTP、LogTask、RuleFile v3和CAN bus-off关键路径反汇编均通过。
+- G-1执行时HEAD=`1e31213aa414c3bb11ede79e251ab02a37c58311`，工作树/远端一致；`verify.sh`与CTest=`15/15`通过，ELF/HEX哈希保持F-76已烧录值不变，HTTP、LogTask、RuleFile v3和CAN bus-off关键路径反汇编均通过。
 - OpenOCD预读命令误含`reset run`导致一次复位；因此复位前HTTP结果未与后续计数混用。复位后重新取得Snapshot A，并从统一基线执行完整G-1。
 - 复位后19个严格串行HTTP连接全部返回预期状态码且Content-Length等于实际body：正常200链路、非法规则400和未知路径404均通过；页面11143 B且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`。
 - DBC精确151 B上传/激活成功，runtime generation=`1→2`；signals持续为marker=`42434`、sequence=`4660`、quality=`ok`。规则slot1完成`42435→42436→42435`并完整回读恢复；manual保持disabled、输出=`1/0`。

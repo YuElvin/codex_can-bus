@@ -43,8 +43,8 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | BSP/HAL | 时钟、GPIO、FDCAN1/FDCAN2、SPI2、SDMMC1、QUADSPI、USART2、NVIC | 外设初始化、中断入口、底层寄存器/HAL 适配 |
 | OS/驱动服务 | FreeRTOS、W5500 驱动、FatFs、时间服务、状态监控 | 任务调度、网络收发、文件系统串行化、诊断状态 |
 | 核心业务 | CAN RX/TX、DBC 解析/编码、信号缓存、日志、规则引擎、配置管理 | 数据采集、解析、控制、持久化 |
-| 接口层 | W5500 socket 服务、HTTP/REST、静态文件服务 | Web 配置、文件上传下载、状态查询 |
-| 前端 | `/www/index.html`、`app.js`、`style.css` | 单页中文界面，轻量无框架 |
+| 接口层 | W5500 socket 服务、HTTP/REST、静态文件服务 | Web 控制、受限DBC上传/激活、状态查询 |
+| 前端 | `/www/index.html`（内嵌CSS/JS） | TF驻留单页中文界面，无框架、CDN或外部资源 |
 
 ## 3. 存储与内存策略
 
@@ -55,10 +55,10 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | AXI SRAM / RAM_D1 | FreeRTOS heap、DBC 数据库、信号缓存、HTTP 临时缓冲、日志缓冲 | 大块数据优先放此处；当前 FreeRTOS heap 先放 RAM_D1 |
 | D2 SRAM | 后续 DMA buffer 预留 | 当前 W5500 SPI、保守 SDMMC 路径不依赖 ETH DMA |
 | TF 卡 | `/www/`、`/dbc/`、`/log/`、`/config/` | 一期主要资源存储介质 |
-| QSPI W25Q128 | 单规则配置备份、最小 Web/恢复信息、版本信息 | 默认启动只读识别；`0x00FFF000` 固定为诊断区，`0x00FFE000`/`0x00FFD000` 为单规则双槽，通用备份必须定义新的多记录模型 |
+| QSPI W25Q128 | 单规则双槽备份与诊断 | 默认启动只读识别；`0x00FFF000` 固定为诊断区，`0x00FFE000`/`0x00FFD000` 为单规则双槽；通用Web或版本存储不属于一期实现 |
 | TF RuleFile | `/config/rule.conf` 单规则启动覆盖 | v1 固定文本字段，最大 256 字节；有效文件优先于 QSPI，缺失只创建不覆盖，非法保持当前安全配置 |
 
-当前 DBC 候选读回 + 最小 active 激活 + 运行态双槽快照源码编译基线：FLASH 约 49.27%，RAM_D1 约 34.91%。后续每次引入网络服务、HTTP、DBC、信号缓存或日志，都要复查 Flash/RAM 水位。
+一期最终编译基线：FLASH/RAM_D1=`92628/242792 B`，ELF `text/data/bss=92232/384/242408`。后续任何新阶段引入网络服务、缓存或日志变化时必须重新复查Flash/RAM水位。
 
 ## 4. FreeRTOS 任务设计
 
@@ -67,19 +67,15 @@ TF 卡 + W25Q128 + FreeRTOS`。
 当前已经手动接入 FreeRTOS Kernel V10.6.2。外设初始化仍在调度器启动前完成，
 `main()` 创建一个 `bringup` 任务并启动 `vTaskStartScheduler()`。
 
-当前 `bringup` 任务顺序：
+当前`bringup`任务顺序：
 
-1. `w25q128_bringup_run()`
-2. `can_bringup_run()`
-3. `can_external_bringup_run()`
-4. `can2_analyzer_bringup_run()`
-5. `w5500_bringup_run()`
-6. `tf_card_bringup_run()`
-7. `w5500_http_load_active_dbc()` 尝试从 `/dbc/active.dbc` 加载运行态 DBC 快照
-8. 创建独立 CAN2 周期任务和 W5500 轮询任务
-9. 创建低优先级 `MonitorTask`，由其每秒打印状态；`bringup` 任务随后删除自身
+1. W25Q128只读识别并加载有效QSPI单规则双槽；执行FDCAN1、外部loopback诊断及FDCAN2 normal bring-up。
+2. 创建CAN2深度8 RX队列与深度1 TX队列，完成W5500 bring-up。
+3. 创建一次性`TfTask`并有限等待其mount/smoke/default-page完成，再加载`/dbc/active.dbc`。
+4. 初始化DBC reload队列、ConfigTask命令队列和W5500 mutex。
+5. 创建CAN2、CanDecode、W5500、HTTP、Dbc、Monitor、Config、Log、Rule任务，随后加载TF RuleFile v1/v2/v3并删除bringup自身。
 
-单任务阶段已经上板验证 `g_freertos_task_started/g_freertos_loop_count` 和各硬件状态正常。基础多任务拆分也已上板验证任务启动和 loop 递增。CAN2 服务每 50 ms 清空 RX FIFO 并更新 active DBC 外部快照，同时维持每 1 s 一次 `0x321` 诊断发送：TX self-test 与外部 CANtest RX FIFO 复用同一解码函数，但分别写入固定 self-test 与外部 RX `SignalCache`，HTTP、日志和规则只消费外部 RX 缓存。本轮已创建独立 `LogTask` 并移除 bringup 监控循环的直接 CSV 写入：任务每 100 ms 运行、每 1 秒取最多两项、768 B 缓冲在 512 B 或 5 秒时单批 flush。任务初始化一次性选择默认或 recovery 路径；插卡冷启动下默认路径已验证。TF 卡硬件操作边界为先下电再插拔，运行中热插拔/recovery 不支持。新增一次性 `TfTask` 复用 `tf_card_bringup_run()` 与默认页面确保动作；bring-up 以 1 ms `vTaskDelay` 等待完成，最多 5000 ms，超时进入 `Error_Handler()`，任务继续复用既有 `fs_mutex`，不改变 recovery 语义。50 ms ConfigTask 现把兼容的 ST-Link 诊断/规则保存请求转换为 `ConfigCommand`，经深度 2 队列由单消费者执行；规则候选在入队时快照。默认启动只读 JEDEC 后从 `0x00FFE000` 主槽与 `0x00FFD000` 备用槽选择有效且 sequence 最新的 v2 记录；显式 ST-Link 保存只擦写另一槽并读回比较，v1 主槽记录可兼容迁移。只有成功读回后才请求 RuleTask reload，保存失败不替换旧 engine；`0x00FFF000` 仍只用于诊断。该队列不包含 HTTP、TF 文件、CRUD、多规则或完整配置事务。另有 50 ms 最小 RuleTask：短临界区复制外部缓存快照，复用 portable `rule_engine` 集中驱动 PE7/PE8；Relay1 使用固定高滞回 `marker on=42434/off=42432` 与 1000 ms 连续匹配延时，实测 42434 置位、42433 保持、42432 释放，停帧超过 1500 ms 两路安全回低。默认关闭的 ST-Link 两路手动覆盖和单规则配置槽都只用于最小目标侧验收：reload 成功才原子替换一条规则，失败保留旧 engine；不构成文件配置或完整规则接口。
+单任务和基础多任务阶段均已上板验证。当前CAN2任务每50 ms轮询FIFO并经固定RX/TX队列交给CanDecodeTask，每1 s提交一次`0x321`周期发送；TX self-test与外部RX使用独立缓存，HTTP、日志和规则只消费外部缓存。LogTask、TfTask、DbcTask、ConfigTask和RuleTask的固定边界均已现场验证。ConfigTask作为单消费者承载QSPI兼容保存入口，并串行消费TF v3规则save_request；成功读回后才提交运行态/reload，失败保留旧engine。RuleTask集中驱动PE7/PE8，并已验证v2/v3两槽优先级、HTTP manual覆盖、超时safeState和受限CRUD。运行中TF热插拔、无界规则和通用配置事务不属于一期。
 
 ### 4.2 目标任务拆分
 
@@ -93,8 +89,8 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | `RuleTask` | 中高 | 2048 words | 20-50ms 周期 | 继电器规则、超时保护、默认状态 | 信号缓存、规则快照、继电器 |
 | `LogTask` | 中 | 1024 words | 100ms 调度、1s 采样 + 512B/5s flush | 最多两项 CSV 行缓冲，单批写 TF 卡 | FatFs mutex、768B 日志 buffer |
 | `NetTask` | 中 | 3072-4096 words | W5500 socket 事件/轮询 | W5500 socket 服务、连接维护 | W5500 mutex/socket 状态 |
-| `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | REST、静态文件、上传下载 | FatFs mutex、配置 mutex、命令队列 |
-| `ConfigTask` | 低 | 1024 words | 50 ms 轮询 | 消费固定深度 `ConfigCommand` 队列，当前承载 W25Q128 诊断和单规则保存；后续才扩展配置校验、文件保存和备份 | `cfg_cmd_q`、未来 FatFs mutex、QSPI mutex |
+| `HttpTask` | 中低 | 4096-6144 words | HTTP 请求 | 受限REST、静态页和DBC上传；不提供通用下载 | W5500 mutex、FatFs mutex、配置交接 |
+| `ConfigTask` | 低 | 1024 words | 50 ms 轮询 | 消费固定深度命令队列并串行执行W25Q128诊断/单规则保存，同时处理TF v3规则原子保存与reload交接 | `cfg_cmd_q`、FatFs mutex、QSPI |
 | `MonitorTask` | 低 | 1024 words | 500ms/1s | LED 心跳、状态统计、看门狗、诊断打印 | 系统状态 |
 
 优先级原则：CAN 收发和解码不被 Web、TF 卡和 W5500 长操作阻塞；FatFs 和 W25Q128 写操作串行化；Web 读取快照，不长时间持锁。
@@ -103,7 +99,7 @@ TF 卡 + W25Q128 + FreeRTOS`。
 
 ### 5.1 CAN 接收
 
-目标架构中，FDCAN2 中断只释放 semaphore 或设置通知；`CanRxTask` 从硬件 FIFO 取帧，转换为统一 `CanFrame`，写入 `can_rx_q`；`DbcDecodeTask` 按 `(ide,id)` 查当前 DBC，生成 `SignalValue`，用双缓冲更新 `SignalCache`；规则、日志、Web 读取缓存快照。当前最小实现尚未建队列：`can2_analyzer_poll()` 从 RX FIFO 得到帧后直接解码，成功发送的 `0x321` 也进入同一函数作 TX self-test；两者由独立来源计数区分。
+目标架构中，FDCAN2中断可只释放semaphore或设置通知。当前一期实现采用50 ms任务轮询硬件FIFO：CAN2任务把外部帧写入深度8的`can_rx_q`，CanDecodeTask消费后按active DBC更新外部`SignalCache`；周期发送请求写入深度1的`can_tx_q`，由CanDecodeTask统一调用CAN port发送，成功后只更新独立TX self-test缓存。规则、日志和Web只消费外部缓存；RX/TX队列入队、出队、drop及两个缓存来源均有独立计数，G-1最终映像验证drop/decode error为0。
 
 ### 5.2 CAN 发送
 
@@ -116,13 +112,13 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 1. 已引入 W5500 socket0 TCP 80 最小轮询服务。
 2. 已实现并烧录验证 `GET /api/status`、`GET /api/can/status` 和 `POST /api/dbc/upload`。
 3. 已实现 `/www/index.html` 默认页的分块静态读取；DBC 上传当前保存 `/dbc/candidate.dbc`，再从 TF 读回候选文件并用 portable `dbc_parse_text()` 返回解析报告；无请求体 `POST /api/dbc/active` 已烧录验证，可把有效候选写入 `/dbc/active.dbc`，并在启动/激活后从 active 文件读回解析到运行态双槽 DBC 快照。
-4. 最后增加配置保存、周期发送、规则接口。
+4. 已增加受限规则CRUD、manual继电器和兼容单规则配置接口；保持单socket串行服务，不实现通用配置、并发或下载服务。
 
 不再使用 lwIP `netif`、`ethernetif_input()` 或 ETH DMA 描述符路径。
 
 ### 5.4 DBC 切换
 
-当前 HTTP 上传仍是单请求体最小实现：`POST /api/dbc/upload` 只接受 1024 字节以内 text body，先写 `/dbc/upload.write.tmp`，然后把旧候选 `/dbc/candidate.dbc` 备份为 `/dbc/candidate.prev.dbc`，再 rename 新候选；新候选 rename 失败时尝试把旧候选恢复。上传成功后当前固件从 TF 读回 `/dbc/candidate.dbc`，调用 portable `dbc_parse_text()` 填充静态候选 `DbcDatabase` 并生成报告。无请求体 `POST /api/dbc/active` 已烧录验证：再次读回候选并确认 `errors=0` 后，写 `/dbc/active.write.tmp`，把旧活动 `/dbc/active.dbc` 备份到 `/dbc/active.prev.dbc`，再 rename 新活动；失败时沿用 FatFs helper 的恢复逻辑并保持当前活动文件不被主动覆盖。激活成功后固件再次从 `/dbc/active.dbc` 读回，解析到非活动运行态槽，只有 `errors=0` 才切换 active DBC 指针、active slot 和 generation；加载失败或无效文件不替换既有运行态快照。该快照现已接入 CAN2 的最小解码、SignalCache 和只读 `GET /api/signals`，但仍没有日志、规则或配置任务。
+当前HTTP上传是单请求体最小实现：`POST /api/dbc/upload`只接受1024字节以内text body，以tmp/prev方式原子替换候选；`POST /api/dbc/active`再次解析有效候选并以相同方式替换active文件。DbcTask只在解析成功后切换运行态双槽指针和generation，失败不替换现有快照。该快照已接入外部CAN解码、独立SignalCache、`/api/signals`、LogTask和RuleTask；配置保存由独立ConfigTask串行处理。
 
 ### 5.5 日志
 
@@ -132,9 +128,9 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 | 资源 | 机制 | 原因 |
 | --- | --- | --- |
-| CAN RX/TX | FreeRTOS Queue，固定深度，如 RX 128、TX 64 | 中断/任务解耦，背压可统计 |
+| CAN RX/TX | FreeRTOS Queue，当前固定深度RX 8、TX 1 | 轮询生产者与CanDecodeTask解耦，背压/drop可统计 |
 | W5500 SPI/socket | 单 W5500 任务或 mutex | 防止多个任务同时访问 SPI/socket 寄存器 |
-| 信号缓存 | 当前为 CAN2 轮询独占的单个 `SignalCache`；后续改双缓冲 + 版本号 + 短临界区换指针 | 当前只验证写入；Web/规则/日志并发读者接入前保证一致快照 |
+| 信号缓存 | 外部RX与TX self-test两个固定缓存；短临界区复制外部快照 | Web、规则和日志只读外部快照，来源与计数不混写 |
 | 当前 DBC | RCU 风格指针切换 + `dbc_mutex` 管理生命周期 | 切换时不中断解码 |
 | FatFs/TF | 全局 `fs_mutex` + 单次操作超时 | 避免并发损坏文件系统 |
 | W25Q128 | `qspi_mutex` + ConfigTask 串行写 | 防止配置备份与其他 QSPI 操作冲突 |
@@ -351,7 +347,7 @@ TF中的`/www/index.html`由仓库`www/index.html`唯一维护，使用原生HTM
 
 一期三项核心已经客观闭环：板端页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap中1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；规则页面实际完成slot1 threshold `42435→42436→42435`保存、读取和恢复；手动继电器页面提交`enabled=1/relay1=0/relay2=1`后RuleTask请求/应用序号=`1/1`、GPIOE ODR=`0x100`，关闭覆盖后序号=`2/2`、ODR=`0x80`并恢复自动规则。
 
-首次手动页面提交曾出现handler记录200但浏览器`Failed to fetch`且网络需复位恢复，因此架构结论仅覆盖功能路径，不覆盖HTTP长期稳定。下一阶段F-76必须在单socket边界内复现和修复响应交付异常，禁止扩展Web功能。DBC页面控制保留并复用既有API，但本次未在浏览器重做upload/active，不将历史API验证写成本次页面证据。
+首次手动页面提交曾出现handler记录200但浏览器`Failed to fetch`且网络需复位恢复，因此架构结论仅覆盖功能路径，不覆盖HTTP长期稳定。下一阶段F-76必须在单socket边界内复现和修复响应交付异常，禁止扩展Web功能。DBC页面控制保留并复用既有API；F-75现场未重新通过浏览器执行upload/active，因此只是不把该次浏览器操作列入F-75证据，不影响G-1已完成的DBC上传/激活/API与页面能力验收。
 
 ## F-76 单socket HTTP响应交付与关闭修复
 
@@ -370,3 +366,7 @@ F-76以失败pcap和`Sn_TX_FSR`确认：两次manual POST的handler和SENDOK均�
 G-2不破坏TF/QSPI、不暂停任务且不增加生产接口。只在RAM中将`g_rule_file_v3_load_result`从真实原值0临时改为1；`g_rule_file_v2_load_result`保持真实哨兵`0xffffffff`。规则写handler因此在candidate、body解析、save_request和文件操作之前返回500 `rules_source_unavailable`。请求体同时故意为非法`enabled=true`，注入失效时只会400且仍不保存。
 
 实测HTTP500头完整，Content-Length=98且body哈希=`85dc32d8f7ddc22a80edfe89d9a461fd5c545e6284e9e575df565f1ea6209a22`；RAM立即恢复后同一请求返回400。规则响应前后哈希一致，save request/result=`0/0`、generation=4、socket=LISTEN，HTTP error/ACK timeout/recovery=0；最终CAN、RTOS、W5500、TF和QSPI正常。该样本只验证500协议行为，不宣称真实存储失败。
+
+## G-3 一期最终发布审计
+
+G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并通过F-76/G-1/G-2的唯一最终映像。G-3复用G-1的host CTest 15/15构建证据，只核对现有ELF/HEX哈希、size及HTTP、LogTask、RuleFile v3、bus-off定向反汇编。所有功能与现场域PASS；发布完整性在治理提交推送、工作树干净且本地/远端ahead/behind=`0/0`后生效。并发HTTP、运行中TF热插拔、无界规则、通用配置、在线日志下载、鉴权/TLS等继续是明确非目标。

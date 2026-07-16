@@ -9,10 +9,10 @@
 | F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
-| F-006 | FreeRTOS 多任务拆分 | [部分客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask 已并行/分阶段运行；TfTask 接管一次性 TF 初始化；外部 CAN RX 已用深度 8 队列交给 CanDecodeTask，CAN TX 已用深度 1 队列交给现有 CanDecodeTask 发送；W5500 状态轮询与 HTTP socket0 轮询由 mutex 串行化；DbcTask reload 和 ConfigTask 两类命令均已有固定深度队列，完整配置服务仍待实现 |
-| F-007 | W5500 HTTP/API | [部分客观已验证] | `/api/status`、`/api/can/status`、`/api/signals`、`/`、`/index.html`、`POST /api/dbc/upload`、`POST /api/dbc/active` 和 `GET /api/dbc/runtime` 已烧录验证；F-17 成功响应优雅断开、F-19 冷启动后五项顺序 API、F-20 非法规则400后的独立短连接时序均已通过；仍是单socket非并发服务 |
-| F-008 | DBC 解析和信号缓存 | [部分客观已验证] | 已烧录验证 runtime active DBC 双槽快照、DBC mutex、CAN2 轮询解码、`SignalCache` 更新和最多两项的 `/api/signals` 快照；本轮 TX self-test 无解码错误，外部 CANtest RX 未验证，self-test 缓存仍与外部消费缓存隔离 |
-| F-009 | 日志和规则引擎 | [部分客观已验证] | 独立 LogTask 默认路径批量写已客观验证；F-19 冷启动后 v3 两规则、外部 CAN 解码与默认文件增长再次联合通过。TF 卡定义为仅支持下电后插拔，运行中 hotplug/recovery 不属于交付范围；完整通用配置仍待实现 |
+| F-006 | FreeRTOS 多任务拆分 | [一期边界客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask及固定深度RX/TX/DBC/config队列均已运行验证；W5500与FatFs共享资源由mutex串行化。通用消息总线和通用配置服务为非目标 |
+| F-007 | W5500 HTTP/API | [一期边界客观已验证] | 状态、CAN、signals、静态页、DBC、规则和manual受限API均已烧录/现场验证；F-76完整响应与双向FIN、G-1的200/400/404和G-2的500均通过。保持单socket非并发边界 |
+| F-008 | DBC 解析和信号缓存 | [一期边界客观已验证] | runtime active DBC双槽快照、mutex、外部CANtest RX解码、独立TX self-test缓存和最多两项`/api/signals`均已验证；G-1外部marker/sequence及DBC RX增长且decode error=0 |
+| F-009 | 日志和规则引擎 | [一期边界客观已验证] | LogTask长跑、实体CSV、冷启动恢复及G-1同映像增长通过；QSPI单规则与TF固定两槽v2/v3、优先级、manual、timeout/safeState、HTTP CRUD和GPIO均有现场证据。热插拔、无界规则和通用配置为非目标 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |
 | F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
 
@@ -194,7 +194,7 @@ F-75过程记录（已被后文最终状态替代）：当时仅达到源码与�
 
 F-75过程记录（已被后文最终状态替代）：严格固件已完成host CTest=15/15、关键反汇编、OpenOCD `Verified OK`和顺序API验证；当时TF页面联合验收尚未完成。
 
-F-75最终按用户明确的一期三项核心完成客观验收：板端服务页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap为1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；浏览器规则slot1 threshold完成`42435→42436→42435`保存/回读；浏览器手动覆盖`relay1=0/relay2=1`得到RuleTask序号`1/1`和GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复自动规则。第一次手动页面提交仍曾出现服务端记录200而浏览器`Failed to fetch`、主机网络暂时不可达，复位后第二次才完整通过，故本ADR只确认三项功能，不确认HTTP长期稳定。DBC区域保留并复用既有API，但本次没有浏览器侧重做upload/active，不把该页面操作列为F-75三项现场证据。
+F-75最终按用户明确的一期三项核心完成客观验收：板端服务页面为`11143 B`且SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`；独立pcap为1次首页、14次CAN状态、14次signals全部200，首页最终ACK至首API SYN=`303.503 ms`、RST=0；浏览器规则slot1 threshold完成`42435→42436→42435`保存/回读；浏览器手动覆盖`relay1=0/relay2=1`得到RuleTask序号`1/1`和GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复自动规则。第一次手动页面提交仍曾出现服务端记录200而浏览器`Failed to fetch`、主机网络暂时不可达，复位后第二次才完整通过，故本ADR只确认三项功能，不确认HTTP长期稳定。DBC区域保留并复用既有API；F-75现场未重新通过浏览器执行upload/active，因此只是不把该次操作列为F-75三项证据，不影响G-1已验收的DBC上传/激活/API与页面能力。
 
 ### ADR-026：HTTP响应完成以TCP ACK和优雅关闭为准
 
