@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-17（G-1/G-2、G-3功能与现场域及发布完整性均已通过；一期全量完成）
+更新时间：2026-07-22（W-1前端FIFO与CLOSE_WAIT最小修复已烧录并完成两轮网页现场回归）
 
 ## 当前仓库
 
@@ -14,12 +14,13 @@
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
 | W5500 HTTP/API | [一期边界客观已验证] | 受限状态/CAN/signals/DBC/rules/manual/静态页API均已验证；F-76完整响应/双向FIN、G-1的200/400/404及G-2的500恢复通过，保持单socket非并发边界 |
+| W-1 CLOSE_WAIT 关闭修复 | [本轮现场回归通过；长期稳定性未单独证明] | pending DISCON 的`SR=0x1c`已从`http_open_listener()`分离并调用既有 graceful `DISCON`；同一候选已烧录，OpenOCD输出`Programming Finished/Verified OK/Resetting Target`。首轮与退出后新页第二轮完成后，概览`lastNonclosedClose=0`；仅说明本次回归未再观察到旧`0x11c`，不作绝对长期结论。 |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
 | TF CSV 落盘 | [一期边界客观已验证] | 独立LogTask默认路径长跑、F-19冷启动、F-26下电取卡实体CSV及G-1同映像write/flush/size增长均通过，failure=0；运行中热插拔不支持 |
 | 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
-| TF 静态文件服务 / Web一期 | [客观已验证] | FatFs mutex与512字节分块静态服务已验证；板端冷启动页面11143 B且哈希与仓库一致。一期Web三项已由浏览器、pcap、API与GPIO闭环：CAN严格串行刷新、两槽规则保存/恢复、RuleTask手动继电器及关闭后恢复规则 |
+| TF 静态文件服务 / Web一期 | [W-1两轮现场回归通过] | 用户已下电写入 TF 的`/www/index.html`并上电。自动 CAN 刷新期间的 DBC 上传/激活实际成功，FIFO队列修复消除了“已有请求进行中”；退出后新页面第二轮继续完成回归。浏览器短等待曾读到旧手动状态，等待队列清空后的最终回读正常，不作为网页错误。 |
 | DBC 上传最小接口 | [客观已验证] | `POST /api/dbc/upload` 保存 `/dbc/candidate.dbc` 后从 TF 读回候选并调用 portable `dbc_parse_text()` 生成报告；已烧录验证返回 `bytes=164/lines=4/messages=1/signals=2/errors=0/valid=true`，ST-Link 读数 `candidate_load_result=0/candidate_valid=1` |
 | DBC 活动文件激活 | [客观已验证] | `POST /api/dbc/active` 无请求体最小命令已烧录验证：读回候选、portable parser 确认为 `errors=0` 后写入 `/dbc/active.dbc`，旧活动文件备份到 `/dbc/active.prev.dbc`；有效候选返回 `activated=true`，无效候选返回 `HTTP 400 candidate_invalid` |
 | DBC 运行态快照 | [客观已验证] | active `0x321`/2 信号 DBC 启动加载正常；本轮 `POST /api/dbc/active` 返回 `activated=true/runtimeGeneration=2`，随后读到 `generation/load=2/2`、`valid=1/result=0` |
@@ -34,7 +35,7 @@
 
 ## 当前阻断项
 
-- 当前无外部阻断、功能缺口或发布缺口。G-3确认一期所有功能与现场验收域PASS；治理封口`fe2154c`已推送并确认远端一致，不再操作CANtest、TF、网线、上下电、烧录或故障注入。
+- 当前无 W-1现场阻断：新网页已人工写入 TF 并上电，同一候选 HEX 已实际烧录；首轮与退出后新页第二轮均完成。最终概览RTOS started/ready=`1/1`，W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`，TF/QSPI=`0/0`，active DBC=`loaded=true/generation=3/151 B/3 lines/1 message/2 signals/errors=0`；CAN重新进入时tx/rx=`111/1088`且errors/busOff/tec/rec/sendResult均为0。手动继电器最终恢复disabled、request/applied=`4/4`、输出`1/0`；规则已回读`v3`并完成slot1暂改、删除、重建还原。本轮禁止据此扩大规则/继电器/DBC/TF/CAN语义或宣称长期稳定性结论。
 
 ### 历史过程与已接受边界（以下不构成当前阻断）
 

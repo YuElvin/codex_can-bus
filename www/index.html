@@ -57,7 +57,7 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
-let busy = false;
+let requestQueue = Promise.resolve();
 let canAuto = false;
 let canTimer = 0;
 let canInitialTimer = 0;
@@ -68,9 +68,9 @@ function show(message, kind = 'notice') { const node = $('notice'); node.classNa
 function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 async function exclusive(label, work) {
-  if (busy) { throw new Error(label + '：已有请求进行中'); }
-  busy = true;
-  try { return await work(); } finally { busy = false; }
+  const request = requestQueue.then(work);
+  requestQueue = request.catch(() => {});
+  return request;
 }
 async function api(path, options = {}) {
   const response = await fetch(path, Object.assign({cache:'no-store'}, options));
@@ -160,6 +160,7 @@ async function canCycle() {
   const started=Date.now();
   try {
     await exclusive('CAN 自动刷新', async () => {
+      if (!canAuto || document.hidden) return;
       const can=await api('/api/can/status'); showJson('can-status', can);
       await sleep(250); if (!canAuto || document.hidden) return;
       const signals=await api('/api/signals'); showJson('signals', signals);

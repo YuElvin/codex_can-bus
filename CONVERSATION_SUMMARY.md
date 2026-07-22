@@ -3126,6 +3126,24 @@
 
 ## 2026-07-17 阶段 G-3：一期最终发布完成
 
+## 2026-07-22 后台网页实际回归：开始
+
+- 用户新目标：在浏览器实际进入`192.168.1.88`后台，覆盖网页提供的功能，随后测试退出后重新进入；记录复现问题并按最小范围修复，直到重新进入及功能均正常。当前不以历史一期验收直接代替本次现场网页结果。
+- 本轮已先读取`CURRENT_TASK.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`和现有记录，并确认工作目录实际解析为`/Users/elvin/Desktop/project/can_bus_W5500`、分支`codex/W5500`、HEAD=`d3c3a17 Record phase-one release completion`。开始时尚未修改固件源码、未编译，因此尚未执行新的反汇编检查。
+- 假设：开发板、网线和TF均处于现有正常上电状态，且网页与HTTP单连接边界要求请求严格顺序执行并至少留出一个轮询周期。成功标准：浏览器实际完成所有可见表单/API操作且无前端错误；退出后重新输入地址仍可加载页面并继续完成最小回归；若复现问题，则先记录请求、页面现象与板端可观测证据，再实施最小修复并重建、反汇编及现场回归。
+- 实际首检失败：浏览器访问`http://192.168.1.88/`的导航超时，按浏览器恢复流程读取当前页面也因目标页CDP读取超时而无法取得DOM；这仅说明当前页面不可达，不能直接归因于固件。主机交叉检查显示路由经`en2`，`en2=192.168.1.100/24`且物理链路`active`；但`ping -c 2 -W 1000 192.168.1.88`为`0/2`，`curl --noproxy '*' --connect-timeout 3 --max-time 5 -i http://192.168.1.88/`连接超时，ARP为`(incomplete)`。因此当前问题是二层未解析到开发板MAC，尚未进入网页功能、退出或重新进入测试，也没有可据此实施的软件修复。
+- 本轮未改动固件源码、未编译，故未执行新的固件反汇编检查。等待人工恢复开发板供电与W5500网线连接后，再从浏览器首页开始严格顺序测试；恢复前不得把浏览器超时误判为网页逻辑故障。
+- 后续自动续行复测仍未恢复：ARP继续为`(incomplete)`，`ping -c 2 -W 1000`仍为`0/2`，HTTP连接在3秒超时（`http=000 bytes=0`）。该外部条件连续第二次出现；未调用网页表单、未修改源码、未编译或反汇编，继续暂停等待人工恢复网络。
+- 第三次同条件复测：ARP仍为`(incomplete)`；ping出现`No route to host/Host is down`后仍为`0/2`，HTTP立即连接失败（`http=000 bytes=0`）。这证明主机当前无法在二层发现板端MAC，无法开始浏览器实际功能测试，也无证据支持网页/固件修复。已按目标阻断规则将此任务标记为等待人工恢复；用户恢复供电和W5500网线后回复“已恢复”即可在新一轮继续。
+- 用户回复“已恢复”后，等待约20秒再次复测成功：ping=`2/2`，首页`HTTP 200`、长度`11143 B`、SHA-256=`2ed23b7fe6d1047b897d62bb8b6aa6376e4c1e6d90c5c7d4ff11918fc99117da`。浏览器已加载`CAN 网关控制台`，自动CAN刷新实际得到`marker=42434/sequence=4660`、`count=2`且CAN错误为0；停止、手工重新开始、再次停止均在页面成功，CAN TX/RX持续增长。
+- 第一轮网页实测已完成概览和手动继电器可逆闭环：概览显示RTOS ready、W5500 link/version=`1/4`、TF/QSPI状态0、active DBC为151 B/3行/1 message/2 signals/errors=0；手动覆盖从disabled基线切至`enabled=1, relay1=0, relay2=1`并收到`requestSeq/appliedSeq=1/1`、实际输出`0/1`，随后恢复`enabled=0, relay1=0, relay2=0`并收到`2/2`、规则输出恢复`1/0`。两槽规则已从v3回读，slot0=`42434/on/delay1000/priority10`，slot1=`42435/off/delay0/priority20`；slot1阈值可逆改为42436后又恢复42435，页面每次均回读成功。
+- 用户追加要求：网页功能不得只按顺序单次测试。后续验收调整为至少两轮完整网页回归：第一轮覆盖所有可见操作及恢复；退出/重新进入后以新页面重复第二轮，并验证无前端错误、设备健康和安全基线一致。本轮尚未改动固件源码、未编译，因此无新的反汇编检查。
+- W-1固定子项：第一轮实测发现自动 CAN 刷新正在请求时，用户点击上传DBC、激活DBC、读取/提交手动继电器或规则操作会被`exclusive()`的busy分支直接拒绝并显示“已有请求进行中”。根因仅在`www/index.html`前端互斥实现，不涉及固件HTTP协议或业务语义。
+- 本轮假设是页面所有`api()`都必须继续单请求串行；成功标准是用户操作在当前请求后按FIFO执行而不再因busy拒绝，且自动CAN在页面隐藏或停止后即使已排队也不再发出新请求。最小修改：以失败隔离的`requestQueue` Promise链替换`busy`拒绝逻辑；`canCycle()`进入队首后先重查`canAuto/document.hidden`，再决定是否请求`/api/can/status`。未新增并发API，未修改固件C、HTTP协议、规则/继电器/DBC/TF/CAN语义。
+- 静态验证：提取`www/index.html`唯一`<script>`内容并执行`node --check`，退出码`0`且无输出；`git diff --check`退出码`0`且无输出。未部署到TF卡，未构建、烧录、操作浏览器/网络/硬件；因此未生成新固件，也未执行固件反汇编检查。随后由主任务按现场流程部署并执行退出/重新进入的第二轮网页回归。
+- 部署阻断已由主会话实际确认：主机`/Volumes`没有挂载任何TF/SD卷；板卡的TF边界为仅支持下电插拔，不能在运行中由本任务热插拔或写卡。因此前端修复仍未部署，需人工在下电插卡流程中把`www/index.html`写入TF卡的`/www/index.html`后，才可重新进入后台执行第二轮现场验证。本轮仅补充治理记录，未修改网页或任何代码，未构建、烧录、浏览器/网络/硬件操作、提交或推送。
+- 主会话已连续等待人工TF部署确认；截至本记录仍未收到“已部署并上电”。因此不执行第二轮现场回归，也不判断前端FIFO修复是否已生效；继续保持未部署、待人工确认状态。
+
 - G-2治理记录已提交推送为`0f11b95e7d24151a5d288bab2abd7705ea879930`。按用户要求继续以`fork_turns=none`派送固定G-3只读审计；G-3复用G-1同一最终映像的`verify.sh`/host CTest=15/15构建证据，本轮只执行`git diff --check`、现有ELF/HEX哈希、size、nm/objdump和Git发布核对，未重新构建。
 - 现有ELF `text/data/bss=92232/384/242408`；ELF/HEX仍为`26b632...34bc5`/`d1ef383...968c`，页面仍为`2ed23b...17da`。`0ef7d3e1...HEAD`只有治理Markdown变化，没有固件源码差异。
 - 定向反汇编确认HTTP的CLOSE_WAIT graceful DISCON、FSR=2048、500 ms完整恢复；LogTask的1000 ms/512 B/5000 ms与TF append；RuleFile v3栈帧120 B且调用`rule_engine_add_rule`；bus-off逐位Abort、Stop成功后Start及1000 ms限流。
@@ -3134,3 +3152,21 @@
 - 本轮只修改Markdown治理文件；固件源码未变，未重新构建，也未生成新固件；G-3只核对现有最终ELF的哈希、size和定向反汇编，因此不重复烧录。治理提交推送并确认工作树干净、本地/远端ahead/behind=`0/0`后，发布完整性才转为PASS并可宣布一期全量功能完成。
 - 提交前最终核对：`git diff --check`通过，`0ef7d3e1..worktree`除治理Markdown外没有源码差异；现有ELF/HEX/page SHA-256分别为`26b632...34bc5`/`d1ef383...968c`/`2ed23b...17da`，ELF `text/data/bss=92232/384/242408`。经验编号无重复，`openocd`、`arm-none-eabi-gdb`、`gdb-multiarch`及3333/4444/6666监听均已释放。
 - 治理封口已提交为`fe2154c`（`Complete phase-one final acceptance`）并推送`origin/codex/W5500`；随后fetch确认本地与远端ahead/behind=`0/0`、工作树干净。验收矩阵发布完整性据此由PENDING转为PASS，一期全量功能完成；本记录提交仅同步该已发生的Git事实，不修改任何固件、网页或现场状态。
+
+## 2026-07-22 W-1：CLOSE_WAIT 错误重监听最小修复（仅源码/静态验证）
+
+- 现场已知事实：冷启动`lastNonclosedClose=0`，网页实测后为`0x11c`；HTTP仍可工作，但该值对应`source=1/SR=CLOSE_WAIT(0x1c)`，说明`g_w5500_http_disconnect_pending!=0`时错误走`http_open_listener()`，其中会硬`CLOSE`。
+- 本轮假设为客户端已FIN后的`CLOSE_WAIT`仍须由既有`DISCON`完成本端优雅关闭。成功标准：该分支只清`g_w5500_http_disconnect_pending`和其start tick后调用`http_begin_graceful_disconnect()`；调用失败严格复用ACK-wait既有`status=5`、`error_count++`、`http_close_socket(2)`；仅`CLOSED/INIT`进入`http_open_listener()`。不新增socket、API、并发或任何规则/手动继电器/DBC/TF/CAN语义。
+- 实际源码修改仅在`firmware/bringup/w5500_bringup.c`的 pending DISCON 分支：将`CLOSE_WAIT`从`CLOSED/INIT`合并条件拆出，清状态后调用graceful helper并返回；`CLOSED/INIT`原有trace finish和listener路径保持不变。
+- 静态验证：`git diff --check`通过；`./scripts/verify.sh`通过，host CTest=`15/15`，最终ELF=`build/stm32h750/can_bus_gateway_stm32h750.elf`，FLASH/RAM_D1=`92652/242792 B`，`text/data/bss=92256/384/242408`，ELF SHA-256=`58afe7a4731c3649162121ef297a84833973f2a8cee97bb0a52cefbb30364abc`。
+- 定向反汇编：`w5500_http_status_poll`在`0x08011384`比较`SR=0x1c`，命中后清pending并跳到`0x08011310`，该处调用`http_begin_graceful_disconnect`；`CLOSED/INIT`仅在`0x0801138c..0x08011398`清状态后跳到`0x0801131e`的`http_open_listener`。helper在`0x08010482`传入`0x08`调用`s0_command`，即`DISCON`，不是`CLOSE`。
+- 本轮未烧录、未启动OpenOCD/GDB、未操作浏览器/网络/硬件、未提交或推送。因此尚未证明`lastNonclosedClose=0x11c`已在现场消除；后续必须使用本ELF烧录后再作网页两轮回归，且前端FIFO修复仍需人工下电写入TF的`/www/index.html`。
+
+## 2026-07-22 W-1：烧录后的两轮网页现场回归
+
+- 用户已人工替换 TF 卡内网页文件并上电；本轮将`build/stm32h750/can_bus_gateway_stm32h750.hex`实际烧录，OpenOCD/ST-Link 输出`Programming Finished`、`Verified OK`、`Resetting Target`。本记录只同步已提供的现场事实，不把烧录或单轮成功扩写为长期稳定性结论。
+- 首轮网页回归与退出后重新打开的新页面第二轮均完成。自动 CAN 刷新运行期间，DBC 候选上传和激活均成功；第二轮`runtimeGeneration=3`。这直接验证`www/index.html`的FIFO请求队列已消除自动刷新时“已有请求进行中”的拒绝，不改变单socket严格串行边界。
+- 两轮中规则页面完成读取、slot1暂改、删除、重建并还原，最终页面回读`v3`；手动继电器最终恢复为`enabled=0, relay1=0, relay2=0, requestSeq=appliedSeq=4`，实际输出`1/0`。浏览器自动化的一次短等待读取到了旧手动状态；等待FIFO队列清空后最终回读正常，因此该现象按方法性时序记录，不作为网页错误。
+- 最终概览：RTOS started/ready=`1/1`；W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`；TF/QSPI status=`0/0`；active DBC=`loaded=true, generation=3, bytes=151, lines=3, messages=1, signals=2, errors=0`。重新进入页面时CAN tx/rx=`111/1088`，errors/busOff/tec/rec/sendResult均为0。
+- CLOSE_WAIT最小修复已实际烧录并在上述两轮现场回归中未再观察到旧`lastNonclosedClose=0x11c`；该现场结果仅覆盖本次操作窗口，尚不作为长期无异常的绝对结论。本次记录不修改源码、网页、构建配置或二进制，也未提交或推送。
+- 本次问答补记：第二个浏览器页面仅用于“退出后重新进入”的新页回归；验证完成后已关闭该第二页，最终保留一个页面。

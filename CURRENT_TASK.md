@@ -1,6 +1,6 @@
 # 当前任务
 
-更新时间：2026-07-17
+更新时间：2026-07-22
 
 ## 项目目标
 
@@ -8,8 +8,8 @@
 
 ## 当前阶段
 
-- 固定阶段：`一期全量功能完成`。
-- G-1最终映像联合烟雾、G-2安全HTTP 500、G-3功能/现场域审计和发布完整性均已通过；一期无剩余必做项。
+- 一期全量功能已完成；`W-1 后台网页两轮实际回归`已完成。人工已将更新后的网页文件写入 TF 并重新上电；同一候选 HEX 已烧录，首轮与退出后新页面第二轮均完成。
+- 本轮前端 FIFO 修复已在自动 CAN 刷新期间实际验证：DBC 上传与激活均成功，不再出现“已有请求进行中”。CLOSE_WAIT 最小修复也已现场复验：最终概览`lastNonclosedClose=0`；这只说明本次两轮回归未再观察到旧`0x11c`，不作长期绝对结论。
 
 ## 成功标准
 
@@ -21,6 +21,7 @@
 ## Git 基线与工作树
 
 - 最终固件源码提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`；之后只有治理Markdown变化。
+- 本轮工作树另有未提交的`firmware/bringup/w5500_bringup.c`最小 CLOSE_WAIT 修复；已将其构建产物`build/stm32h750/can_bus_gateway_stm32h750.hex`烧录并完成本轮现场回归，但它仍不可与`0ef7d3e1`对应的历史映像或证据混用。
 - 分支：`codex/W5500`，跟踪 `origin/codex/W5500`。
 - G-3治理封口提交`fe2154c`已推送；推送后工作树干净，本地与远端ahead/behind=`0/0`。
 
@@ -38,7 +39,7 @@
 
 ## 唯一下一动作
 
-无一期必做开发任务。后续新需求必须由主会话先定义新阶段、唯一目标和验收标准；不得把明确非目标自动扩入已完成的一期。
+本轮 W-1 无剩余现场阻断：已烧录`build/stm32h750/can_bus_gateway_stm32h750.hex`，OpenOCD 输出`Programming Finished`、`Verified OK`、`Resetting Target`；首轮及退出后新页第二轮均完成。最终概览为RTOS started/ready=`1/1`，W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`，TF/QSPI=`0/0`，active DBC=`loaded=true, generation=3, 151 B, 3 lines, 1 message, 2 signals, errors=0`。CAN重新进入时tx/rx=`111/1088`且errors/busOff/tec/rec/sendResult均为0；手动继电器已恢复`enabled=0, relay1=0, relay2=0, requestSeq=appliedSeq=4`、实际输出`1/0`；规则回读为`v3`并已完成slot1暂改、删除、重建还原。浏览器自动化短等待曾读到旧手动状态，等待FIFO队列清空后的最终回读正常，不作为网页错误。
 
 ## G-3 最终结论
 

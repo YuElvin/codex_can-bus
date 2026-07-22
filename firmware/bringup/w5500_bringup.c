@@ -2157,7 +2157,18 @@ int w5500_http_status_poll(void) {
       g_w5500_http_status = 0u;
       return 0;
     }
-    if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT || sr == W5500_S0_SR_CLOSE_WAIT) {
+    if (sr == W5500_S0_SR_CLOSE_WAIT) {
+      g_w5500_http_disconnect_pending = 0u;
+      g_w5500_http_disconnect_pending_start_tick = 0u;
+      if (http_begin_graceful_disconnect() != 0) {
+        g_w5500_http_status = 5u;
+        ++g_w5500_http_error_count;
+        (void)http_close_socket(2u);
+        return 1;
+      }
+      return 0;
+    }
+    if (sr == W5500_S0_SR_CLOSED || sr == W5500_S0_SR_INIT) {
       g_w5500_http_disconnect_pending = 0u;
       g_w5500_http_disconnect_pending_start_tick = 0u;
       http_trace_finish();
