@@ -3170,3 +3170,7 @@
 - 最终概览：RTOS started/ready=`1/1`；W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`；TF/QSPI status=`0/0`；active DBC=`loaded=true, generation=3, bytes=151, lines=3, messages=1, signals=2, errors=0`。重新进入页面时CAN tx/rx=`111/1088`，errors/busOff/tec/rec/sendResult均为0。
 - CLOSE_WAIT最小修复已实际烧录并在上述两轮现场回归中未再观察到旧`lastNonclosedClose=0x11c`；该现场结果仅覆盖本次操作窗口，尚不作为长期无异常的绝对结论。本次记录不修改源码、网页、构建配置或二进制，也未提交或推送。
 - 本次问答补记：第二个浏览器页面仅用于“退出后重新进入”的新页回归；验证完成后已关闭该第二页，最终保留一个页面。
+
+## 2026-07-22 Git 提交推送结果补记
+
+- 用户请求提交推送后，提交 `66b2528 Fix web request FIFO and CLOSE_WAIT handling` 已推送至 `origin/codex/W5500`；本地/上游 ahead/behind=`0/0`。
