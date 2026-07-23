@@ -38,6 +38,30 @@ SignalLogBufferResult signal_log_buffer_append_snapshot(SignalLogBuffer *buffer,
   return SIGNAL_LOG_BUFFER_OK;
 }
 
+SignalLogBufferResult signal_log_buffer_append_snapshot_v2(SignalLogBuffer *buffer,
+                                                            const SignalCacheEntry *entries,
+                                                            size_t entry_count,
+                                                            uint64_t unix_ms,
+                                                            bool include_header) {
+  char rows[512];
+  const size_t length = signal_csv_build_rows_v2(entries,
+                                                  entry_count,
+                                                  unix_ms,
+                                                  include_header,
+                                                  rows,
+                                                  sizeof(rows));
+  if (buffer == NULL || buffer->data == NULL || buffer->capacity == 0u || length == 0u) {
+    return SIGNAL_LOG_BUFFER_SERIALIZE_ERROR;
+  }
+  if (length >= buffer->capacity - buffer->length) {
+    return SIGNAL_LOG_BUFFER_FULL;
+  }
+  memcpy(&buffer->data[buffer->length], rows, length);
+  buffer->length += length;
+  buffer->data[buffer->length] = '\0';
+  return SIGNAL_LOG_BUFFER_OK;
+}
+
 bool signal_log_buffer_should_flush(const SignalLogBuffer *buffer,
                                     size_t flush_threshold,
                                     uint32_t last_flush_ms,

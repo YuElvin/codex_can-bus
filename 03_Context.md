@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-24（阶段14最终现场验收已完成）
+更新时间：2026-07-24（时间同步/可选时间日志已实现、构建、反汇编、烧录、现场主体及实体 CSV 只读复核完成）
 
 ## 当前仓库
 
@@ -18,8 +18,9 @@
 | W-1 CLOSE_WAIT 关闭修复 | [本轮现场回归通过；长期稳定性未单独证明] | pending DISCON 的`SR=0x1c`已从`http_open_listener()`分离并调用既有 graceful `DISCON`；同一候选已烧录，OpenOCD输出`Programming Finished/Verified OK/Resetting Target`。首轮与退出后新页第二轮完成后，概览`lastNonclosedClose=0`；仅说明本次回归未再观察到旧`0x11c`，不作绝对长期结论。 |
 | 网页 CAN 发送控制 | [客观通过] | 经典 CAN窄合同保持为`GET/POST /api/can/tx`、`GET /api/can/tx/signals`、标准 ID、DLC、8字节HEX、周期`100..10000 ms`，TX/RX缓存分离。用户已将更新版`www`写入TF并上电；状态灯`status-lamp ok`、TX/RX累计、默认折叠详情、CANoe式TX/RX DBC表和可逆控制均由浏览器实测。最终配置`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，已应用且result=0；TX self-test与CANtest外部输入RX表均为`42434/4660/ok`。自动刷新`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。未直接读取CANtest接收显示确认新TX帧，不能把该边界写成外部接收器逐帧证据。 |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
-| TF CSV 落盘 | [一期边界客观已验证] | 独立LogTask默认路径长跑、F-19冷启动、F-26下电取卡实体CSV及G-1同映像write/flush/size增长均通过，failure=0；运行中热插拔不支持 |
-| 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
+| TF CSV 落盘 | [一期历史边界客观已验证] | 旧`/log/signal.csv`的长跑、冷启动和实体CSV证据保留为历史；新实现不向该旧六列文件混写时间列。运行中热插拔仍不支持 |
+| 最小 LogTask | [实现已烧录；新路径现场未验证] | 新任务默认关闭，启用且RAM时间已同步后才按`100..10000 ms`采样，缓冲`512 B`或`5 s`flush；只写`/log/signal-v2.csv`。TF 卡操作边界仍为插拔前下电 |
+| 网页时间同步与可选时间日志 | [现场主体通过；实体 CSV 内容已只读复核] | 无 RTC/NTP，`POST /api/time/sync`以`unixMs`建立RAM基准，复位后失效；`GET/POST /api/log/control`查询/设置`enabled`、`samplePeriodMs`、`timeSynced`、`unixMs`。网页、自动同步/回读、启停、手动同步、最终停止及自动刷新下安全提交均已现场完成；ST-Link 写入`33→40`、文件`18185→22217 B`、失败/丢弃`0`证明运行态 flush 落盘。实体只读复核确认`/Volumes/NO NAME/log/signal-v2.csv`为`28553 B`，表头为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`，首末UTC为`2026-07-23T16:59:32.051Z→2026-07-23T17:03:34.638Z`，含`Can2Data.marker=42434`、`Can2Data.sequence=4660`和`quality=ok`。 |
 | FDCAN2 外部 CAN | [客观已验证] | Windows CANtest 可收到开发板 `0x321` 周期帧；开发板收到 Windows 发帧；2026-07-08 22:46 分析仪收发打开后复查 `sendResult=0`、`rx_count=508`、`tx_count=728` |
 | TF 卡 | [客观已验证] | SDMMC/FatFs smoke test 写读通过 |
 | TF 静态文件服务 / Web一期 | [W-1两轮现场回归通过] | 用户已下电写入 TF 的`/www/index.html`并上电。自动 CAN 刷新期间的 DBC 上传/激活实际成功，FIFO队列修复消除了“已有请求进行中”；退出后新页面第二轮继续完成回归。浏览器短等待曾读到旧手动状态，等待队列清空后的最终回读正常，不作为网页错误。 |
@@ -37,7 +38,9 @@
 
 ## 当前阻断项
 
-- 本轮无现场阻断。此前旧页误部署、活动 DBC 缺失、首次输入被覆盖和浮点 threshold=`0`均已修复并最终复验。TX self-test 仍不等于外部接收器证明；外部 RX 的本轮证据为 RX 表实际解析和累计增长，不能扩大为 CANtest 对本轮 TX 帧的逐帧读回。
+- 新时间阶段的主体现场验收和实体 CSV 内容只读复核均已完成，不再等待网页部署或把历史`"unixMs":lu`列为当前阻断。该历史非 JSON 缺陷已最小修复、重建、反汇编和重烧录；`/Volumes/NO NAME/log/signal-v2.csv`已实际只读确认大小`28553 B`、唯一表头及记录行。运行态计数仍不替代该实体内容读取，旧`/log/signal.csv`历史证据也不能替代新文件内容。
+- 现场已确认：TF 新网页加载、默认记录关闭与继电器详情折叠；未同步`250 ms`启动自动同步/回读，停止`800 ms`、再启用`1200 ms`、手动同步和最终停止；继电器红闭合/绿断开两轮反向输出后恢复关闭；自动刷新期间最终`request/applied=6/6`且 CAN 增长。ST-Link 两次采样写入`33→40`、文件`18185→22217 B`、失败/丢弃`0`，证明运行态成功 flush 及增长。
+- 新实现仍保持W5500单 socket 串行处理；RAM时间不持久化，复位后必须再次同步。TX self-test仍不等于外部接收器证明，既有外部RX结论不扩大。
 
 ### 历史过程与已接受边界（以下不构成当前阻断）
 
@@ -64,13 +67,15 @@
 - DBC 上传当前生成候选文件 `/dbc/candidate.dbc`，旧候选保留为 `/dbc/candidate.prev.dbc`；当前 active 文件是本轮验证使用的 `0x321`/2 信号 DBC。运行态快照已接入 CAN2 接收服务、`SignalCache`、最多两项的只读实时信号 API、LogTask 和最小内置 RuleTask；RuleTask 额外保留默认关闭的 ST-Link 手动覆盖验收入口，ConfigTask 仅承载已验证的单规则 QSPI 双槽保存。
 - 当前最小解码器在成功发送的 `0x321` 周期诊断帧上执行 TX self-test，也在外部 RX while-loop 上执行同一函数；两条路径使用独立 `SignalCache`，HTTP/Log/RuleTask 只消费外部 RX 缓存，且仍必须用独立来源计数区分验证。
 - 当前固件保留候选scratch `DbcDatabase`、运行态双槽`DbcDatabase`、外部RX与TX self-test两个固定`SignalCache`、768 B日志缓冲和LogTask栈；一期最终RAM_D1=`242792 B/512 KB=46.31%`。后续扩大缓存或引入并发读者前必须继续复查内存并补齐同步边界。
-- LogTask 不再由 bring-up 监控循环直接写 CSV：它每 100 ms 调度、每 1 秒复制最多两项、缓冲达到 512 B 或 5 秒才在 `fs_mutex` 下单批 `f_open/f_lseek/f_write/f_close`。初始化只读一次默认文件：成功或 `FR_NO_FILE` 选 `/log/signal.csv`，其他失败选 `/log/signal-recovery.csv` 并记录 path mode/switch count/active size；随后不再切换。写失败后清空本批、累计失败和丢弃，不做重试、轮换、下载 API、HTTP 配置或通用队列。临时 probe 代码已移除。
+- LogTask 由独立任务每100 ms调度；当前新实现只在`enabled=true`且RAM时间已同步时采样，按`samplePeriodMs=100..10000`采样，缓冲达到512 B或5 s后在`fs_mutex`下追加`/log/signal-v2.csv`。停止或未同步时清空内存缓冲，不向旧`/log/signal.csv`混写；不做时间或记录开关持久化、重试、轮换、下载API或并发HTTP。
+- 旧CSV表头`updated_ms,key,value,raw,unit,quality`与其历史实体文件证据保持原样；新CSV使用`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`。本轮已完成`verify.sh=18/18`、最终ELF关键反汇编和OpenOCD烧录；首次构建的局部`enabled`告警已最小初始化修复并在随后构建中消失。网页、HTTP、TF记录启停及实体CSV已现场/只读验证；本次实体文件为`/Volumes/NO NAME/log/signal-v2.csv`、`28553 B`，首末记录均为`Can2Data.marker=42434`与`Can2Data.sequence=4660`且`quality=ok`。
 - 2026-07-08 22:34 当前复查中 `/api/can/status` 可访问，但现场读数为 `rx=0/errors=487/tec=128/sendResult=1`；2026-07-08 22:46 用户打开 CAN 分析仪收发后复查恢复为 `sendResult=0`、`rx_count=508`、`tx_count=728`、`tec=0`、`bus_off=0`。
 - `CONVERSATION_SUMMARY.md` 已经较长，但仍按用户要求保留为完整对话摘要；当前快照以本文件为准。
 - macOS 串口曾出现乱码，硬件结论优先用 ST-Link 变量和外部工具确认。
 
 ## 下一步建议
 
+- 新需求仅推进最小时间合同：先实现网页设置 RAM 时间基准及其只读状态，再实现默认关闭、候选频率`100..10000 ms`的独立时间日志；不得改写`/log/signal.csv`、增加日志下载、引入 NTP/RTC 或并发 HTTP。每一步均须重新构建、关键反汇编和现场证据后才可转为已验证。
 - 仅在用户完成更新版`www`写入 TF 并上电后，按单 socket 串行约束从浏览器验收状态灯、TX/RX 区、折叠和 TX/RX DBC 表；再由 CANtest 明确确认新控制帧的外部接收。TX self-test `42434/4660`、RX 独立计数和 CAN errors=`0`均不能替代该外部接收证据。
 
 一期无必做下一步。后续新需求必须重新定义阶段与验收，不从下列历史过程继续。

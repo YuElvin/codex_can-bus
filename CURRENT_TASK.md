@@ -8,6 +8,10 @@
 
 ## 当前阶段
 
+- 新需求阶段“网页时间同步与可选时间日志”处于[现场主体通过；实体 CSV 内容已只读复核]：无 RTC/NTP 的 RAM 时间基准由`POST /api/time/sync`的`unixMs`设置，重启后失效；`GET/POST /api/log/control`返回或设置`enabled`、`samplePeriodMs`、`timeSynced`、`unixMs`和新路径。记录默认关闭，周期限制`100..10000 ms`；未同步时首次启用携带`unixMs`会自动同步。
+- 新日志仅写`/log/signal-v2.csv`，CSV 新表头为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`；旧`/log/signal.csv`既有内容和六列表头未被混写或改动。本轮`./scripts/verify.sh`实际通过，host tests=`18/18`；首次 STM32 构建仅出现`http_handle_log_control()`局部`enabled`可能未初始化警告，已用最小`= false`初始化修复后重新构建无该警告。最终 ELF `text/data/bss=109276/764/243712`，关键反汇编确认时间基准初始化、日志启停/新路径与两个 HTTP 路由均在最终映像中；OpenOCD/ST-Link已报告`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.280054 V`。
+- 现场主体已完成：TF 新网页正确加载，默认记录关闭、继电器详情折叠；未同步的`250 ms`启动自动同步并可回读，随后完成停止`800 ms`、再启用`1200 ms`、手动同步和最终停止。自动刷新期间安全提交的最终`request/applied=6/6`且 CAN 计数增长；继电器红色闭合/绿色断开两轮反向输出均实际操作并最终恢复关闭。
+- 历史首读的`"unixMs":lu`非 JSON 缺陷已由最小 64 位格式化修复后重建、反汇编和重烧录关闭，不能再作为当前阻断。ST-Link 两次采样中日志写入`33→40`、文件`18185→22217 B`、失败/丢弃均为`0`，运行态证明`/log/signal-v2.csv`写入链路已成功 flush 并增长；随后已在`/Volumes/NO NAME/log/signal-v2.csv`完成实体只读复核：大小`28553 B`，表头精确为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`，首末UTC为`2026-07-23T16:59:32.051Z→2026-07-23T17:03:34.638Z`，记录含`Can2Data.marker=42434`、`Can2Data.sequence=4660`及`quality=ok`。时间列实体内容现已实际读取确认。
 - 阶段14“网页运行中手动 TX 与两槽活动 DBC `signalKey` 规则”现场验收完成，继续保持 W5500 单 socket、非并发边界。正确部署 TF 网站根目录的新网页后，自动刷新现场 TX/RX 从`55/364`增长至`576/5540`；浏览器 warn/error 日志为空。
 - 自动刷新运行中两次编辑 TX 均未被覆盖：`C2 A5 78 56 02 03 04 05`等待`1800 ms`仍保留，提交后表格已应用且`result=0`；随后`C2 A5 00 01 02 03 04 05`等待`1300 ms`仍保留并提交恢复。最终 TX DBC `sequence=256`。
 - 已完成的静态与烧录证据：CMake STM32 链接选项已增加`-Wl,-u,_printf_float`，修复 RuleFile V4 threshold 浮点格式化为`0`的问题。`./scripts/verify.sh` host tests=`17/17`通过，STM32 firmware构建成功，最终ELF `text/data/bss=106748/764/243688`；`nm`/map确认`_printf_float`、`_dtoa_r`、`_vfiprintf_r`存在，`objdump`确认`rule_file_format_decimal`调用`sniprintf`。2026-07-23 OpenOCD刚完成对`build/stm32h750/can_bus_gateway_stm32h750.hex`的`Programming Finished`、`Verified OK`、`Resetting Target`。

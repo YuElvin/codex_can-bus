@@ -3293,3 +3293,42 @@
 
 - 阶段14当前功能变更已提交为`57a9fc4 Enable live CAN control and DBC rule signals`，并已成功推送到`origin/codex/W5500`。
 - 在该功能提交前，`git diff --check`已通过；推送完成后工作树为干净状态。本次仅追加本中文治理记录，未修改源码或其他项目文件，未编译，因此未执行新的固件反汇编检查。
+
+## 2026-07-24 新需求启动：网页时间同步与可选时间日志（实现中/未验证）
+
+- 本轮先完成只读后端审计。现有 LogTask 在 TF 初始化后无条件创建；旧记录默认尝试写入`/log/signal.csv`，文件不存在也仍选择该默认路径。它每`100 ms`调度、每`1 s`复制最多两项外部 RX `SignalCache`，缓冲达到`512 B`或距上次 flush `5 s`才追加落盘；默认路径读取失败才一次性转为`/log/signal-recovery.csv`。这是一期既有、已验收的旧日志行为，不等于新时间日志已实现。
+- 现有 CSV 合同固定为六列`updated_ms,key,value,raw,unit,quality`；`updated_ms`是在 CAN 解码时写入的`HAL_GetTick()`单调毫秒值，不是记录时刻或 UTC。单元测试和实体 CSV 验收都依赖该精确表头，故禁止在既有`/log/signal.csv`中直接增加时间列或混写不同列数的行。
+- 审计未发现现有 RTC 初始化/读取、NTP/SNTP 客户端或系统墙钟；RTC HAL 未启用，FatFs `get_fattime()`当前返回`0`。串口历史字段`rtc=`实际是 FreeRTOS 循环计数，不能作为 RTC 证据。
+- 拟定最小合同为：网页通过受限单 socket API 设置 RAM 时间基准，复位后明确失效；新“带网页时间的日志”默认不记录，只有用户明确启用后按候选`100..10000 ms`周期运行。为保持旧 CSV 兼容，拟使用独立候选路径`/log/signal-time.csv`，故障路径候选为`/log/signal-time-recovery.csv`。API名称、字段、文件格式及实现尚未定稿，以上均为设计候选。
+- 当前状态严格为[实现中/未验证]：本次子任务只修改治理Markdown，未修改源码、网页、测试或构建文件；未编译，因此未执行新的固件反汇编；未烧录、访问网络或操作硬件。新阶段的具体 API、文件格式与实现状态仍须以当前工作树和后续验证为准，完成后依次执行构建、关键反汇编、烧录和网页/TF现场验收，才可更新任何通过结论。
+
+## 2026-07-24 时间同步与可选时间日志：实现、构建、反汇编和烧录完成，现场待验证
+
+- 后端最小实现已将网页调用所需合同固化为单 socket 串行 API：`POST /api/time/sync`请求字段为`unixMs`；`GET /api/log/control`返回`enabled`、`samplePeriodMs`、`timeSynced`、`unixMs`和路径；`POST /api/log/control`设置`enabled`、`samplePeriodMs`，可携带`unixMs`。RAM时间基准不使用RTC/NTP且重启后失效；记录默认关闭，周期范围固定为`100..10000 ms`，未同步时首次启用携带`unixMs`会自动同步。
+- 新记录只写`/log/signal-v2.csv`，不混写既有`/log/signal.csv`。新表头为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`；旧六列CSV及其既有实体文件事实未改动。日志任务仅在启用且时间已同步时运行，停止或未同步时不继续保留待写入缓冲。
+- 实际执行`./scripts/verify.sh`，host tests=`18/18`通过。首次STM32构建发现`http_handle_log_control()`局部`enabled`触发`-Wmaybe-uninitialized`警告；随后仅以`bool enabled = false;`初始化修复，重新构建后该警告未再出现。最终ELF `text/data/bss=109276/764/243712`。
+- 已对最终ELF关键路径反汇编：RAM控制初始化在调度器启动前；LogTask包含启停/同步门控、`/log/signal-v2.csv`与UTC列序列化调用；HTTP请求分派包含`/api/time/sync`和`/api/log/control`的GET/POST路径。OpenOCD/ST-Link对最终HEX输出`Programming Finished`、`Verified OK`、`Resetting Target`，供电电压=`3.280054 V`。
+- 当前状态不是完成：未访问网页、未观察HTTP响应、未确认TF网页已更新、未读取TF上的`/log/signal-v2.csv`，也未现场验证时间同步、启停或停止后不继续记录。当前只等待用户更新TF网页并上电；收到确认后才可在既有单socket串行边界下进行现场重复验证。本次治理记录不新增网页/HTTP/TF现场成功结论。
+
+## 2026-07-24 时间同步与可选时间日志：网页现场首读的 JSON 阻断
+
+- 用户现场确认 TF 新网页已正确加载：可见新页面标题及时间/记录控件；默认记录开关未勾选，继电器详情保持折叠。这只证明新网页从 TF 加载及默认 UI 状态，不证明时间同步、记录、继电器交互或 CSV 已通过。
+- 点击记录读取时，服务器实际响应含`"unixMs":lu`，网页明确提示“返回非 JSON”。`lu`不是合法 JSON 数值，故该响应不能写为 API 成功。
+- 当前只记录最小根因候选为固件 64 位格式化待修复；尚未完成新的源码修复、构建、反汇编、烧录或现场复验。时间/记录、继电器现场交互和`/log/signal-v2.csv`均严格为[未验收]。
+- 本次仅同步`CONVERSATION_SUMMARY.md`、`CURRENT_TASK.md`和`03_Context.md`；未修改其他文件，未编译、烧录、重新访问浏览器、执行网络/CAN/TF操作或提交。现场事实来自用户实际首读反馈。
+
+## 2026-07-24 时间同步与可选时间日志：完整现场主体验收通过
+
+- 首次`/api/log/control`现场读取确实返回`"unixMs":lu`并造成网页“返回非 JSON”。该 64 位格式化缺陷随后以最小修复关闭：重新执行`./scripts/verify.sh`，host tests=`18/18`通过；完成最终 ELF 关键反汇编和重烧录，OpenOCD报告`Programming Finished`、`Verified OK`、`Resetting Target`。历史坏响应不能再写成当前阻断，也不能掩盖其曾发生的事实。
+- TF 新网页已正确加载；现场默认记录开关未勾选，继电器详情折叠。未同步状态以`250 ms`启动记录时自动同步并完成回读；随后完成停止记录`800 ms`、再启用`1200 ms`、手动时间同步及最终停止，证明默认关闭、同步、启停和停止控制的网页主体流程。
+- 继电器现场交互完成红色闭合/绿色断开的两轮反向输出，并最终恢复关闭。自动刷新仍在运行时安全提交，最终`request/applied=6/6`，CAN 计数继续增长；这些结果证明本轮页面交互未被自动刷新破坏，但不扩大为并发 HTTP 能力。
+- ST-Link/OpenOCD 最终 ELF 符号只读两次采样：`g_log_write_count=33→40`、`g_tf_csv_write_count=33→40`、`g_tf_csv_file_size=18185→22217 B`、`g_log_active_file_size=18185→22217 B`，`g_tf_csv_write_result=0`、`g_log_failure_count=0`、`g_log_drop_count=0`。这客观证明运行态日志任务已成功 flush、文件大小增长，支持`/log/signal-v2.csv`落盘链路通过。
+- 证据边界：本轮没有下电取卡并逐字读取`/log/signal-v2.csv`；因此不宣称实体文件的唯一表头、UTC/`unix_ms`字段或具体行已经物理复核。时间列正确性仅由主机单元测试、最终ELF反汇编和运行态写入链路共同支持。该待办已由下方2026-07-24实体 CSV只读复核更新关闭。
+- 本次仅同步治理Markdown，未修改源码、网页、测试或构建文件；未再次构建、烧录、浏览器、网络/CAN/TF操作或提交。
+
+## 2026-07-24 时间同步与可选时间日志：实体 CSV 只读复核完成
+
+- 用户插入TF后，仅只读检查已挂载卷`/Volumes/NO NAME`（`/dev/disk4s1`），确认目标文件为`/Volumes/NO NAME/log/signal-v2.csv`，大小精确为`28553 B`；本次未向TF写入、删除、复制或格式化任何内容。
+- 实体文件表头精确为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`，直接确认包含`utc_time`、`unix_ms`和`updated_ms`三列时间字段，与本轮`signal-v2`日志合同一致，且没有混写旧六列表头。
+- 首组记录时间为`2026-07-23T16:59:32.051Z`（`unix_ms=1784825972051`），末组记录时间为`2026-07-23T17:03:34.638Z`（`unix_ms=1784826214638`）；首末组均包含`Can2Data.marker=42434`和`Can2Data.sequence=4660`，`unit=count`、`quality=ok`。
+- 新阶段状态更新为[现场主体通过；实体 CSV 内容已只读复核]。本次仅更新治理Markdown，未修改源码、网页、测试或构建文件；未构建，故未执行本次新的固件反汇编检查；未烧录、浏览器、网络或硬件调试。

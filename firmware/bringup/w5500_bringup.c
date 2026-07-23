@@ -6,6 +6,7 @@
 #include "platform/stm32h750_bringup.h"
 #include "rule_file.h"
 #include "signal_api.h"
+#include "signal_log_control.h"
 
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -177,6 +178,7 @@ extern RuleFileV4 g_rule_file_v4_current;
 extern RuleFileV4 g_rule_file_v4_pending;
 extern RuleFileV3 g_rule_file_v3_current;
 extern RuleFileV3 g_rule_file_v3_pending;
+extern SignalLogControl g_signal_log_control;
 
 #define W5500_S0_REG_BLOCK 0x01u
 #define W5500_S0_TX_BLOCK 0x02u
@@ -231,12 +233,16 @@ extern RuleFileV3 g_rule_file_v3_pending;
 #define W5500_HTTP_PATH_CAN_TX 11u
 #define W5500_HTTP_PATH_DBC_SIGNALS 13u
 #define W5500_HTTP_PATH_CAN_TX_SIGNALS 12u
+#define W5500_HTTP_PATH_LOG_CONTROL 14u
+#define W5500_HTTP_PATH_TIME_SYNC 15u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
 #define W5500_HTTP_RULES_BODY_MAX 384u
 #define W5500_HTTP_MANUAL_BODY_MAX 64u
 #define W5500_HTTP_CAN_TX_BODY_MAX 96u
+#define W5500_HTTP_LOG_CONTROL_BODY_MAX 96u
+#define W5500_HTTP_TIME_SYNC_BODY_MAX 32u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
@@ -1508,6 +1514,182 @@ static bool http_form_parse_u32(const char *text, size_t len, uint32_t *value) {
   return true;
 }
 
+static bool http_form_parse_u64(const char *text, size_t len, uint64_t *value) {
+  uint64_t result = 0u;
+
+  if (len == 0u || value == NULL) {
+    return false;
+  }
+  for (size_t i = 0u; i < len; ++i) {
+    const uint8_t ch = (uint8_t)text[i];
+    if (ch < (uint8_t)'0' || ch > (uint8_t)'9' ||
+        result > (UINT64_MAX - (uint64_t)(ch - (uint8_t)'0')) / 10u) {
+      return false;
+    }
+    result = (result * 10u) + (uint64_t)(ch - (uint8_t)'0');
+  }
+  *value = result;
+  return true;
+}
+
+static bool http_form_parse_log_control(const char *body,
+                                        size_t body_len,
+                                        bool *enabled,
+                                        uint32_t *sample_period_ms,
+                                        bool *has_unix_ms,
+                                        uint64_t *unix_ms) {
+  uint32_t fields = 0u;
+  size_t offset = 0u;
+
+  if (body == NULL || enabled == NULL || sample_period_ms == NULL || has_unix_ms == NULL ||
+      unix_ms == NULL || body_len == 0u || body[body_len - 1u] == '&') {
+    return false;
+  }
+  *has_unix_ms = false;
+  while (offset < body_len) {
+    size_t equals = offset;
+    size_t entry_end;
+    while (equals < body_len && body[equals] != '=' && body[equals] != '&') ++equals;
+    if (equals == offset || equals == body_len || body[equals] != '=') return false;
+    entry_end = equals + 1u;
+    while (entry_end < body_len && body[entry_end] != '&') ++entry_end;
+    if (http_form_span_is(&body[offset], equals - offset, "enabled")) {
+      if ((fields & 1u) != 0u || entry_end != equals + 2u ||
+          (body[equals + 1u] != '0' && body[equals + 1u] != '1')) return false;
+      *enabled = body[equals + 1u] == '1';
+      fields |= 1u;
+    } else if (http_form_span_is(&body[offset], equals - offset, "samplePeriodMs")) {
+      if ((fields & 2u) != 0u ||
+          !http_form_parse_u32(&body[equals + 1u], entry_end - equals - 1u, sample_period_ms)) return false;
+      fields |= 2u;
+    } else if (http_form_span_is(&body[offset], equals - offset, "unixMs")) {
+      if (*has_unix_ms ||
+          !http_form_parse_u64(&body[equals + 1u], entry_end - equals - 1u, unix_ms)) return false;
+      *has_unix_ms = true;
+    } else {
+      return false;
+    }
+    offset = entry_end + (entry_end < body_len ? 1u : 0u);
+  }
+  return fields == 3u;
+}
+
+static bool http_form_parse_time_sync(const char *body, size_t body_len, uint64_t *unix_ms) {
+  static const char key[] = "unixMs=";
+  const size_t key_len = sizeof(key) - 1u;
+  return body != NULL && unix_ms != NULL && body_len > key_len &&
+         memcmp(body, key, key_len) == 0 &&
+         http_form_parse_u64(body + key_len, body_len - key_len, unix_ms);
+}
+
+static size_t http_append_u64_decimal(char *body, size_t len, size_t used, uint64_t value) {
+  char digits[20];
+  size_t count = 0u;
+
+  if (body == NULL || used >= len) {
+    return len;
+  }
+  do {
+    digits[count++] = (char)('0' + value % 10u);
+    value /= 10u;
+  } while (value != 0u);
+  if (count >= len - used) {
+    return len;
+  }
+  while (count > 0u) {
+    body[used++] = digits[--count];
+  }
+  body[used] = '\0';
+  return used;
+}
+
+static size_t build_log_control_body(char *body, size_t len) {
+  SignalLogControl control;
+  uint64_t unix_ms = 0u;
+  size_t used;
+  int written;
+  const uint32_t now_ms = HAL_GetTick();
+
+  taskENTER_CRITICAL();
+  control = g_signal_log_control;
+  taskEXIT_CRITICAL();
+  (void)signal_log_control_unix_ms(&control, now_ms, &unix_ms);
+  written = snprintf(body,
+                     len,
+                     "{\"ok\":true,\"data\":{\"enabled\":%s,\"samplePeriodMs\":%lu,\"timeSynced\":%s,\"unixMs\":",
+                     control.enabled ? "true" : "false",
+                     (unsigned long)control.sample_period_ms,
+                     control.time_synced ? "true" : "false");
+  if (written < 0 || (size_t)written >= len) {
+    return len;
+  }
+  used = http_append_u64_decimal(body, len, (size_t)written, unix_ms);
+  if (used >= len) {
+    return len;
+  }
+  written = snprintf(body + used, len - used, ",\"path\":\"/log/signal-v2.csv\"}}");
+  if (written < 0 || (size_t)written >= len - used) {
+    return len;
+  }
+  return used + (size_t)written;
+}
+
+static int http_handle_time_sync(const char *body, size_t body_len) {
+  uint64_t unix_ms;
+
+  if (!http_form_parse_time_sync(body, body_len, &unix_ms)) {
+    http_record_request(W5500_HTTP_PATH_TIME_SYNC, 400u);
+    return http_send_json_error(400u, "invalid_time_sync", "unixMs is required");
+  }
+  taskENTER_CRITICAL();
+  (void)signal_log_control_sync_time(&g_signal_log_control, unix_ms, HAL_GetTick());
+  taskEXIT_CRITICAL();
+  {
+    const size_t response_len = build_log_control_body(g_http_response_body, sizeof(g_http_response_body));
+    if (response_len >= sizeof(g_http_response_body)) return 1;
+    http_record_request(W5500_HTTP_PATH_TIME_SYNC, 200u);
+    return http_send_response(200u, "application/json", g_http_response_body, response_len);
+  }
+}
+
+static int http_handle_log_control(const char *body, size_t body_len) {
+  bool enabled = false;
+  bool has_unix_ms;
+  uint32_t sample_period_ms;
+  uint64_t unix_ms = 0u;
+  SignalLogControl control;
+
+  if (!http_form_parse_log_control(body, body_len, &enabled, &sample_period_ms, &has_unix_ms, &unix_ms)) {
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+    return http_send_json_error(400u, "invalid_log_control", "enabled and samplePeriodMs required");
+  }
+  if (sample_period_ms < SIGNAL_LOG_SAMPLE_PERIOD_MIN_MS ||
+      sample_period_ms > SIGNAL_LOG_SAMPLE_PERIOD_MAX_MS) {
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+    return http_send_json_error(400u, "invalid_log_control", "samplePeriodMs must be 100..10000");
+  }
+  taskENTER_CRITICAL();
+  control = g_signal_log_control;
+  if (enabled && !has_unix_ms && !control.time_synced) {
+    taskEXIT_CRITICAL();
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+    return http_send_json_error(400u, "time_not_synced", "starting log requires unixMs");
+  }
+  if (!signal_log_control_set(&control, enabled, sample_period_ms, has_unix_ms, unix_ms, HAL_GetTick())) {
+    taskEXIT_CRITICAL();
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+    return http_send_json_error(400u, "invalid_log_control", "unable to apply log control");
+  }
+  g_signal_log_control = control;
+  taskEXIT_CRITICAL();
+  {
+    const size_t response_len = build_log_control_body(g_http_response_body, sizeof(g_http_response_body));
+    if (response_len >= sizeof(g_http_response_body)) return 1;
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 200u);
+    return http_send_response(200u, "application/json", g_http_response_body, response_len);
+  }
+}
+
 enum {
   HTTP_MANUAL_FIELD_ENABLED = 1u << 0,
   HTTP_MANUAL_FIELD_RELAY1 = 1u << 1,
@@ -1979,6 +2161,70 @@ static int http_handle_request(uint16_t rx_size) {
              ? W5500_HTTP_HANDLE_OK
              : W5500_HTTP_HANDLE_ERROR;
   }
+  if (request_path_is(request, "POST", "/api/time/sync")) {
+    size_t content_length = 0u;
+    size_t body_offset;
+
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_TIME_SYNC, 400u);
+      return http_send_json_error(400u, "bad_request", "time sync header too large");
+    }
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u ||
+        content_length > W5500_HTTP_TIME_SYNC_BODY_MAX || (size_t)rx_size < body_offset + content_length) {
+      if ((size_t)rx_size < body_offset + content_length && read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_TIME_SYNC, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid time sync body");
+    }
+    if (body_offset + content_length > read_len || (size_t)rx_size != body_offset + content_length) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_TIME_SYNC, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid time sync body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_time_sync(&request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
+  if (request_path_is(request, "POST", "/api/log/control")) {
+    size_t content_length = 0u;
+    size_t body_offset;
+
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+      return http_send_json_error(400u, "bad_request", "log control header too large");
+    }
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u ||
+        content_length > W5500_HTTP_LOG_CONTROL_BODY_MAX || (size_t)rx_size < body_offset + content_length) {
+      if ((size_t)rx_size < body_offset + content_length && read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid log control body");
+    }
+    if (body_offset + content_length > read_len || (size_t)rx_size != body_offset + content_length) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid log control body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_log_control(&request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
   if (request_path_is(request, "POST", "/api/can/tx")) {
     size_t content_length = 0u;
     size_t body_offset;
@@ -2168,6 +2414,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_STATUS;
     body_len = build_can_status_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/log/control")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_LOG_CONTROL;
+    body_len = build_log_control_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/api/can/tx")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_TX;

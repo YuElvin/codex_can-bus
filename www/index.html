@@ -13,6 +13,7 @@ button.danger{background:#a43c3c}button:disabled{opacity:.55;cursor:not-allowed}
 pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre-wrap;word-break:break-word}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}.notice{color:#94c9ff}.error{color:#ff9e9e}.ok{color:#98e6b0}
 .can-controller{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#0c1117;padding:10px;margin:8px 0}.status-lamp{width:13px;height:13px;border-radius:50%;background:#66717c;box-shadow:0 0 7px currentColor;display:inline-block}.status-lamp.ok{background:#4ed878;color:#4ed878}.status-lamp.error{background:#f05252;color:#f05252}.can-count{font:600 1.05rem ui-monospace,SFMono-Regular,Menlo,monospace}.can-toolbar{margin-bottom:8px}.can-form{display:flex;align-items:end;gap:5px;flex-wrap:wrap}.can-form label{display:flex;flex-direction:column;font-size:.86rem}.can-form input[type="text"]{width:12rem}.can-form input[type="number"]{width:5.5rem}.canoe-table{width:100%;border-collapse:collapse;background:#0c1117;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem}.canoe-table th,.canoe-table td{padding:7px;border:1px solid #2d3a48;text-align:left;vertical-align:top}.canoe-table th{background:#243447;color:#dcecff}.canoe-table .tx-row td:first-child{border-left:4px solid #55a8ff}.canoe-table .rx-row td:first-child{border-left:4px solid #74d68a}.table-wrap{overflow:auto}details{margin-top:9px}summary{cursor:pointer;color:#bcd4eb}
+.relay-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0}.switch-control{display:inline-flex;align-items:center;gap:7px;cursor:pointer}.switch-control input{position:absolute;opacity:0;pointer-events:none}.switch-track{width:42px;height:23px;border-radius:999px;background:#4b6073;box-shadow:inset 0 0 0 1px #71869a;position:relative;transition:.18s}.switch-track::after{content:'';position:absolute;width:17px;height:17px;top:3px;left:3px;border-radius:50%;background:#dbe7f2;transition:.18s}.switch-control input:checked + .switch-track{background:#1677d2;box-shadow:inset 0 0 0 1px #63b4ff}.switch-control input:checked + .switch-track::after{transform:translateX(19px)}.switch-control input:focus-visible + .switch-track{outline:2px solid #9bd0ff;outline-offset:2px}.relay-actual{display:flex;gap:12px;flex-wrap:wrap;background:#0c1117;padding:10px}.relay-state{display:inline-flex;align-items:center;gap:6px}.relay-lamp{width:12px;height:12px;border-radius:50%;display:inline-block;box-shadow:0 0 7px currentColor}.relay-lamp.closed{background:#f05252;color:#f05252}.relay-lamp.open{background:#4ed878;color:#4ed878}.control-form{display:flex;align-items:end;gap:7px;flex-wrap:wrap}.control-form label{display:flex;flex-direction:column;font-size:.86rem}
 </style>
 </head>
 <body>
@@ -58,11 +59,28 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 <section>
   <h2>继电器手动覆盖</h2>
   <p>启用后由 RuleTask 在下一 50 ms 周期写入继电器；关闭覆盖会恢复规则执行。</p>
-  <label>覆盖 <select id="manual-enabled"><option value="0">关闭</option><option value="1">启用</option></select></label>
-  <label>继电器 1 <select id="manual-relay1"><option value="0">关</option><option value="1">开</option></select></label>
-  <label>继电器 2 <select id="manual-relay2"><option value="0">关</option><option value="1">开</option></select></label>
+  <div class="relay-controls">
+    <label class="switch-control">覆盖模式 <input id="manual-enabled" type="checkbox"><span class="switch-track" aria-hidden="true"></span></label>
+    <label class="switch-control">继电器 1 <input id="manual-relay1" type="checkbox"><span class="switch-track" aria-hidden="true"></span></label>
+    <label class="switch-control">继电器 2 <input id="manual-relay2" type="checkbox"><span class="switch-track" aria-hidden="true"></span></label>
+  </div>
+  <div class="relay-actual" aria-live="polite">
+    <span class="relay-state"><span id="relay1-lamp" class="relay-lamp open"></span>继电器 1：<strong id="relay1-state">未知</strong></span>
+    <span class="relay-state"><span id="relay2-lamp" class="relay-lamp open"></span>继电器 2：<strong id="relay2-state">未知</strong></span>
+  </div>
   <button id="manual-read">读取实际状态</button><button id="manual-save">提交并等待 RuleTask 应用</button>
-  <pre id="manual-state">尚未读取</pre>
+  <details><summary>继电器手动控制原始详情</summary><pre id="manual-state">尚未读取</pre></details>
+</section>
+
+<section>
+  <h2>时间与数据记录</h2>
+  <p>同步系统时间使用浏览器当前时间；开启记录时也会随请求携带当前时间，供后端在尚未同步时采用。</p>
+  <div class="control-form">
+    <label class="switch-control">数据记录 <input id="log-enabled" type="checkbox"><span class="switch-track" aria-hidden="true"></span></label>
+    <label>频率 ms（100–10000） <input id="log-period" type="number" min="100" max="10000" step="1" value="1000"></label>
+    <button id="time-sync" type="button">同步系统时间</button><button id="log-read" type="button">读取</button><button id="log-save" type="button">提交记录设置</button>
+  </div>
+  <details><summary>时间与记录原始详情</summary><pre id="log-state">尚未读取</pre></details>
 </section>
 
 <section>
@@ -142,6 +160,17 @@ function renderSignalTable(bodyId, data, direction) {
 }
 function renderTxSignals(data) { showJson('tx-signals', data); renderSignalTable('tx-signals-body', data, 'TX'); }
 function renderSignals(data) { showJson('signals', data); renderSignalTable('signals-body', data, 'RX'); }
+function readFlag(value) { return value === true || value === 1 || value === '1'; }
+function renderRelayOutput(lampId, textId, value) {
+  const closed=readFlag(value); $(lampId).className='relay-lamp '+(closed?'closed':'open'); $(textId).textContent=closed?'闭合':'断开';
+}
+function renderManual(data) {
+  showJson('manual-state', data); $('manual-enabled').checked=readFlag(data.enabled); $('manual-relay1').checked=readFlag(data.relay1); $('manual-relay2').checked=readFlag(data.relay2);
+  renderRelayOutput('relay1-lamp','relay1-state',data.relay1Output ?? data.relay1); renderRelayOutput('relay2-lamp','relay2-state',data.relay2Output ?? data.relay2);
+}
+function renderLogControl(data) {
+  showJson('log-state', data); $('log-enabled').checked=readFlag(data.enabled); if (data.samplePeriodMs !== undefined) $('log-period').value=String(data.samplePeriodMs);
+}
 function canTxFormData() {
   const idText=$('can-tx-id').value.trim(); const id=/^0x[0-9a-f]+$/i.test(idText)?parseInt(idText,16):(/^[0-9]+$/.test(idText)?Number(idText):NaN);
   const dlc=Number($('can-tx-dlc').value); const periodMs=Number($('can-tx-period').value); const bytes=$('can-tx-data').value.trim().split(/\s+/);
@@ -256,14 +285,33 @@ async function refreshOverview() {
   catch (error) { show(error.message, 'error'); }
 }
 async function refreshManual() {
-  try { const data = await exclusive('读取手动继电器', () => api('/api/relay/manual')); showJson('manual-state', data); $('manual-enabled').value=data.enabled; $('manual-relay1').value=data.relay1; $('manual-relay2').value=data.relay2; show('已读取实际继电器状态', 'ok'); }
+  try { const data = await exclusive('读取手动继电器', () => api('/api/relay/manual')); renderManual(data); show('已读取实际继电器状态', 'ok'); }
   catch (error) { show(error.message, 'error'); }
 }
 async function saveManual() {
   try {
-    const body = new URLSearchParams({enabled:$('manual-enabled').value,relay1:$('manual-relay1').value,relay2:$('manual-relay2').value}).toString();
+    const body = new URLSearchParams({enabled:$('manual-enabled').checked?'1':'0',relay1:$('manual-relay1').checked?'1':'0',relay2:$('manual-relay2').checked?'1':'0'}).toString();
     const data = await exclusive('提交手动继电器', () => api('/api/relay/manual',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
-    showJson('manual-state', data); show('RuleTask 已确认应用请求 '+data.requestSeq, 'ok');
+    renderManual(data); show('RuleTask 已确认应用请求 '+data.requestSeq, 'ok');
+  } catch (error) { show(error.message, 'error'); }
+}
+async function readLogControl() {
+  try { const data=await exclusive('读取数据记录控制',()=>api('/api/log/control')); renderLogControl(data); show('已读取数据记录控制', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
+}
+async function saveLogControl() {
+  try {
+    const periodMs=Number($('log-period').value); if (!Number.isInteger(periodMs) || periodMs<100 || periodMs>10000) throw new Error('记录频率必须是 100–10000 ms 的整数');
+    const body=new URLSearchParams({enabled:$('log-enabled').checked?'1':'0',samplePeriodMs:String(periodMs),unixMs:String(Date.now())}).toString();
+    const data=await exclusive('提交数据记录控制',()=>api('/api/log/control',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    renderLogControl(data); show('数据记录设置已提交', 'ok');
+  } catch (error) { show(error.message, 'error'); }
+}
+async function syncSystemTime() {
+  try {
+    const body=new URLSearchParams({unixMs:String(Date.now())}).toString();
+    const data=await exclusive('同步系统时间',()=>api('/api/time/sync',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    showJson('log-state', data); show('系统时间已同步', 'ok');
   } catch (error) { show(error.message, 'error'); }
 }
 async function readCanTx() {
@@ -320,6 +368,7 @@ $('can-tx-read').onclick=readCanTx; $('can-tx-form').onsubmit=event=>{ event.pre
 for (const id of ['can-tx-enabled','can-tx-id','can-tx-dlc','can-tx-data','can-tx-period']) $(id).addEventListener('input',()=>{ canTxFormDirty=true; });
 $('can-tx-enabled').addEventListener('change',()=>{ canTxFormDirty=true; });
 $('manual-read').onclick=refreshManual; $('manual-save').onclick=saveManual; $('rules-refresh').onclick=()=>refreshRules().catch(error=>show(error.message,'error'));
+$('log-read').onclick=readLogControl; $('log-save').onclick=saveLogControl; $('time-sync').onclick=syncSystemTime;
 $('dbc-upload').onclick=uploadDbc; $('dbc-activate').onclick=activateDbc;
 document.addEventListener('visibilitychange',()=>{ if (document.hidden) pauseCanForHidden(); else if (canResumeOnVisible) { canResumeOnVisible=false; startCan(); } });
 if (document.hidden) canResumeOnVisible=true; else canInitialTimer=setTimeout(()=>{ canInitialTimer=0; startCan(); },300);

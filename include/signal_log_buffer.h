@@ -31,6 +31,11 @@ SignalLogBufferResult signal_log_buffer_append_snapshot(SignalLogBuffer *buffer,
                                                          const SignalCacheEntry *entries,
                                                          size_t entry_count,
                                                          bool include_header);
+SignalLogBufferResult signal_log_buffer_append_snapshot_v2(SignalLogBuffer *buffer,
+                                                            const SignalCacheEntry *entries,
+                                                            size_t entry_count,
+                                                            uint64_t unix_ms,
+                                                            bool include_header);
 bool signal_log_buffer_should_flush(const SignalLogBuffer *buffer,
                                     size_t flush_threshold,
                                     uint32_t last_flush_ms,

@@ -38,8 +38,21 @@ static int test_empty_snapshot_only_writes_header(void) {
   return 0;
 }
 
+static int test_v2_rows_include_utc_time(void) {
+  const SignalCacheEntry entry = {.key = "Can2Data.marker", .unit = "count", .physical_value = 42.0,
+                                  .raw_value = 42, .updated_ms = 7u, .quality = SIGNAL_QUALITY_OK};
+  char body[256];
+
+  ASSERT_TRUE(signal_csv_build_rows_v2(&entry, 1u, 0u, true, body, sizeof(body)) > 0u);
+  ASSERT_TRUE(strcmp(body,
+                     "utc_time,unix_ms,updated_ms,key,value,raw,unit,quality\n"
+                     "1970-01-01T00:00:00.000Z,0,7,\"Can2Data.marker\",42.000000,42,\"count\",\"ok\"\n") == 0);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_rows_include_header_and_escape_fields() == 0);
   ASSERT_TRUE(test_empty_snapshot_only_writes_header() == 0);
+  ASSERT_TRUE(test_v2_rows_include_utc_time() == 0);
   return 0;
 }

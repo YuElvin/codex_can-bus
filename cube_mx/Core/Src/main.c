@@ -38,6 +38,7 @@
 #include "rule_engine.h"
 #include "rule_file.h"
 #include "signal_log_buffer.h"
+#include "signal_log_control.h"
 #include "queue.h"
 #include "semphr.h"
 #include "task.h"
@@ -144,6 +145,7 @@ volatile uint32_t g_log_last_result = 0xffffffffu;
 volatile uint32_t g_log_path_mode = 0xffffffffu;
 volatile uint32_t g_log_path_switch_count;
 volatile uint32_t g_log_active_file_size;
+SignalLogControl g_signal_log_control;
 volatile uint32_t g_rule_task_started;
 volatile uint32_t g_rule_task_loop_count;
 volatile uint32_t g_rule_task_evaluation_count;
@@ -1002,31 +1004,22 @@ static void rule_task(void *argument)
 static void signal_log_task(void *argument)
 {
   enum {
-    LOG_SAMPLE_MS = 1000u,
     LOG_FLUSH_MS = 5000u,
     LOG_FLUSH_THRESHOLD = 512u,
   };
   static char storage[768];
-  static const char default_path[] = "/log/signal.csv";
-  static const char recovery_path[] = "/log/signal-recovery.csv";
+  static const char log_path[] = "/log/signal-v2.csv";
   SignalLogBuffer buffer;
-  const char *active_path;
   uint32_t last_sample_ms;
   uint32_t last_flush_ms;
   size_t file_size = 0u;
-  const int default_file_size_result = stm32h750_tf_file_size_locked(default_path, &file_size);
-  const SignalLogPathMode path_mode = signal_log_select_path(default_file_size_result);
+  const int file_size_result = stm32h750_tf_file_size_locked(log_path, &file_size);
 
   (void)argument;
-  active_path = path_mode == SIGNAL_LOG_PATH_RECOVERY ? recovery_path : default_path;
-  if (path_mode == SIGNAL_LOG_PATH_RECOVERY ||
-      default_file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) {
+  if (file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) {
     file_size = 0u;
   }
-  g_log_path_mode = (uint32_t)path_mode;
-  if (path_mode == SIGNAL_LOG_PATH_RECOVERY) {
-    ++g_log_path_switch_count;
-  }
+  g_log_path_mode = SIGNAL_LOG_PATH_DEFAULT;
   g_log_active_file_size = (uint32_t)file_size;
   g_tf_csv_file_size = (uint32_t)file_size;
   signal_log_buffer_init(&buffer, storage, sizeof(storage));
@@ -1036,7 +1029,18 @@ static void signal_log_task(void *argument)
 
   for (;;) {
     const uint32_t now_ms = HAL_GetTick();
-    if ((uint32_t)(now_ms - last_sample_ms) >= LOG_SAMPLE_MS) {
+    SignalLogControl control;
+    uint64_t unix_ms = 0u;
+
+    taskENTER_CRITICAL();
+    control = g_signal_log_control;
+    taskEXIT_CRITICAL();
+    if (!control.enabled || !signal_log_control_unix_ms(&control, now_ms, &unix_ms)) {
+      signal_log_buffer_clear(&buffer);
+      g_log_buffer_len = 0u;
+      g_log_buffer_samples = 0u;
+      last_sample_ms = now_ms;
+    } else if ((uint32_t)(now_ms - last_sample_ms) >= control.sample_period_ms) {
       SignalCacheEntry entries[2];
       const size_t count = can2_signal_cache_copy(entries, 2u);
       last_sample_ms = now_ms;
@@ -1044,10 +1048,11 @@ static void signal_log_task(void *argument)
       if (count == 0u) {
         ++g_log_drop_count;
       } else {
-        const SignalLogBufferResult result = signal_log_buffer_append_snapshot(&buffer,
-                                                                                 entries,
-                                                                                 count,
-                                                                                 file_size == 0u && buffer.length == 0u);
+        const SignalLogBufferResult result = signal_log_buffer_append_snapshot_v2(&buffer,
+                                                                                    entries,
+                                                                                    count,
+                                                                                    unix_ms,
+                                                                                    file_size == 0u && buffer.length == 0u);
         if (result != SIGNAL_LOG_BUFFER_OK) {
           if (result == SIGNAL_LOG_BUFFER_SERIALIZE_ERROR) {
             ++g_log_failure_count;
@@ -1061,14 +1066,14 @@ static void signal_log_task(void *argument)
       }
     }
 
-    if (signal_log_buffer_should_flush(&buffer,
+    if (control.enabled && control.time_synced && signal_log_buffer_should_flush(&buffer,
                                        LOG_FLUSH_THRESHOLD,
                                        last_flush_ms,
                                        now_ms,
                                        LOG_FLUSH_MS)) {
       ++g_log_flush_count;
       g_tf_csv_write_len = (uint32_t)buffer.length;
-      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(active_path,
+      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(log_path,
                                                                           (const uint8_t *)buffer.data,
                                                                           buffer.length,
                                                                           &file_size);
@@ -1524,6 +1529,7 @@ int main(void)
   MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
   (void)stm32h750_fs_mutex_init();
+  signal_log_control_init(&g_signal_log_control);
   bringup_uart_write("\r\n[bringup] boot stm32h750 rtos=freertos usart2=115200 sd_detect=skip lan=removed w5500=spi2 qspi=w25q128 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
   if (xTaskCreate(bringup_default_task,
                   "bringup",

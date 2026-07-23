@@ -14,4 +14,11 @@ size_t signal_csv_build_rows(const SignalCacheEntry *entries,
                              char *output,
                              size_t output_len);
 
+size_t signal_csv_build_rows_v2(const SignalCacheEntry *entries,
+                                size_t entry_count,
+                                uint64_t unix_ms,
+                                bool include_header,
+                                char *output,
+                                size_t output_len);
+
 #endif
