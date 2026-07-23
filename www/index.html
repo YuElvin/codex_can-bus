@@ -12,6 +12,7 @@ button,input,select{font:inherit;padding:6px;margin:3px}button{cursor:pointer;ba
 button.danger{background:#a43c3c}button:disabled{opacity:.55;cursor:not-allowed}label{display:inline-block;margin:3px}
 pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre-wrap;word-break:break-word}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}.notice{color:#94c9ff}.error{color:#ff9e9e}.ok{color:#98e6b0}
+.can-controller{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#0c1117;padding:10px;margin:8px 0}.status-lamp{width:13px;height:13px;border-radius:50%;background:#66717c;box-shadow:0 0 7px currentColor;display:inline-block}.status-lamp.ok{background:#4ed878;color:#4ed878}.status-lamp.error{background:#f05252;color:#f05252}.can-count{font:600 1.05rem ui-monospace,SFMono-Regular,Menlo,monospace}.can-toolbar{margin-bottom:8px}.can-form{display:flex;align-items:end;gap:5px;flex-wrap:wrap}.can-form label{display:flex;flex-direction:column;font-size:.86rem}.can-form input[type="text"]{width:12rem}.can-form input[type="number"]{width:5.5rem}.canoe-table{width:100%;border-collapse:collapse;background:#0c1117;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem}.canoe-table th,.canoe-table td{padding:7px;border:1px solid #2d3a48;text-align:left;vertical-align:top}.canoe-table th{background:#243447;color:#dcecff}.canoe-table .tx-row td:first-child{border-left:4px solid #55a8ff}.canoe-table .rx-row td:first-child{border-left:4px solid #74d68a}.table-wrap{overflow:auto}details{margin-top:9px}summary{cursor:pointer;color:#bcd4eb}
 </style>
 </head>
 <body>
@@ -25,10 +26,33 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 </section>
 
 <section>
-  <h2>实时 CAN 数据</h2>
-  <button id="can-start">开始每秒刷新</button><button id="can-stop">停止刷新</button>
-  <pre id="can-status">自动刷新未启动</pre>
-  <pre id="signals">尚未读取 signals</pre>
+  <h2>CAN 控制器</h2>
+  <div class="can-toolbar"><button id="can-start">开始自动刷新</button><button id="can-stop">停止刷新</button></div>
+  <div class="can-controller" aria-live="polite">
+    <span id="can-lamp" class="status-lamp" aria-label="CAN 状态未知"></span><strong id="can-health">等待读取</strong>
+    <span class="can-count">TX <span id="can-tx-count">—</span></span><span class="can-count">RX <span id="can-rx-count">—</span></span>
+  </div>
+  <details><summary>CAN 控制器详细状态（原始 JSON）</summary><pre id="can-status">自动刷新未启动</pre></details>
+
+  <h3>标准 CAN 发送</h3>
+  <form id="can-tx-form" class="can-form">
+    <label>启用 <input id="can-tx-enabled" type="checkbox"></label>
+    <label>ID（标准 0x000–0x7FF） <input id="can-tx-id" type="text" value="0x321" inputmode="text"></label>
+    <label>DLC <input id="can-tx-dlc" type="number" min="0" max="8" step="1" value="8"></label>
+    <label>数据（8 字节十六进制） <input id="can-tx-data" type="text" value="00 00 00 00 00 00 00 00" maxlength="23" spellcheck="false"></label>
+    <label>周期 ms（100–10000） <input id="can-tx-period" type="number" min="100" max="10000" step="1" value="1000"></label>
+    <button id="can-tx-read" type="button">读取</button><button type="submit">提交</button>
+  </form>
+  <div class="table-wrap"><table class="canoe-table"><thead><tr><th>方向</th><th>ID</th><th>DLC</th><th>数据</th><th>周期</th><th>状态</th></tr></thead><tbody id="can-tx-body"><tr class="tx-row"><td>TX</td><td colspan="5">尚未读取发送控制帧</td></tr></tbody></table></div>
+  <details><summary>发送控制原始 JSON</summary><pre id="can-tx-raw">尚未读取</pre></details>
+
+  <h3>TX DBC 消息 / 信号</h3>
+  <div class="table-wrap"><table class="canoe-table"><thead><tr><th>方向</th><th>消息</th><th>信号</th><th>值</th><th>Raw</th><th>单位</th><th>更新时间 ms</th><th>质量</th></tr></thead><tbody id="tx-signals-body"><tr class="tx-row"><td>TX</td><td colspan="7">尚未读取 TX DBC signals</td></tr></tbody></table></div>
+  <details><summary>TX DBC 信号原始 JSON</summary><pre id="tx-signals">尚未读取 TX DBC signals</pre></details>
+
+  <h3>RX DBC 消息 / 信号</h3>
+  <div class="table-wrap"><table class="canoe-table"><thead><tr><th>方向</th><th>消息</th><th>信号</th><th>值</th><th>Raw</th><th>单位</th><th>更新时间 ms</th><th>质量</th></tr></thead><tbody id="signals-body"><tr class="rx-row"><td>RX</td><td colspan="7">尚未读取 signals</td></tr></tbody></table></div>
+  <details><summary>接收信号原始 JSON</summary><pre id="signals">尚未读取 signals</pre></details>
 </section>
 
 <section>
@@ -62,7 +86,12 @@ let canAuto = false;
 let canTimer = 0;
 let canInitialTimer = 0;
 let canResumeOnVisible = false;
+let canRound = 0;
+let canCycleRunning = false;
+let canTxFormDirty = false;
 let ruleSlots = [];
+let signalCatalog = null;
+let signalCatalogReason = '尚未读取活动 DBC 信号目录';
 
 function show(message, kind = 'notice') { const node = $('notice'); node.className = kind; node.textContent = message; }
 function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
@@ -80,9 +109,51 @@ async function api(path, options = {}) {
   if (!response.ok || !payload.ok) { throw new Error(path + ' HTTP ' + response.status + '：' + text); }
   return payload.data;
 }
+function addCell(row, value) { const cell=document.createElement('td'); cell.textContent=value; row.append(cell); }
+function formatCanId(value) { const id=Number(value); return Number.isInteger(id) && id>=0 && id<=0x7ff ? '0x'+id.toString(16).toUpperCase().padStart(3,'0') : String(value ?? '—'); }
+function formatCanData(value) {
+  if (Array.isArray(value)) return value.map(byte=>Number(byte).toString(16).toUpperCase().padStart(2,'0')).join(' ');
+  const text=String(value ?? '').trim(); const compact=text.replace(/[^0-9a-f]/gi,'');
+  return /^[0-9a-f]{16}$/i.test(compact) ? compact.match(/../g).join(' ').toUpperCase() : (text || '—');
+}
+function setCanForm(data) {
+  $('can-tx-enabled').checked=Boolean(data.enabled); $('can-tx-id').value=formatCanId(data.id);
+  $('can-tx-dlc').value=String(data.dlc ?? 8); $('can-tx-data').value=formatCanData(data.data);
+  $('can-tx-period').value=String(data.periodMs ?? 0);
+}
+function renderCanStatus(data) {
+  const can=data.can2 || data; const fault=Number(can.status)!==0 || Boolean(Number(can.busOff)) || Number(can.errors)>0 || Number(can.tec)!==0 || Number(can.rec)!==0 || Number(can.sendResult)!==0;
+  $('can-lamp').className='status-lamp '+(fault?'error':'ok'); $('can-lamp').ariaLabel=fault?'CAN 故障':'CAN 正常';
+  $('can-health').textContent=fault?'故障':'正常'; $('can-tx-count').textContent=String(can.tx ?? '—'); $('can-rx-count').textContent=String(can.rx ?? '—');
+  showJson('can-status', data);
+}
+function renderCanTx(data, forceForm) {
+  if (forceForm || !canTxFormDirty) { setCanForm(data); canTxFormDirty=false; }
+  showJson('can-tx-raw', data); const body=$('can-tx-body'); const row=document.createElement('tr'); row.className='tx-row';
+  const applied=Number(data.requestSeq)===Number(data.appliedSeq); const state=data.enabled ? (applied?'已应用':'等待应用') : '已禁用';
+  for (const value of ['TX',formatCanId(data.id),String(data.dlc ?? '—'),formatCanData(data.data),String(data.periodMs ?? '—')+' ms',state+'；result='+String(data.lastResult ?? '—')]) addCell(row,value);
+  body.replaceChildren(row);
+}
+function renderSignalTable(bodyId, data, direction) {
+  const body=$(bodyId); const items=Array.isArray(data.items)?data.items:[]; const rowClass=direction==='TX'?'tx-row':'rx-row';
+  const rows=items.map(item=>{ const row=document.createElement('tr'); row.className=rowClass; const key=String(item.key ?? '—'); const split=key.lastIndexOf('.'); const message=split>0?key.slice(0,split):'—'; const signal=split>0?key.slice(split+1):key; for (const value of [direction,message,signal,String(item.value ?? '—'),String(item.raw ?? '—'),String(item.unit ?? '—'),String(item.updated_ms ?? '—'),String(item.quality ?? '—')]) addCell(row,value); return row; });
+  if (!rows.length) { const row=document.createElement('tr'); row.className=rowClass; addCell(row,direction); const cell=document.createElement('td'); cell.colSpan=7; cell.textContent='当前没有 DBC 信号快照'; row.append(cell); rows.push(row); }
+  body.replaceChildren(...rows);
+}
+function renderTxSignals(data) { showJson('tx-signals', data); renderSignalTable('tx-signals-body', data, 'TX'); }
+function renderSignals(data) { showJson('signals', data); renderSignalTable('signals-body', data, 'RX'); }
+function canTxFormData() {
+  const idText=$('can-tx-id').value.trim(); const id=/^0x[0-9a-f]+$/i.test(idText)?parseInt(idText,16):(/^[0-9]+$/.test(idText)?Number(idText):NaN);
+  const dlc=Number($('can-tx-dlc').value); const periodMs=Number($('can-tx-period').value); const bytes=$('can-tx-data').value.trim().split(/\s+/);
+  if (!Number.isInteger(id) || id<0 || id>0x7ff) throw new Error('ID 必须是 0x000–0x7FF 的标准 CAN ID');
+  if (!Number.isInteger(dlc) || dlc<0 || dlc>8) throw new Error('DLC 必须是 0–8');
+  if (bytes.length!==8 || bytes.some(byte=>!/^[0-9a-f]{2}$/i.test(byte))) throw new Error('数据必须恰好为 8 个两位十六进制字节');
+  if (!Number.isInteger(periodMs) || periodMs<100 || periodMs>10000) throw new Error('周期必须是 100–10000 ms 的整数');
+  return {enabled:$('can-tx-enabled').checked?'1':'0',id:String(id),dlc:String(dlc),data:bytes.join('').toUpperCase(),periodMs:String(periodMs)};
+}
 function form(slot) {
   const fields = [
-    ['enabled','启用','checkbox'],['relay','继电器','number'],['threshold','阈值','number'],
+    ['enabled','启用','checkbox'],['signalKey','信号','signal'],['relay','继电器','number'],['threshold','阈值','number'],
     ['action','动作','select'],['delayMs','延时 ms','number'],['timeoutMs','超时 ms','number'],
     ['safeState','安全态','select'],['priority','优先级','number']
   ];
@@ -91,39 +162,81 @@ function form(slot) {
     const labelNode = document.createElement('label'); labelNode.textContent = label + ' ';
     let input;
     if (type === 'select') { input = document.createElement('select'); for (const v of ['on','off']) { const o=document.createElement('option');o.value=v;o.textContent=v;input.append(o); } }
+    else if (type === 'signal') { input = document.createElement('select'); input.append(new Option(signalCatalogReason, '')); for (const key of signalCatalog || []) input.append(new Option(key, key)); input.disabled=!signalCatalog || !signalCatalog.length; }
     else { input = document.createElement('input'); input.type=type; if (type==='number') { input.min='0'; input.step='1'; } }
     input.name=key; labelNode.append(input); card.append(labelNode);
   }
   const save = document.createElement('button'); save.type='submit'; save.textContent='保存/创建'; card.append(save);
   const remove = document.createElement('button'); remove.type='button'; remove.className='danger'; remove.textContent='禁用/删除'; remove.onclick=()=>deleteRule(slot); card.append(remove);
+  const catalogStatus = document.createElement('div'); catalogStatus.className='error'; catalogStatus.dataset.signalCatalogStatus=''; card.append(catalogStatus);
+  card.elements.namedItem('enabled').onchange=()=>updateRuleSaveState(card);
   card.onsubmit = event => { event.preventDefault(); saveRule(slot); };
+  updateRuleSaveState(card);
   return card;
+}
+function signalCatalogReady() { return Array.isArray(signalCatalog) && signalCatalog.length > 0; }
+function invalidateSignalCatalog(reason) {
+  signalCatalog=null; signalCatalogReason=reason;
+  for (const card of document.querySelectorAll('form[data-slot]')) {
+    const select=card.elements.namedItem('signalKey'); if (select) { select.disabled=true; select.options[0].textContent=reason; }
+    updateRuleSaveState(card);
+  }
+}
+function updateRuleSaveState(card) {
+  const enabled=card.elements.namedItem('enabled').checked;
+  const save=card.querySelector('button[type="submit"]'); const status=card.querySelector('[data-signal-catalog-status]');
+  const blocked=enabled && !signalCatalogReady(); save.disabled=blocked;
+  status.textContent=blocked ? '无法启用保存：'+signalCatalogReason : '';
 }
 function setRuleForm(slot, rule) {
   const card = document.querySelector('form[data-slot="'+slot+'"]');
   for (const [key,value] of Object.entries(rule)) {
     const input = card.elements.namedItem(key); if (!input) continue;
+    if (key==='signalKey' && value && !Array.from(input.options).some(option=>option.value===String(value))) input.append(new Option(String(value)+'（当前规则）', String(value)));
     if (input.type === 'checkbox') input.checked = Boolean(value); else input.value = String(value);
   }
+  updateRuleSaveState(card);
+}
+async function loadSignalCatalog() {
+  invalidateSignalCatalog('正在读取活动 DBC 信号目录');
+  const keys=[]; let page=0;
+  for (;;) {
+    const data=await exclusive('读取 DBC 信号目录',()=>api('/api/dbc/signals?page='+page));
+    if (!data.loaded) { signalCatalog=[]; signalCatalogReason='没有已激活的 DBC，无法启用规则'; return; }
+    for (const item of Array.isArray(data.items)?data.items:[]) if (item && item.key) keys.push(String(item.key));
+    const total=Number(data.total);
+    if (!Number.isInteger(total) || total<0) throw new Error('/api/dbc/signals 返回无效 total');
+    if ((page+1)*16>=total) break;
+    page+=1;
+  }
+  signalCatalog=Array.from(new Set(keys));
+  signalCatalogReason=signalCatalog.length ? '' : '活动 DBC 没有可用信号，无法启用规则';
 }
 async function refreshRules() {
-  const data = await exclusive('读取规则', () => api('/api/rules'));
-  ruleSlots = data.rules || []; $('rules').replaceChildren(form(0), form(1));
-  for (const rule of ruleSlots) setRuleForm(rule.slot, rule);
-  show('规则已从 '+data.source+' 回读', 'ok');
+  const button=$('rules-refresh'); if (button.disabled) return; button.disabled=true;
+  try {
+    try { await loadSignalCatalog(); }
+    catch (error) { signalCatalog=[]; signalCatalogReason='信号目录读取失败：'+error.message; }
+    const data = await exclusive('读取规则', () => api('/api/rules'));
+    ruleSlots = data.rules || []; $('rules').replaceChildren(form(0), form(1));
+    for (const rule of ruleSlots) setRuleForm(rule.slot, rule);
+    show(signalCatalogReady() ? '规则已从 '+data.source+' 回读' : '规则已回读；'+signalCatalogReason, signalCatalogReady()?'ok':'error');
+  } finally { button.disabled=false; }
 }
 function ruleFormData(slot) {
   const card = document.querySelector('form[data-slot="'+slot+'"]'); const values = {};
   for (const key of ['enabled','relay','threshold','delayMs','timeoutMs','priority']) {
     const input = card.elements.namedItem(key); values[key] = input.type === 'checkbox' ? (input.checked ? '1' : '0') : input.value;
   }
-  values.action = card.elements.namedItem('action').value; values.safeState = card.elements.namedItem('safeState').value;
+  values.signalKey = card.elements.namedItem('signalKey').value; values.action = card.elements.namedItem('action').value; values.safeState = card.elements.namedItem('safeState').value;
   return new URLSearchParams(values).toString();
 }
 async function saveRule(slot) {
   try {
     const card = document.querySelector('form[data-slot="'+slot+'"]'); const enabled = card.elements.namedItem('enabled').checked;
     const existing = ruleSlots.find(rule => rule.slot === slot);
+    if (enabled && !signalCatalogReady()) throw new Error('无法启用保存：'+signalCatalogReason);
+    if (enabled && !card.elements.namedItem('signalKey').value) throw new Error('请选择信号');
     await exclusive('保存规则', async () => {
       if (!enabled && existing && existing.enabled) await api('/api/rules/'+slot, {method:'DELETE'});
       else if (enabled) {
@@ -139,7 +252,7 @@ async function deleteRule(slot) {
   catch (error) { show(error.message, 'error'); }
 }
 async function refreshOverview() {
-  try { const data = await exclusive('读取概览', async () => ({status:await api('/api/status'), dbc:await api('/api/dbc/runtime')})); showJson('overview', data); show('概览已更新', 'ok'); }
+  try { const status=await exclusive('读取概览状态',()=>api('/api/status')); const dbc=await exclusive('读取概览 DBC',()=>api('/api/dbc/runtime')); showJson('overview', {status,dbc}); show('概览已更新', 'ok'); }
   catch (error) { show(error.message, 'error'); }
 }
 async function refreshManual() {
@@ -153,33 +266,59 @@ async function saveManual() {
     showJson('manual-state', data); show('RuleTask 已确认应用请求 '+data.requestSeq, 'ok');
   } catch (error) { show(error.message, 'error'); }
 }
-function stopCan(message) { canAuto=false; canResumeOnVisible=false; clearTimeout(canTimer); clearTimeout(canInitialTimer); canInitialTimer=0; if (message) show(message, 'error'); }
-function pauseCanForHidden() { canResumeOnVisible=canAuto || canInitialTimer!==0; canAuto=false; clearTimeout(canTimer); clearTimeout(canInitialTimer); canInitialTimer=0; show('页面隐藏，自动 CAN 刷新已暂停', 'notice'); }
-async function canCycle() {
-  if (!canAuto || document.hidden) return;
-  const started=Date.now();
-  try {
-    await exclusive('CAN 自动刷新', async () => {
-      if (!canAuto || document.hidden) return;
-      const can=await api('/api/can/status'); showJson('can-status', can);
-      await sleep(250); if (!canAuto || document.hidden) return;
-      const signals=await api('/api/signals'); showJson('signals', signals);
-      await sleep(250);
-    });
-  } catch (error) { stopCan('自动 CAN 刷新已停止：'+error.message); return; }
-  if (!canAuto || document.hidden) return;
-  canTimer=setTimeout(canCycle, Math.max(0,1000-(Date.now()-started)));
+async function readCanTx() {
+  try { cancelCanRound(); const data=await exclusive('读取 CAN 发送控制',()=>api('/api/can/tx')); renderCanTx(data, true); show('已读取 CAN 发送控制', 'ok'); }
+  catch (error) { show(error.message, 'error'); }
 }
-function startCan() { if (canAuto) return; canAuto=true; show('自动 CAN 刷新已启动', 'ok'); canCycle(); }
+async function saveCanTx() {
+  try {
+    const body=new URLSearchParams(canTxFormData()).toString();
+    cancelCanRound(); const data=await exclusive('提交 CAN 发送控制',()=>api('/api/can/tx',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    renderCanTx(data, true); show('CAN 发送控制已提交：requestSeq '+data.requestSeq+'，appliedSeq '+data.appliedSeq, 'ok');
+  } catch (error) { show(error.message, 'error'); }
+}
+function cancelCanRound() { canRound+=1; clearTimeout(canTimer); canTimer=0; if (canAuto && !document.hidden) scheduleCanCycle(); }
+function canRoundActive(round) { return canAuto && !document.hidden && round===canRound; }
+function scheduleCanCycle(delay=0) {
+  if (!canAuto || document.hidden || canTimer || canCycleRunning) return;
+  canTimer=setTimeout(()=>{ canTimer=0; canCycle(); },delay);
+}
+function stopCan(message) { canAuto=false; canResumeOnVisible=false; cancelCanRound(); clearTimeout(canInitialTimer); canInitialTimer=0; if (message) show(message, 'error'); }
+function pauseCanForHidden() { canResumeOnVisible=canAuto || canInitialTimer!==0; canAuto=false; cancelCanRound(); clearTimeout(canInitialTimer); canInitialTimer=0; show('页面隐藏，自动 CAN 刷新已暂停', 'notice'); }
+async function canCycle() {
+  if (canCycleRunning) return;
+  const round=canRound; if (!canRoundActive(round)) return;
+  canCycleRunning=true;
+  const started=Date.now(); let completed=true;
+  try {
+    for (const [path,render] of [
+      ['/api/can/status',renderCanStatus], ['/api/can/tx',renderCanTx],
+      ['/api/can/tx/signals',renderTxSignals], ['/api/signals',renderSignals]
+    ]) {
+      if (!canRoundActive(round)) { completed=false; break; }
+      const data=await exclusive('CAN 自动刷新',()=>api(path));
+      if (!canRoundActive(round)) { completed=false; break; }
+      render(data);
+      await sleep(250);
+    }
+  } catch (error) { canCycleRunning=false; stopCan('自动 CAN 刷新已停止：'+error.message); return; }
+  canCycleRunning=false;
+  if (!canAuto || document.hidden) return;
+  scheduleCanCycle(completed ? Math.max(0,1000-(Date.now()-started)) : 0);
+}
+function startCan() { if (canAuto) return; canAuto=true; show('自动 CAN 刷新已启动', 'ok'); scheduleCanCycle(); }
 async function uploadDbc() {
   try { const file=$('dbc-file').files[0]; if (!file) throw new Error('请选择 DBC 文件'); if (file.size>1024) throw new Error('DBC 文件超过 1024 B'); const text=await file.text(); const data=await exclusive('上传 DBC',()=>api('/api/dbc/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text})); showJson('dbc-result',data); show('DBC 候选已上传，请确认后激活', 'ok'); }
   catch (error) { show(error.message, 'error'); }
 }
 async function activateDbc() {
-  try { if (!confirm('确认激活当前 DBC 候选？')) return; const data=await exclusive('激活 DBC',()=>api('/api/dbc/active',{method:'POST'})); showJson('dbc-result',data); show('DBC 已激活并回读 runtime', 'ok'); }
+  try { if (!confirm('确认激活当前 DBC 候选？')) return; const data=await exclusive('激活 DBC',()=>api('/api/dbc/active',{method:'POST'})); invalidateSignalCatalog('活动 DBC 已变化，请先读取两槽规则'); showJson('dbc-result',data); show('DBC 已激活并回读 runtime', 'ok'); }
   catch (error) { show(error.message, 'error'); }
 }
 $('overview-refresh').onclick=refreshOverview; $('can-start').onclick=startCan; $('can-stop').onclick=()=>stopCan('自动 CAN 刷新已由用户停止');
+$('can-tx-read').onclick=readCanTx; $('can-tx-form').onsubmit=event=>{ event.preventDefault(); saveCanTx(); };
+for (const id of ['can-tx-enabled','can-tx-id','can-tx-dlc','can-tx-data','can-tx-period']) $(id).addEventListener('input',()=>{ canTxFormDirty=true; });
+$('can-tx-enabled').addEventListener('change',()=>{ canTxFormDirty=true; });
 $('manual-read').onclick=refreshManual; $('manual-save').onclick=saveManual; $('rules-refresh').onclick=()=>refreshRules().catch(error=>show(error.message,'error'));
 $('dbc-upload').onclick=uploadDbc; $('dbc-activate').onclick=activateDbc;
 document.addEventListener('visibilitychange',()=>{ if (document.hidden) pauseCanForHidden(); else if (canResumeOnVisible) { canResumeOnVisible=false; startCan(); } });

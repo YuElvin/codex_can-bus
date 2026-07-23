@@ -30,6 +30,8 @@
 | 10 | 实时解码、日志、规则 | [一期边界客观已验证] | active DBC、外部 CANtest RX、`/api/signals`、默认LogTask和F-26实体CSV均已验证；G-1同映像下DBC激活、外部SignalCache、日志增长、两槽v3规则可逆保存和manual安全态联合通过。QSPI单规则双槽、TF v1/v2/v3固定规则文件、RuleTask reload/优先级/超时/安全态和复位恢复均有客观证据；运行中TF热插拔、无界规则和通用配置服务是明确非目标 |
 | 11 | TF 驻留 Web 控制台 | [一期核心三项客观已验证] | 用户固定的一期核心为CAN刷新显示、规则设置和继电器操作：板端冷启动页面哈希一致；独立pcap中首页最终ACK至首API SYN=`303.503 ms`，1次首页+14次CAN状态+14次signals全部200、RST=0；浏览器把slot1 threshold `42435→42436→42435`保存并读回；浏览器手动覆盖`relay1=0/relay2=1`后RuleTask `request/applied=1/1`且GPIOE ODR=`0x100`，关闭覆盖后`2/2`且ODR=`0x80`恢复规则。DBC区域保留并复用既有已验证API，但本次未以浏览器重新执行上传/激活，不计入上述三项现场结论 |
 | 12 | 稳定性基线 | [一期边界客观已验证] | F-11/12长跑、F-14网线恢复、F-19冷启动、F-25真实bus-off、F-26实体CSV和F-76响应交付均已通过。G-1在同一最终映像完成19个顺序HTTP、DBC激活、规则可逆恢复、Web哈希、外部CAN/SignalCache及日志增长联合回归；G-2得到完整HTTP500并精确恢复，未写规则/TF/QSPI。G-3确认所有功能/现场域PASS，无需重复高成本故障；运行中TF插拔仍为非支持操作 |
+| 13 | 网页 CAN 发送控制 | [客观通过] | 合同仅 classic CAN：`GET/POST /api/can/tx`、`GET /api/can/tx/signals`，标准 ID/DLC/最多8字节HEX/`100..10000 ms`；TX/RX缓存分离。CTest=`16/16`、ELF/HEX前缀=`f589...`/`37b9...`、`text/data/bss=93976/384/242448`、50ms poll/队列/解析反汇编与OpenOCD Programming/Verified/Reset均已记录。用户已写TF上电；浏览器绿灯、TX/RX累计、默认折叠、TX/RX CANoe式DBC表、可逆停发/恢复、自动刷新与两次reload重入均通过，最终`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms已应用result=0。用户确认CANtest发送且外部RX表增长；未直接读取CANtest接收显示，不宣称外部接收器逐帧确认新TX帧 |
+| 14 | 网页手动 TX 与两槽 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录新网页后，自动刷新 TX/RX=`55/364→576/5540`，两次编辑 TX 分别在`1800/1300 ms`后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX解析 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时 manual `relay1Output=0`与高优先级 off 一致；warn/error为空。此前构建、反汇编和烧录证据已实际完成。 |
 
 ## 阶段 C 当前状态
 
@@ -61,3 +63,29 @@
 已实现 TF `/config/rules-v2.conf` 的固定两规则格式、512 字节上限、完整非法输入校验、最大 priority 选胜、手动覆盖、延时和超时 safeState；保留 v1/QSPI 单规则路径与 HTTP 单规则 API。主机测试、固件构建、ELF 反汇编、OpenOCD 烧录、有效 v2 启动加载和 marker=42434 的 RuleTask/GPIO 已验证。
 
 阶段 B 已客观验证：marker=42435 外部 RX 下 rule1 priority=20 胜出并使 PE7 off；停帧 `49114 ms > 1500 ms` 后 safe active=1 且 PE7/PE8 均 off；手动状态为 0。首次 v2 缺失创建的板端现场未观察到，代码路径和诊断语义已静态确认；本阶段完成后停止，不推进阶段 C。
+
+## 2026-07-23 阶段13客观通过
+
+- 用户已把恢复第4请求后250ms收尾等待的网页写入TF并上电，随后确认CANtest已发送。自动刷新TX/RX=`120/273→134/417`；状态灯为`status-lamp ok`，四个details默认折叠，控制台warn/error为空。
+- 可逆关闭再恢复后的最终发送配置为`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，应用状态为`requestSeq=appliedSeq`、result=0；TX self-test和外部RX CANoe式DBC表均为marker=`42434`、sequence=`4660`、quality=`ok`，外部RX在用户CANtest发送确认后增长。
+- 两次reload重入样本为TX/RX=`145/527`、`162/694`，均未出现此前端口80连接拒绝。因此阶段13客观通过。没有直接读取CANtest接收显示确认板端新TX帧，故该项仅作为证据边界保留，不反写成外部接收器逐帧确认。
+
+## 2026-07-23 阶段14启动：未验收
+
+- 已核实根因：网页的全局 FIFO 对手动 TX 与后台刷新一视同仁，会使手动 TX 排在多个既有请求之后；RuleFile v3 仍用 `marker` 表达规则，未提供每槽绑定活动 DBC `signalKey` 的模型，且无活动 DBC 时尚无规则写入前置拒绝。
+- 固定边界：继续单 socket、严格非并发；手动 TX 只等当前一个请求。规则恰好两槽，分别选择活动 DBC `signalKey`；RuleTask 仅导出已配置两项；无活动 DBC 禁止规则写；旧 v3 仅作 `marker` 兼容回退。
+- 验收须重新取得本阶段的构建、定向反汇编及单 socket 网页/活动 DBC/无活动 DBC/旧 v3 四类证据。本次只记录计划，未修改源码、未编译、未反汇编、未烧录或现场测试；既有阶段13与v3验收均不能计入阶段14通过。
+
+## 2026-07-23 阶段14进展：静态与烧录完成，现场待执行
+
+- 网页调度已发现并修复“手动操作取消自动轮后不恢复”。`./scripts/verify.sh` host tests=`17/17`通过，STM32 firmware构建成功，ELF `text/data/bss=97180/388/243680`。
+- 定向反汇编确认`rule_task`以capacity=`2`调用`can2_signal_cache_export_rule_snapshots_for_engine`，后者在临界区调用`signal_cache_export_rule_snapshots_for_engine`；RuleFile V4 builder与DBC catalog分页路径已检查。
+- 2026-07-23 OpenOCD对`build/stm32h750/can_bus_gateway_stm32h750.hex`输出`Programming Finished`、`Verified OK`、`Resetting Target`。这只证明候选已构建、检查和烧录，不证明网页运行、外部RX或继电器。
+- 必须等待用户替换TF卡`/www/index.html`、上电并启动CANtest，再取得网页运行中手动TX/自动轮恢复、两槽活动DBC `signalKey`、外部RX和继电器的现场证据。
+
+## 2026-07-24 阶段14最终现场验收
+
+- 正确根目录部署新网页后，自动刷新 TX/RX 从`55/364`增长至`576/5540`；浏览器 warn/error 为空。先前误部署旧页已由本次现场复验关闭。
+- 两次刷新运行中编辑 TX 均保留：`C2 A5 78 56 02 03 04 05`经过`1800 ms`后提交成功，`C2 A5 00 01 02 03 04 05`经过`1300 ms`后仍保留并提交恢复；最终 TX DBC `sequence=256`。这关闭此前首次输入被覆盖的问题。
+- 候选 DBC经用户授权激活，runtime最终为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。TX/RX表解析 marker=`42434`，sequence分别为`256/4660`；两槽目录均含 marker/sequence，slot1从V4回读为`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时 manual `relay1Output=0`，符合高优先级 off 规则；此前 RuleFile V4 浮点 threshold=`0`问题已修复并复验关闭。
+- 本条只记录最终现场验收；构建、`objdump`和烧录均为此前实际完成的证据。本轮不把 TX self-test 作为外部接收器证明。

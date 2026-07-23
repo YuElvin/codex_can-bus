@@ -7,6 +7,8 @@
 #include "queue.h"
 #include "task.h"
 
+#include <string.h>
+
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan2;
 
@@ -67,6 +69,9 @@ static SignalCache g_can2_signal_cache;
 static SignalCache g_can2_tx_self_test_signal_cache;
 static QueueHandle_t g_can2_rx_queue;
 static QueueHandle_t g_can2_tx_queue;
+static CanTxControlState g_can2_tx_control;
+static uint32_t g_can2_tx_last_due_tick;
+static uint32_t g_can2_tx_deadline_ready;
 static uint32_t g_can2_bus_off_recovery_latched;
 static uint32_t g_can2_bus_off_recovery_last_attempt_tick;
 
@@ -331,9 +336,12 @@ int can2_analyzer_bringup_run(void) {
     return 2;
   }
 
-  g_can2_send_result = can_port_send(&g_can2_port, &k_can2_analyzer_frame);
+  can_tx_control_init(&g_can2_tx_control);
+  g_can2_tx_last_due_tick = 0u;
+  g_can2_tx_deadline_ready = 0u;
+  g_can2_send_result = CAN_PORT_OK;
   capture_can2_status();
-  return g_can2_send_result == CAN_PORT_OK ? 0 : 3;
+  return 0;
 }
 
 int can2_analyzer_receive(void) {
@@ -383,12 +391,62 @@ int can2_analyzer_tx_queue_init(void) {
   return g_can2_tx_queue_ready == 1u ? 0 : 1;
 }
 
+int can2_tx_control_submit(const CanTxControlConfig *config, uint32_t *request_seq) {
+  if (config == NULL) return 1;
+  taskENTER_CRITICAL();
+  can_tx_control_submit(&g_can2_tx_control, config, request_seq);
+  taskEXIT_CRITICAL();
+  return 0;
+}
+
+void can2_tx_control_snapshot(CanTxControlState *state) {
+  if (state == NULL) return;
+  taskENTER_CRITICAL();
+  *state = g_can2_tx_control;
+  taskEXIT_CRITICAL();
+}
+
+static void can2_tx_control_set_applied(uint32_t request_seq) {
+  taskENTER_CRITICAL();
+  if (g_can2_tx_control.request_seq == request_seq) {
+    g_can2_tx_control.applied_seq = request_seq;
+    g_can2_tx_control.last_result = CAN_PORT_OK;
+  }
+  taskEXIT_CRITICAL();
+}
+
+static void can2_tx_control_set_result(uint32_t request_seq, CanPortResult result) {
+  taskENTER_CRITICAL();
+  if (g_can2_tx_control.request_seq == request_seq) {
+    g_can2_tx_control.last_result = (uint32_t)result;
+  }
+  taskEXIT_CRITICAL();
+}
+
 int can2_analyzer_poll(void) {
-  CanFrame tx = k_can2_analyzer_frame;
+  CanTxControlState control;
+  const uint32_t now = HAL_GetTick();
 
   ++g_can2_poll_count;
-  tx.data[2] = (uint8_t)g_can2_tx_sequence;
-  tx.data[3] = (uint8_t)(g_can2_tx_sequence >> 8);
+  can2_tx_control_snapshot(&control);
+  if (control.request_seq != control.applied_seq) {
+    can2_tx_control_set_applied(control.request_seq);
+    g_can2_tx_last_due_tick = now;
+    g_can2_tx_deadline_ready = 1u;
+  }
+  if (!control.config.enabled ||
+      (g_can2_tx_deadline_ready != 0u &&
+       (uint32_t)(now - g_can2_tx_last_due_tick) < control.config.period_ms)) {
+    (void)can2_analyzer_receive();
+    return 0;
+  }
+
+  CanFrame tx = k_can2_analyzer_frame;
+  tx.id = control.config.standard_id;
+  tx.dlc = control.config.dlc;
+  memcpy(tx.data, control.config.data, sizeof(control.config.data));
+  g_can2_tx_last_due_tick = now;
+  g_can2_tx_deadline_ready = 1u;
   ++g_can2_tx_sequence;
 
   if (g_can2_tx_queue == NULL || xQueueSend(g_can2_tx_queue, &tx, 0u) != pdPASS) {
@@ -398,6 +456,7 @@ int can2_analyzer_poll(void) {
     ++g_can2_tx_queue_enqueue_count;
     g_can2_send_result = CAN_PORT_OK;
   }
+  can2_tx_control_set_result(control.request_seq, (CanPortResult)g_can2_send_result);
   (void)can2_analyzer_receive();
   return g_can2_send_result == CAN_PORT_OK ? 0 : 1;
 }
@@ -410,10 +469,31 @@ size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity
   return count;
 }
 
+size_t can2_tx_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity) {
+  size_t count;
+  taskENTER_CRITICAL();
+  count = signal_cache_copy(&g_can2_tx_self_test_signal_cache, out_entries, out_capacity);
+  taskEXIT_CRITICAL();
+  return count;
+}
+
 size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity) {
   size_t count;
   taskENTER_CRITICAL();
   count = signal_cache_export_rule_snapshots(&g_can2_signal_cache, out_signals, out_capacity);
+  taskEXIT_CRITICAL();
+  return count;
+}
+
+size_t can2_signal_cache_export_rule_snapshots_for_engine(const RuleEngine *engine,
+                                                          SignalSnapshot *out_signals,
+                                                          size_t out_capacity) {
+  size_t count;
+  taskENTER_CRITICAL();
+  count = signal_cache_export_rule_snapshots_for_engine(&g_can2_signal_cache,
+                                                         engine,
+                                                         out_signals,
+                                                         out_capacity);
   taskEXIT_CRITICAL();
   return count;
 }

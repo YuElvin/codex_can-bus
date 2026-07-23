@@ -105,6 +105,8 @@ TF 卡 + W25Q128 + FreeRTOS`。
 
 Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 发送先按当前 DBC 将物理值反向编码到 data，再入队；`CanTxTask` 统一调用 FDCAN2 HAL 发送并记录结果。
 
+2026-07-23 候选将网页发送收窄为 classic CAN：`GET/POST /api/can/tx`与`GET /api/can/tx/signals`只接受标准 ID、DLC、最多8字节HEX和`100..10000 ms`周期。TX self-test与外部RX缓存/诊断继续分离；当前候选不得由 TX=`42434/4660`或CAN errors=`0`推导外部新控制帧已接收。
+
 ### 5.3 W5500 网络
 
 当前 W5500 bring-up 已完成 SPI 寄存器级验证和 ping。最小 HTTP 状态接口已经完成：
@@ -169,6 +171,8 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 | POST | `/api/can/send_raw` | 原始发送 | `{id,ide,fd,brs,data}` |
 | POST | `/api/can/send_signal` | 按 DBC 发送 | `{message,signals:{rpm:1200}}` |
 | GET/POST/PUT/DELETE | `/api/can/periodic` | 周期发送管理 | `{items:[...]}` |
+| GET/POST | `/api/can/tx` | 经典 CAN 发送控制 | 仅标准ID、DLC、8字节HEX、`100..10000 ms`；已完成浏览器部署/可逆控制/重复重入与外部RX输入显示验收，未直接读取外部接收器对新TX帧的逐帧显示 |
+| GET | `/api/can/tx/signals` | TX self-test 信号候选 | 与外部RX信号缓存分离；不能替代外部RX或外部接收证据 |
 | POST | `/api/log/control` | 日志开关/周期 | `{enabled,period_ms}` |
 | GET | `/api/log/files` | 日志列表 | `{files:[{name,size,time}]}` |
 | GET | `/api/log/download/{name}` | 下载日志 | `text/csv` |
@@ -370,3 +374,9 @@ G-2不破坏TF/QSPI、不暂停任务且不增加生产接口。只在RAM中将`
 ## G-3 一期最终发布审计
 
 G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并通过F-76/G-1/G-2的唯一最终映像。G-3复用G-1的host CTest 15/15构建证据，只核对现有ELF/HEX哈希、size及HTTP、LogTask、RuleFile v3、bus-off定向反汇编。所有功能与现场域PASS；治理封口提交`fe2154c`已推送，工作树干净且本地/远端ahead/behind=`0/0`，发布完整性PASS。并发HTTP、运行中TF热插拔、无界规则、通用配置、在线日志下载、鉴权/TLS等继续是明确非目标。
+
+## 网页 CAN 发送控制（本轮客观通过）
+
+用户确认合同限于经典 CAN。候选新增`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，网页包括状态灯、TX/RX区域、折叠与TX/RX DBC表；输入固定为标准 ID、DLC、最多8字节HEX与`100..10000 ms`。已记录 CTest=`16/16`、ELF/HEX SHA-256 前缀=`f589...`/`37b9...`、`text/data/bss=93976/384/242448`、50 ms poll/队列/解析反汇编和 OpenOCD `Programming Finished/Verified OK/Resetting Target`。顺序API已走默认、POST request/applied、关闭与重启，TX self-test=`42434/4660`、RX独立且CAN errors=`0`。
+
+用户已把更新版`www`写入TF并上电，随后确认CANtest正在发送。浏览器实测状态灯为`status-lamp ok`、TX/RX累计，四个详情区默认折叠；关闭再恢复后最终配置为`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，request/applied相等且result=0。TX self-test及外部RX两张CANoe式DBC表均为marker=`42434`、sequence=`4660`、quality=`ok`；自动刷新样本TX/RX=`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。此处外部RX增长证明CANtest输入持续到板端；未直接读取CANtest作为接收器对本轮受控TX帧的显示，不能把它写成外部接收器逐帧确认。

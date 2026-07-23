@@ -2,6 +2,7 @@
 
 #include "main.h"
 #include "dbc_parser.h"
+#include "dbc_signal_catalog.h"
 #include "platform/stm32h750_bringup.h"
 #include "rule_file.h"
 #include "signal_api.h"
@@ -169,6 +170,11 @@ extern volatile uint32_t g_rule_file_v3_save_result;
 extern volatile uint32_t g_rule_file_v3_load_result;
 extern volatile uint32_t g_rule_file_v3_rule_count;
 extern volatile uint32_t g_rule_file_v2_load_result;
+extern volatile uint32_t g_rule_file_v4_load_result;
+extern volatile uint32_t g_rule_file_v4_save_request;
+extern volatile uint32_t g_rule_file_v4_save_result;
+extern RuleFileV4 g_rule_file_v4_current;
+extern RuleFileV4 g_rule_file_v4_pending;
 extern RuleFileV3 g_rule_file_v3_current;
 extern RuleFileV3 g_rule_file_v3_pending;
 
@@ -222,11 +228,15 @@ extern RuleFileV3 g_rule_file_v3_pending;
 #define W5500_HTTP_PATH_RULE_CONFIG 8u
 #define W5500_HTTP_PATH_RULES 9u
 #define W5500_HTTP_PATH_RELAY_MANUAL 10u
+#define W5500_HTTP_PATH_CAN_TX 11u
+#define W5500_HTTP_PATH_DBC_SIGNALS 13u
+#define W5500_HTTP_PATH_CAN_TX_SIGNALS 12u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
 #define W5500_HTTP_RULES_BODY_MAX 384u
 #define W5500_HTTP_MANUAL_BODY_MAX 64u
+#define W5500_HTTP_CAN_TX_BODY_MAX 96u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
@@ -262,6 +272,7 @@ static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
 static DbcDatabase g_http_dbc_runtime_db[2];
 static const DbcDatabase *g_http_dbc_runtime_active_db;
+static DbcSignalCatalogEntry g_http_dbc_signal_page[DBC_SIGNAL_CATALOG_PAGE_SIZE];
 static uint8_t g_w5500_http_disconnect_pending;
 static uint32_t g_w5500_http_disconnect_pending_start_tick;
 static uint32_t g_w5500_http_ack_wait_start_tick;
@@ -621,6 +632,33 @@ static bool request_path_is(const char *request, const char *method, const char 
   return strncmp(actual, path, path_len) == 0 && (actual[path_len] == ' ' || actual[path_len] == '?');
 }
 
+static bool request_dbc_signals_page(const char *request, uint32_t *page) {
+  static const char prefix[] = "GET /api/dbc/signals?page=";
+  const size_t prefix_len = sizeof(prefix) - 1u;
+  const char *value;
+  uint32_t parsed = 0u;
+  bool has_digit = false;
+
+  if (request == NULL || page == NULL || strncmp(request, prefix, prefix_len) != 0) {
+    return false;
+  }
+  value = request + prefix_len;
+  while (*value >= '0' && *value <= '9') {
+    const uint32_t digit = (uint32_t)(*value - '0');
+    if (parsed > (UINT32_MAX - digit) / 10u) {
+      return false;
+    }
+    parsed = parsed * 10u + digit;
+    has_digit = true;
+    ++value;
+  }
+  if (!has_digit || *value != ' ') {
+    return false;
+  }
+  *page = parsed;
+  return true;
+}
+
 static const char *http_status_text(uint16_t code) {
   switch (code) {
     case 200u:
@@ -728,6 +766,32 @@ static size_t build_can_status_body(char *body, size_t len) {
                           (unsigned long)g_can2_poll_count);
 }
 
+static size_t build_can_tx_body(char *body, size_t len) {
+  CanTxControlState state;
+
+  can2_tx_control_snapshot(&state);
+  return (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"enabled\":%s,\"id\":%u,\"dlc\":%u,"
+                          "\"data\":[%u,%u,%u,%u,%u,%u,%u,%u],\"periodMs\":%lu,"
+                          "\"requestSeq\":%lu,\"appliedSeq\":%lu,\"lastResult\":%lu}}",
+                          state.config.enabled ? "true" : "false",
+                          (unsigned)state.config.standard_id,
+                          (unsigned)state.config.dlc,
+                          (unsigned)state.config.data[0],
+                          (unsigned)state.config.data[1],
+                          (unsigned)state.config.data[2],
+                          (unsigned)state.config.data[3],
+                          (unsigned)state.config.data[4],
+                          (unsigned)state.config.data[5],
+                          (unsigned)state.config.data[6],
+                          (unsigned)state.config.data[7],
+                          (unsigned long)state.config.period_ms,
+                          (unsigned long)state.request_seq,
+                          (unsigned long)state.applied_seq,
+                          (unsigned long)state.last_result);
+}
+
 static size_t build_not_found_body(char *body, size_t len) {
   return (size_t)snprintf(body, len, "{\"ok\":false,\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}");
 }
@@ -802,10 +866,68 @@ static size_t build_dbc_runtime_body(char *body, size_t len) {
                           (unsigned long)g_w5500_http_dbc_runtime_errors);
 }
 
+static size_t build_dbc_signals_body(char *body, size_t len, uint32_t page) {
+  const DbcDatabase *db = NULL;
+  uint32_t generation = g_w5500_http_dbc_runtime_generation;
+  bool loaded = false;
+  size_t total = 0u;
+  size_t count = 0u;
+  size_t used;
+
+  if (w5500_http_dbc_lock() == 0) {
+    generation = g_w5500_http_dbc_runtime_generation;
+    db = w5500_http_active_dbc_snapshot();
+    if (db != NULL) {
+      loaded = true;
+      total = dbc_signal_catalog_total(db);
+      count = dbc_signal_catalog_page(db,
+                                      (size_t)page,
+                                      g_http_dbc_signal_page,
+                                      DBC_SIGNAL_CATALOG_PAGE_SIZE);
+    }
+    w5500_http_dbc_unlock();
+  }
+  used = (size_t)snprintf(body,
+                          len,
+                          "{\"ok\":true,\"data\":{\"generation\":%lu,\"page\":%lu,\"total\":%lu,\"loaded\":%s,\"items\":[",
+                          (unsigned long)generation,
+                          (unsigned long)page,
+                          (unsigned long)total,
+                          loaded ? "true" : "false");
+  if (used >= len) {
+    return len;
+  }
+  for (size_t i = 0u; i < count; ++i) {
+    const int written = snprintf(body + used,
+                                 len - used,
+                                 "%s{\"key\":\"%s\"}",
+                                 i == 0u ? "" : ",",
+                                 g_http_dbc_signal_page[i].key);
+    if (written < 0 || (size_t)written >= len - used) {
+      return len;
+    }
+    used += (size_t)written;
+  }
+  {
+    const int written = snprintf(body + used, len - used, "]}}");
+    if (written < 0 || (size_t)written >= len - used) {
+      return len;
+    }
+    used += (size_t)written;
+  }
+  return used;
+}
+
 static size_t build_signals_body(char *body, size_t len) {
   SignalCacheEntry entries[SIGNAL_API_MAX_ITEMS];
   const size_t count = can2_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
   g_w5500_http_signals_count = (uint32_t)count;
+  return signal_api_build_json(entries, count, body, len);
+}
+
+static size_t build_can_tx_signals_body(char *body, size_t len) {
+  SignalCacheEntry entries[SIGNAL_API_MAX_ITEMS];
+  const size_t count = can2_tx_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
   return signal_api_build_json(entries, count, body, len);
 }
 
@@ -851,24 +973,36 @@ static size_t build_manual_relay_body(char *body, size_t len) {
 }
 
 static size_t build_rules_body(char *body, size_t len, int slot) {
-  const RuleFileV3Slot *first = &g_rule_file_v3_current.slots[0];
-  const RuleFileV3Slot *second = &g_rule_file_v3_current.slots[1];
-  const char *source = g_rule_file_v3_load_result == 0u ? "v3" :
+  const RuleFileV4Slot *first = &g_rule_file_v4_current.slots[0];
+  const RuleFileV4Slot *second = &g_rule_file_v4_current.slots[1];
+  const char *source = g_rule_file_v4_load_result == 0u ? "v4" :
+                       g_rule_file_v3_load_result == 0u ? "v3" :
                        g_rule_file_v2_load_result == 0u ? "v2" : "v1-qspi";
+  char first_threshold[32];
+  char second_threshold[32];
+
+  if (rule_file_format_decimal(first->threshold, first_threshold, sizeof(first_threshold)) == 0u ||
+      rule_file_format_decimal(second->threshold, second_threshold, sizeof(second_threshold)) == 0u) {
+    return len;
+  }
   if (slot >= 0 && slot < 2) {
-    const RuleFileV3Slot *rule = &g_rule_file_v3_current.slots[slot];
+    const RuleFileV4Slot *rule = &g_rule_file_v4_current.slots[slot];
+    char threshold[32];
+    if (rule_file_format_decimal(rule->threshold, threshold, sizeof(threshold)) == 0u) {
+      return len;
+    }
     return (size_t)snprintf(body, len,
-      "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":3,\"slot\":%d,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}}",
+      "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":4,\"slot\":%d,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}}",
       source, slot, rule->enabled ? "true" : "false", (unsigned)rule->relay,
-      (unsigned long)rule->threshold, rule->action_state == RELAY_STATE_ON ? "on" : "off",
+      rule->signal_key, threshold, rule->action_state == RELAY_STATE_ON ? "on" : "off",
       (unsigned long)rule->delay_ms, (unsigned long)rule->timeout_ms,
       rule->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)rule->priority);
   }
   return (size_t)snprintf(body, len,
-    "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":3,\"rules\":[{\"slot\":0,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u},{\"slot\":1,\"enabled\":%s,\"relay\":%u,\"threshold\":%lu,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}]}}",
-    source, first->enabled ? "true" : "false", (unsigned)first->relay, (unsigned long)first->threshold,
+    "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":4,\"rules\":[{\"slot\":0,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u},{\"slot\":1,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}]}}",
+    source, first->enabled ? "true" : "false", (unsigned)first->relay, first->signal_key, first_threshold,
     first->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)first->delay_ms, (unsigned long)first->timeout_ms, first->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)first->priority,
-    second->enabled ? "true" : "false", (unsigned)second->relay, (unsigned long)second->threshold,
+    second->enabled ? "true" : "false", (unsigned)second->relay, second->signal_key, second_threshold,
     second->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)second->delay_ms, (unsigned long)second->timeout_ms, second->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)second->priority);
 }
 
@@ -1338,13 +1472,14 @@ enum {
   HTTP_RULE_FIELD_SLOT = 1u << 0,
   HTTP_RULE_FIELD_ENABLED = 1u << 1,
   HTTP_RULE_FIELD_RELAY = 1u << 2,
-  HTTP_RULE_FIELD_THRESHOLD = 1u << 3,
-  HTTP_RULE_FIELD_ACTION = 1u << 4,
-  HTTP_RULE_FIELD_DELAY = 1u << 5,
-  HTTP_RULE_FIELD_TIMEOUT = 1u << 6,
-  HTTP_RULE_FIELD_SAFE_STATE = 1u << 7,
-  HTTP_RULE_FIELD_PRIORITY = 1u << 8,
-  HTTP_RULE_FIELD_ALL = HTTP_RULE_FIELD_ENABLED | HTTP_RULE_FIELD_RELAY |
+  HTTP_RULE_FIELD_SIGNAL_KEY = 1u << 3,
+  HTTP_RULE_FIELD_THRESHOLD = 1u << 4,
+  HTTP_RULE_FIELD_ACTION = 1u << 5,
+  HTTP_RULE_FIELD_DELAY = 1u << 6,
+  HTTP_RULE_FIELD_TIMEOUT = 1u << 7,
+  HTTP_RULE_FIELD_SAFE_STATE = 1u << 8,
+  HTTP_RULE_FIELD_PRIORITY = 1u << 9,
+  HTTP_RULE_FIELD_ALL = HTTP_RULE_FIELD_ENABLED | HTTP_RULE_FIELD_RELAY | HTTP_RULE_FIELD_SIGNAL_KEY |
                         HTTP_RULE_FIELD_THRESHOLD | HTTP_RULE_FIELD_ACTION |
                         HTTP_RULE_FIELD_DELAY | HTTP_RULE_FIELD_TIMEOUT |
                         HTTP_RULE_FIELD_SAFE_STATE | HTTP_RULE_FIELD_PRIORITY,
@@ -1457,11 +1592,31 @@ static int http_handle_manual_override(const char *body, size_t body_len) {
   return http_send_json_error(500u, "manual_override_timeout", "rule task did not apply manual override");
 }
 
+static int http_handle_can_tx(const char *body, size_t body_len) {
+  CanTxControlConfig config;
+  uint32_t request_seq;
+  size_t response_len;
+
+  if (!can_tx_control_parse_form(body, body_len, &config)) {
+    http_record_request(W5500_HTTP_PATH_CAN_TX, 400u);
+    return http_send_json_error(400u, "invalid_can_tx", "enabled id dlc data periodMs required");
+  }
+  if (can2_tx_control_submit(&config, &request_seq) != 0) {
+    http_record_request(W5500_HTTP_PATH_CAN_TX, 500u);
+    return http_send_json_error(500u, "can_tx_submit_failed", "can tx submit failed");
+  }
+  (void)request_seq;
+  response_len = build_can_tx_body(g_http_response_body, sizeof(g_http_response_body));
+  if (response_len >= sizeof(g_http_response_body)) return 1;
+  http_record_request(W5500_HTTP_PATH_CAN_TX, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+}
+
 static bool http_form_parse_rule(const char *body,
                                  size_t body_len,
                                  bool include_slot,
                                  uint32_t *slot,
-                                 RuleFileV3Slot *rule) {
+                                 RuleFileV4Slot *rule) {
   uint32_t fields = 0u;
   size_t offset = 0u;
 
@@ -1506,8 +1661,14 @@ static bool http_form_parse_rule(const char *body,
       if ((fields & HTTP_RULE_FIELD_RELAY) != 0u || !http_form_parse_u32(value_text, value_len, &value) || value >= RULE_RELAY_COUNT) return false;
       rule->relay = (uint8_t)value;
       fields |= HTTP_RULE_FIELD_RELAY;
+    } else if (http_form_span_is(key, key_len, "signalKey")) {
+      if ((fields & HTTP_RULE_FIELD_SIGNAL_KEY) != 0u || value_len >= sizeof(rule->signal_key)) return false;
+      memcpy(rule->signal_key, value_text, value_len);
+      rule->signal_key[value_len] = '\0';
+      fields |= HTTP_RULE_FIELD_SIGNAL_KEY;
     } else if (http_form_span_is(key, key_len, "threshold")) {
-      if ((fields & HTTP_RULE_FIELD_THRESHOLD) != 0u || !http_form_parse_u32(value_text, value_len, &rule->threshold)) return false;
+      if ((fields & HTTP_RULE_FIELD_THRESHOLD) != 0u ||
+          !rule_file_parse_decimal(value_text, value_len, &rule->threshold)) return false;
       fields |= HTTP_RULE_FIELD_THRESHOLD;
     } else if (http_form_span_is(key, key_len, "action")) {
       if ((fields & HTTP_RULE_FIELD_ACTION) != 0u) return false;
@@ -1539,18 +1700,32 @@ static bool http_form_parse_rule(const char *body,
   return fields == (HTTP_RULE_FIELD_ALL | (include_slot ? HTTP_RULE_FIELD_SLOT : 0u));
 }
 
+static int http_validate_rule_signal_key(const char *signal_key) {
+  const DbcDatabase *db;
+  int result;
+
+  if (w5500_http_dbc_lock() != 0) {
+    return -1;
+  }
+  db = w5500_http_active_dbc_snapshot();
+  result = db == NULL ? -1 : (dbc_signal_catalog_contains(db, signal_key) ? 0 : 1);
+  w5500_http_dbc_unlock();
+  return result;
+}
+
 static int http_handle_rules_write(uint32_t operation, int path_slot, const char *body, size_t body_len) {
-  RuleFileV3 candidate;
-  RuleFileV3Slot replacement = {0};
+  RuleFileV4 candidate;
+  RuleFileV4Slot replacement = {0};
   uint32_t slot = path_slot >= 0 ? (uint32_t)path_slot : 0u;
   const uint32_t generation = g_rule_task_config_generation;
   uint16_t code = 200u;
 
-  if (g_rule_file_v3_load_result != 0u && g_rule_file_v2_load_result != 0u) {
+  if (g_rule_file_v4_load_result != 0u && g_rule_file_v3_load_result != 0u &&
+      g_rule_file_v2_load_result != 0u) {
     http_record_request(W5500_HTTP_PATH_RULES, 500u);
     return http_send_json_error(500u, "rules_source_unavailable", "valid v2 or v3 rules required");
   }
-  candidate = g_rule_file_v3_current;
+  candidate = g_rule_file_v4_current;
   if (operation == HTTP_RULES_DELETE) {
     if (body_len != 0u) {
       http_record_request(W5500_HTTP_PATH_RULES, 400u);
@@ -1570,6 +1745,15 @@ static int http_handle_rules_write(uint32_t operation, int path_slot, const char
     if (slot >= RULE_FILE_V2_RULE_COUNT) {
       http_record_request(W5500_HTTP_PATH_RULES, 404u);
       return http_send_json_error(404u, "not_found", "rule slot not found");
+    }
+    const int signal_key_result = http_validate_rule_signal_key(replacement.signal_key);
+    if (signal_key_result < 0) {
+      http_record_request(W5500_HTTP_PATH_RULES, 409u);
+      return http_send_json_error(409u, "dbc_unavailable", "active dbc required");
+    }
+    if (signal_key_result != 0) {
+      http_record_request(W5500_HTTP_PATH_RULES, 400u);
+      return http_send_json_error(400u, "invalid_signal_key", "signal key not in active dbc");
     }
     if (operation == HTTP_RULES_POST) {
       if (replacement.enabled == false) {
@@ -1591,14 +1775,14 @@ static int http_handle_rules_write(uint32_t operation, int path_slot, const char
     return http_send_json_error(400u, "invalid_rule", "invalid rule set");
   }
 
-  g_rule_file_v3_pending = candidate;
-  g_rule_file_v3_save_result = 0xffffffffu;
-  g_rule_file_v3_save_request = 1u;
+  g_rule_file_v4_pending = candidate;
+  g_rule_file_v4_save_result = 0xffffffffu;
+  g_rule_file_v4_save_request = 1u;
   for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_file_v3_save_request == 0u && g_rule_file_v3_save_result != 0xffffffffu) break;
+    if (g_rule_file_v4_save_request == 0u && g_rule_file_v4_save_result != 0xffffffffu) break;
     vTaskDelay(pdMS_TO_TICKS(1u));
   }
-  if (g_rule_file_v3_save_request != 0u || g_rule_file_v3_save_result != 0u) {
+  if (g_rule_file_v4_save_request != 0u || g_rule_file_v4_save_result != 0u) {
     http_record_request(W5500_HTTP_PATH_RULES, 500u);
     return http_send_json_error(500u, "rule_save_failed", "rule file save failed");
   }
@@ -1795,6 +1979,38 @@ static int http_handle_request(uint16_t rx_size) {
              ? W5500_HTTP_HANDLE_OK
              : W5500_HTTP_HANDLE_ERROR;
   }
+  if (request_path_is(request, "POST", "/api/can/tx")) {
+    size_t content_length = 0u;
+    size_t body_offset;
+
+    if (header_end == NULL) {
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) return W5500_HTTP_HANDLE_WAIT;
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_CAN_TX, 400u);
+      return http_send_json_error(400u, "bad_request", "can tx header too large");
+    }
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u ||
+        content_length > W5500_HTTP_CAN_TX_BODY_MAX || (size_t)rx_size < body_offset + content_length) {
+      if ((size_t)rx_size < body_offset + content_length && read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_CAN_TX, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid can tx body");
+    }
+    if (body_offset + content_length > read_len || (size_t)rx_size != body_offset + content_length) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+      http_record_request(W5500_HTTP_PATH_CAN_TX, 400u);
+      return http_send_json_error(400u, "bad_request", "invalid can tx body");
+    }
+    if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_can_tx(&request[body_offset], content_length) == 0
+             ? W5500_HTTP_HANDLE_OK
+             : W5500_HTTP_HANDLE_ERROR;
+  }
   if (request_path_is(request, "POST", "/api/relay/manual")) {
     size_t content_length = 0u;
     size_t body_offset;
@@ -1941,6 +2157,7 @@ static int http_handle_request(uint16_t rx_size) {
 
   uint16_t code = 404u;
   uint32_t path_code = 0u;
+  uint32_t dbc_signals_page = 0u;
   size_t body_len = 0u;
   const char *content_type = "application/json";
   if (request_path_is(request, "GET", "/api/status")) {
@@ -1951,10 +2168,22 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_CAN_STATUS;
     body_len = build_can_status_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/can/tx")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_CAN_TX;
+    body_len = build_can_tx_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET", "/api/can/tx/signals")) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_CAN_TX_SIGNALS;
+    body_len = build_can_tx_signals_body(body, sizeof(g_http_response_body));
   } else if (request_path_is(request, "GET", "/api/dbc/runtime")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_DBC_RUNTIME;
     body_len = build_dbc_runtime_body(body, sizeof(g_http_response_body));
+  } else if (request_dbc_signals_page(request, &dbc_signals_page)) {
+    code = 200u;
+    path_code = W5500_HTTP_PATH_DBC_SIGNALS;
+    body_len = build_dbc_signals_body(body, sizeof(g_http_response_body), dbc_signals_page);
   } else if (request_path_is(request, "GET", "/api/signals")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_SIGNALS;

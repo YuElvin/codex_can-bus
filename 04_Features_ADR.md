@@ -15,6 +15,8 @@
 | F-009 | 日志和规则引擎 | [一期边界客观已验证] | LogTask长跑、实体CSV、冷启动恢复及G-1同映像增长通过；QSPI单规则与TF固定两槽v2/v3、优先级、manual、timeout/safeState、HTTP CRUD和GPIO均有现场证据。热插拔、无界规则和通用配置为非目标 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |
 | F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
+| F-012 | 网页 CAN 发送控制 | [客观通过] | classic CAN窄合同：`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，标准ID、DLC、8字节HEX、`100..10000 ms`；TX self-test/RX缓存独立。用户已部署网页上电，浏览器实测状态灯、TX/RX累计、默认折叠和CANoe式TX/RX DBC表；最终`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms已应用result=0，自动刷新和两次reload均无连接拒绝。CANtest外部输入由用户确认且RX表增长；未直接读取CANtest接收显示，不能声称外部接收器逐帧确认新TX帧 |
+| F-013 | 网页手动 TX 与 DBC `signalKey` 两槽规则 | [最终现场验收完成] | 根目录新网页下自动刷新 TX/RX=`55/364→576/5540`，两次刷新期间编辑均保留并提交，最终 TX `sequence=256`，warn/error为空。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX为 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时manual `relay1Output=0`与高优先级off一致；此前构建、反汇编、烧录已实际完成 |
 
 ## ADR 索引
 
@@ -34,6 +36,8 @@
 | ADR-011 | 单规则配置使用 QSPI 双槽做最小持久化 | 已接受，v1 兼容、交替保存、读回校验、损坏最新槽回退、两槽无效默认保留和复位加载均已上板验证 |
 | ADR-018 | ConfigTask 使用固定深度命令队列 | 已接受，诊断和单规则保存入口已烧录验证入队/出队；完整配置模型和 HTTP 来源不在本 ADR |
 | ADR-020 | TF RuleFile v1 采用固定文本格式并通过 RuleTask reload 生效 | 已接受；有效/缺失路径板端验证，非法板端输入未注入 |
+| ADR-029 | 网页 CAN 发送控制保持经典 CAN 窄合同与 TX/RX 证据分离 | 已接受并完成本轮网页现场验收；外部接收器逐帧读回仍非本轮证据 |
+| ADR-031 | 规则选择绑定活动 DBC `signalKey`，但保留两槽与旧 v3 `marker` 回退 | 已接受并完成最终现场验收 |
 
 ## 决策记录摘要
 
@@ -48,6 +52,14 @@
 ### ADR-004：FreeRTOS 逐步拆任务
 
 FreeRTOS 单任务版本已经上板验证通过。当前 CAN2 任务在不改变 1 s `0x321` 诊断发送节奏的前提下，每 50 ms 清空 FIFO 并更新外部 RX `SignalCache`；低优先级 MonitorTask 已接管原 bring-up 任务的 1 s 状态打印，W5500 轮询和最小 ConfigTask 保持既有边界。暂不把 TF/FatFs、QSPI、HTTP 或配置保存并发化，避免在基础任务调度验证前引入共享资源写入风险。
+
+### ADR-031：两槽规则选择活动 DBC 信号
+
+新阶段只修正已确认的两个边界：网页全局 FIFO 使手动 TX 等待多个历史请求，以及 v3 `marker` 规则无法按活动 DBC 选择信号。网络仍使用 W5500 单 socket、非并发模型；手动 TX 只等待当前一个在途请求。规则数量保持恰好两槽，每槽从活动 DBC 选择一个 `signalKey`，RuleTask 只导出两条已配置的信号；无活动 DBC 时规则写入必须在任何持久化或运行态更新前拒绝。旧 v3 不扩展迁移格式，仅在新配置加载失败时回退 `marker` 兼容语义。
+
+前端 dirty-state 修复已在`www`。RuleFile V4 threshold 曾因 nano `printf`缺少浮点链接支持而格式化为`0`；CMake STM32链接选项现增加`-Wl,-u,_printf_float`。`./scripts/verify.sh` host tests=`17/17`通过，STM32 firmware构建成功，最终ELF `text/data/bss=106748/764/243688`；`nm`/map确认`_printf_float`、`_dtoa_r`、`_vfiprintf_r`，`objdump`确认`rule_file_format_decimal`调用`sniprintf`，2026-07-23候选HEX已由OpenOCD完成`Programming Finished/Verified OK/Resetting Target`。
+
+最终现场中，正确部署根目录网页后自动刷新 TX/RX=`55/364→576/5540`且 warn/error为空。两次编辑 TX 在`1800 ms`、`1300 ms`刷新后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC经用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX表解析 marker=`42434`，sequence=`256/4660`。两槽目录均含 marker/sequence；slot1 V4回读`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时manual `relay1Output=0`，符合高优先级off规则。该验收不把 TX self-test 冒充为外部接收器读回。
 
 ### ADR-006：最小解码先复用 CAN2 轮询，区分 TX self-test 与外部 RX
 
@@ -213,3 +225,15 @@ G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与
 当前所有自然500都依赖队列超时、TF保存/读取、运行态reload或manual交接，直接制造会扩大为持久化或任务故障。G-2只使用`http_handle_rules_write()`最前置的`rules_source_unavailable`：该判断位于candidate复制、body解析、pending/save_request和任何TF/QSPI操作之前。现场实际v3/v2加载结果为`0/0xffffffff`，仅临时把v3 RAM诊断值改为1；请求体故意使用已知非法`enabled=true`，所以注入失效时只会400而不会保存。
 
 实测500为98 B完整JSON，随后立即把v3恢复为0；同一请求恢复400，规则正文前后哈希一致，save request/result=`0/0`、generation=4，HTTP error/ACK timeout/recovery为0。该方法只证明现有500响应语义和恢复后的顺序服务，不把RAM注入冒充TF/QSPI真实失败，也不新增生产故障接口。
+
+### ADR-029：网页 CAN 发送控制保持经典 CAN 窄合同与 TX/RX 证据分离
+
+用户已确认此候选只覆盖 classic CAN。新增路由限定为`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，请求只表达标准 ID、DLC、最多8字节HEX与`100..10000 ms`周期；不引入 CAN-FD、扩展 ID、可变长数据、通用周期管理或其他 CAN API。网页候选仅显示状态灯、TX/RX区、折叠区和 TX/RX DBC 表，仍受单 socket 串行请求约束。
+
+候选构建与烧录证据为 CTest=`16/16`、ELF/HEX SHA-256 前缀=`f589...`/`37b9...`、`text/data/bss=93976/384/242448`、50 ms poll/队列/解析反汇编以及 OpenOCD `Programming Finished/Verified OK/Resetting Target`。修复后的网页已由用户写入TF并上电：浏览器绿灯为`status-lamp ok`、四个details默认折叠；可逆关闭再恢复后`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms的request/applied相等、result=0。TX self-test和用户确认CANtest发送后的外部RX DBC表均为`42434/4660/ok`，自动刷新`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。TX self-test与外部RX仍是不同证据，且未直接读取CANtest接收显示，不能将本轮记录为外部接收器逐帧确认新控制帧。
+
+### ADR-030：网页自动刷新保留末请求收尾窗口
+
+首轮页面曾在重入后端口80连续5次失败；GDB当时为socket0=`0x17(ESTABLISHED)`、HTTP status/error=`0/0`、requestCount=`403`、RX_RSR=`0`、HTTP任务tick增长。该历史失败不单独证明根因。
+
+最小修复恢复`www/index.html`第4个串行请求后的250ms收尾等待。用户已部署该网页并上电，严格串行自动刷新和两次reload重入均无连接拒绝；样本TX/RX=`120/273→134/417`、`145/527`、`162/694`。因此此修复在本验证窗口内通过，原先ESTABLISHED无RX不再是当前阻断，也不被扩写为既定状态机根因。

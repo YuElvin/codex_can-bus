@@ -237,6 +237,42 @@ static int test_v2_manual_override_has_priority(void) {
   return 0;
 }
 
+static int test_distinct_signal_keys_and_missing_safe_state(void) {
+  RuleEngine engine;
+  Rule rpm = rpm_rule();
+  Rule speed = rpm_rule();
+  SignalSnapshot signals[2] = {
+    {.key = "EngineData.rpm", .value = 3500.0, .updated_ms = 10u, .valid = true},
+    {.key = "VehicleData.speed", .value = 10.0, .updated_ms = 10u, .valid = true},
+  };
+  RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
+
+  snprintf(speed.id, sizeof(speed.id), "speed_limit");
+  snprintf(speed.signal_key, sizeof(speed.signal_key), "VehicleData.speed");
+  speed.threshold = 50.0;
+  speed.action_state = RELAY_STATE_OFF;
+  speed.safe_state = RELAY_STATE_OFF;
+  speed.priority = 20u;
+  rpm.priority = 10u;
+  rule_engine_init(&engine);
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rpm));
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &speed));
+
+  rule_engine_evaluate(&engine, signals, 2u, 20u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_ON, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 0u);
+
+  signals[1].value = 60.0;
+  rule_engine_evaluate(&engine, signals, 2u, 30u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+
+  rule_engine_evaluate(&engine, signals, 1u, 40u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_basic_match_and_default() == 0);
   ASSERT_TRUE(test_manual_override_has_priority() == 0);
@@ -245,5 +281,6 @@ int main(void) {
   ASSERT_TRUE(test_hysteresis_high_latches_between_thresholds() == 0);
   ASSERT_TRUE(test_priority_winner_delay_and_timeout() == 0);
   ASSERT_TRUE(test_v2_manual_override_has_priority() == 0);
+  ASSERT_TRUE(test_distinct_signal_keys_and_missing_safe_state() == 0);
   return 0;
 }

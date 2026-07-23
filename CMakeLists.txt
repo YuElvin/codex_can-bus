@@ -10,8 +10,10 @@ option(CAN_BUS_BUILD_TESTS "Build host-side unit tests" ON)
 option(CAN_BUS_BUILD_STM32H750_FIRMWARE "Build STM32H750 firmware image" OFF)
 
 add_library(can_bus_core
+  src/core/can_tx_control.c
   src/core/dbc_decoder.c
   src/core/dbc_parser.c
+  src/core/dbc_signal_catalog.c
   src/core/manual_relay.c
   src/core/rule_engine.c
   src/core/rule_config.c
@@ -90,7 +92,9 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
     ${STM32_HAL_SOURCES}
     src/core/dbc_decoder.c
+    src/core/can_tx_control.c
     src/core/dbc_parser.c
+    src/core/dbc_signal_catalog.c
     src/core/manual_relay.c
     src/core/rule_engine.c
     src/core/rule_config.c
@@ -162,6 +166,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     -Wl,--print-memory-usage
     --specs=nosys.specs
     --specs=nano.specs
+    -Wl,-u,_printf_float
   )
 
   add_custom_command(TARGET can_bus_gateway_stm32h750 POST_BUILD
@@ -181,6 +186,10 @@ if(CAN_BUS_BUILD_TESTS)
   target_link_libraries(test_signal_codec PRIVATE can_bus_core)
   add_test(NAME signal_codec COMMAND test_signal_codec)
 
+  add_executable(test_can_tx_control tests/test_can_tx_control.c)
+  target_link_libraries(test_can_tx_control PRIVATE can_bus_core)
+  add_test(NAME can_tx_control COMMAND test_can_tx_control)
+
   add_executable(test_dbc_parser tests/test_dbc_parser.c)
   target_link_libraries(test_dbc_parser PRIVATE can_bus_core)
   add_test(NAME dbc_parser COMMAND test_dbc_parser)
@@ -188,6 +197,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_dbc_decoder tests/test_dbc_decoder.c)
   target_link_libraries(test_dbc_decoder PRIVATE can_bus_core)
   add_test(NAME dbc_decoder COMMAND test_dbc_decoder)
+
+  add_executable(test_dbc_signal_catalog tests/test_dbc_signal_catalog.c)
+  target_link_libraries(test_dbc_signal_catalog PRIVATE can_bus_core)
+  add_test(NAME dbc_signal_catalog COMMAND test_dbc_signal_catalog)
 
   add_executable(test_rule_engine tests/test_rule_engine.c)
   target_link_libraries(test_rule_engine PRIVATE can_bus_core)

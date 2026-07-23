@@ -117,6 +117,44 @@ size_t signal_cache_export_rule_snapshots(const SignalCache *cache,
   return written;
 }
 
+size_t signal_cache_export_rule_snapshots_for_engine(const SignalCache *cache,
+                                                     const RuleEngine *engine,
+                                                     SignalSnapshot *out_signals,
+                                                     size_t out_capacity) {
+  size_t written = 0u;
+
+  if (cache == NULL || engine == NULL || out_signals == NULL || out_capacity == 0u) {
+    return 0u;
+  }
+  for (size_t rule_index = 0u; rule_index < engine->rule_count && written < out_capacity;
+       ++rule_index) {
+    const Rule *rule = &engine->rules[rule_index];
+    bool duplicate = false;
+    if (!rule->enabled) {
+      continue;
+    }
+    for (size_t i = 0u; i < written; ++i) {
+      if (strcmp(out_signals[i].key, rule->signal_key) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    const SignalCacheEntry *entry = signal_cache_find(cache, rule->signal_key);
+    if (entry == NULL) {
+      continue;
+    }
+    copy_text(out_signals[written].key, sizeof(out_signals[written].key), entry->key);
+    out_signals[written].value = entry->physical_value;
+    out_signals[written].updated_ms = entry->updated_ms;
+    out_signals[written].valid = entry->quality == SIGNAL_QUALITY_OK;
+    ++written;
+  }
+  return written;
+}
+
 void signal_cache_mark_stale(SignalCache *cache, uint32_t now_ms, uint32_t stale_after_ms) {
   if (cache == NULL || stale_after_ms == 0u) {
     return;

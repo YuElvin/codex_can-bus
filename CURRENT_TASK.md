@@ -1,6 +1,6 @@
 # 当前任务
 
-更新时间：2026-07-22
+更新时间：2026-07-24
 
 ## 项目目标
 
@@ -8,8 +8,15 @@
 
 ## 当前阶段
 
+- 阶段14“网页运行中手动 TX 与两槽活动 DBC `signalKey` 规则”现场验收完成，继续保持 W5500 单 socket、非并发边界。正确部署 TF 网站根目录的新网页后，自动刷新现场 TX/RX 从`55/364`增长至`576/5540`；浏览器 warn/error 日志为空。
+- 自动刷新运行中两次编辑 TX 均未被覆盖：`C2 A5 78 56 02 03 04 05`等待`1800 ms`仍保留，提交后表格已应用且`result=0`；随后`C2 A5 00 01 02 03 04 05`等待`1300 ms`仍保留并提交恢复。最终 TX DBC `sequence=256`。
+- 已完成的静态与烧录证据：CMake STM32 链接选项已增加`-Wl,-u,_printf_float`，修复 RuleFile V4 threshold 浮点格式化为`0`的问题。`./scripts/verify.sh` host tests=`17/17`通过，STM32 firmware构建成功，最终ELF `text/data/bss=106748/764/243688`；`nm`/map确认`_printf_float`、`_dtoa_r`、`_vfiprintf_r`存在，`objdump`确认`rule_file_format_decimal`调用`sniprintf`。2026-07-23 OpenOCD刚完成对`build/stm32h750/can_bus_gateway_stm32h750.hex`的`Programming Finished`、`Verified OK`、`Resetting Target`。
+- 候选 DBC 已获用户授权激活；最终 runtime 为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。TX/RX 表均解析出 marker=`42434`，TX `sequence=256`、RX `sequence=4660`。
+- 两槽目录均含 marker/sequence；slot1 已保存并从 V4 回读为`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX `sequence=4660`时 manual 状态`relay1Output=0`，与高优先级 off 规则一致。
 - 一期全量功能已完成；`W-1 后台网页两轮实际回归`已完成。人工已将更新后的网页文件写入 TF 并重新上电；同一候选 HEX 已烧录，首轮与退出后新页面第二轮均完成。
 - 本轮前端 FIFO 修复已在自动 CAN 刷新期间实际验证：DBC 上传与激活均成功，不再出现“已有请求进行中”。CLOSE_WAIT 最小修复也已现场复验：最终概览`lastNonclosedClose=0`；这只说明本次两轮回归未再观察到旧`0x11c`，不作长期绝对结论。
+- 网页 CAN 发送控制阶段已客观通过：用户已将修复后网页写入 TF 并上电，随后确认 CANtest 已发送。首次自动刷新后状态灯为绿（`status-lamp ok`），TX/RX累计从`120/273`增至`134/417`；网页可逆关闭再恢复发送，最终配置为`0x321`、DLC=`4`、`C2 A5 34 12 00 00 00 00`、`1000 ms`，应用结果为`requestSeq=appliedSeq`且`lastResult=0`。TX self-test与外部 RX 两张 CANoe 式 DBC 表均显示 marker=`42434`、sequence=`4660`、quality=`ok`；CANtest输入确认后外部 RX 持续增长。
+- 修复后的严格串行网页自动刷新及两次 reload 重入均未再出现端口80连接拒绝：两次重入样本分别为 TX/RX=`145/527`、`162/694`。四个详情区默认折叠，浏览器控制台 warn/error 为空。此证据证明本轮网页与外部 RX 输入链路；未直接读取 CANtest 显示屏确认其逐帧收到本轮受控 TX，故不将该项写成外部接收器读回证据。
 
 ## 成功标准
 
@@ -37,9 +44,9 @@
 - 两条 POST 的 request/applied=`1/1`、`2/2`；关闭覆盖后实际输出=`1/0`。ST-Link 读回 ACK wait count=`2`、elapsed=`50 ms`、timeout=`0`、W5500 recovery count=`0`。
 - 顺序 ping 2/2；manual/status/CAN 均 HTTP 200；RTOS、W5500、TF、QSPI、CAN 正常。F-76 判定 PASS。
 
-## 唯一下一动作
+## 本轮收尾
 
-本轮 W-1 无剩余现场阻断：已烧录`build/stm32h750/can_bus_gateway_stm32h750.hex`，OpenOCD 输出`Programming Finished`、`Verified OK`、`Resetting Target`；首轮及退出后新页第二轮均完成。最终概览为RTOS started/ready=`1/1`，W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`，TF/QSPI=`0/0`，active DBC=`loaded=true, generation=3, 151 B, 3 lines, 1 message, 2 signals, errors=0`。CAN重新进入时tx/rx=`111/1088`且errors/busOff/tec/rec/sendResult均为0；手动继电器已恢复`enabled=0, relay1=0, relay2=0, requestSeq=appliedSeq=4`、实际输出`1/0`；规则回读为`v3`并已完成slot1暂改、删除、重建还原。浏览器自动化短等待曾读到旧手动状态，等待FIFO队列清空后的最终回读正常，不作为网页错误。
+先前旧页误部署、活动 DBC 缺失、首次 TX 输入被自动刷新覆盖及 RuleFile V4 浮点 threshold 回读为`0`均已对应修复并以最终现场复验关闭。本轮仅同步治理 Markdown，未修改源码、网页、CMake 或`PROJECT_FINAL_ACCEPTANCE.md`，未重新编译或执行新的反汇编；构建、`objdump`与烧录证据均为此前已实际完成的同轮候选事实。TX self-test 不作为外部接收器证明；本轮外部 RX 结论仅基于实际 RX 表及输入。
 
 ## G-3 最终结论
 

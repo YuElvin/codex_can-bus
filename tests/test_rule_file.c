@@ -1,5 +1,6 @@
 #include "rule_file.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -231,6 +232,50 @@ static int test_invalid_v3_does_not_change_candidate(void) {
   return 0;
 }
 
+static const char default_v4_text[] =
+  "version=4\nruleCount=2\n"
+  "rule0.enabled=1\nrule0.relay=0\nrule0.signalKey=EngineData.rpm\nrule0.threshold=1234.5\n"
+  "rule0.action=on\nrule0.delayMs=1000\nrule0.timeoutMs=1500\nrule0.safeState=off\nrule0.priority=10\n"
+  "rule1.enabled=1\nrule1.relay=1\nrule1.signalKey=VehicleData.speed\nrule1.threshold=-1.25\n"
+  "rule1.action=off\nrule1.delayMs=0\nrule1.timeoutMs=1500\nrule1.safeState=off\nrule1.priority=20\n";
+
+static int test_valid_v4_decimal_round_trip(void) {
+  RuleFileV4 rules;
+  RuleFileV4 round_trip;
+  RuleEngine engine;
+  char text[RULE_FILE_V4_MAX_BYTES + 1u];
+  size_t len;
+
+  ASSERT_TRUE(rule_file_parse_v4((const uint8_t *)default_v4_text, strlen(default_v4_text), &rules));
+  ASSERT_TRUE(strcmp(rules.slots[0].signal_key, "EngineData.rpm") == 0);
+  ASSERT_TRUE(fabs(rules.slots[0].threshold - 1234.5) < 0.000001);
+  ASSERT_TRUE(fabs(rules.slots[1].threshold + 1.25) < 0.000001);
+  len = rule_file_format_v4(&rules, text, sizeof(text));
+  ASSERT_TRUE(len > 0u && len <= RULE_FILE_V4_MAX_BYTES);
+  ASSERT_TRUE(rule_file_parse_v4((const uint8_t *)text, len, &round_trip));
+  ASSERT_TRUE(strcmp(round_trip.slots[1].signal_key, "VehicleData.speed") == 0);
+  ASSERT_TRUE(fabs(round_trip.slots[0].threshold - rules.slots[0].threshold) < 0.000001);
+  ASSERT_TRUE(rule_file_v4_build_engine(&rules, &engine));
+  ASSERT_TRUE(engine.rule_count == 2u);
+  ASSERT_TRUE(strcmp(engine.rules[1].signal_key, "VehicleData.speed") == 0);
+  return 0;
+}
+
+static int test_invalid_v4_does_not_change_candidate(void) {
+  static const char invalid[] =
+    "version=4\nruleCount=2\nrule0.enabled=1\nrule0.relay=0\n"
+    "rule0.signalKey=EngineData.rpm\nrule0.threshold=1.2.3\n";
+  RuleFileV4 before = {0};
+  RuleFileV4 candidate;
+
+  (void)snprintf(before.slots[0].signal_key, sizeof(before.slots[0].signal_key), "keep.key");
+  before.slots[0].threshold = 7.5;
+  candidate = before;
+  ASSERT_TRUE(!rule_file_parse_v4((const uint8_t *)invalid, strlen(invalid), &candidate));
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_valid_file() == 0);
   ASSERT_TRUE(test_missing_required_field_does_not_change_candidate() == 0);
@@ -241,5 +286,7 @@ int main(void) {
   ASSERT_TRUE(test_oversized_v2_does_not_change_candidate() == 0);
   ASSERT_TRUE(test_valid_v3_and_enabled_engine() == 0);
   ASSERT_TRUE(test_invalid_v3_does_not_change_candidate() == 0);
+  ASSERT_TRUE(test_valid_v4_decimal_round_trip() == 0);
+  ASSERT_TRUE(test_invalid_v4_does_not_change_candidate() == 0);
   return 0;
 }

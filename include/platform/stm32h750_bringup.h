@@ -4,6 +4,7 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "ports/can_port.h"
+#include "can_tx_control.h"
 #include "dbc_parser.h"
 #include "ports/tf_card_port.h"
 #include "ports/w5500_port.h"
@@ -75,8 +76,14 @@ int can2_analyzer_receive(void);
 int can2_analyzer_decode_pending(void);
 int can2_analyzer_rx_queue_init(void);
 int can2_analyzer_tx_queue_init(void);
+int can2_tx_control_submit(const CanTxControlConfig *config, uint32_t *request_seq);
+void can2_tx_control_snapshot(CanTxControlState *state);
 size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
+size_t can2_tx_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
 size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity);
+size_t can2_signal_cache_export_rule_snapshots_for_engine(const RuleEngine *engine,
+                                                          SignalSnapshot *out_signals,
+                                                          size_t out_capacity);
 int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w25q128_diagnostic_run(void);

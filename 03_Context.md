@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-22（W-1前端FIFO与CLOSE_WAIT最小修复已烧录并完成两轮网页现场回归）
+更新时间：2026-07-24（阶段14最终现场验收已完成）
 
 ## 当前仓库
 
@@ -14,7 +14,9 @@
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
 | W5500 HTTP/API | [一期边界客观已验证] | 受限状态/CAN/signals/DBC/rules/manual/静态页API均已验证；F-76完整响应/双向FIN、G-1的200/400/404及G-2的500恢复通过，保持单socket非并发边界 |
+| 网页手动 TX / 两槽活动 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录网页后，自动刷新 TX/RX=`55/364→576/5540`，warn/error为空。两次编辑 TX 在`1800 ms`与`1300 ms`自动刷新后仍保留并提交成功，最终 TX DBC `sequence=256`。候选 DBC经用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX均解析 marker=`42434`，sequence分别为`256/4660`。两槽均含 marker/sequence；slot1 V4回读`Can2Data.sequence/4660/priority20/action off`。外部RX sequence=`4660`时 manual `relay1Output=0`，与高优先级off一致。 |
 | W-1 CLOSE_WAIT 关闭修复 | [本轮现场回归通过；长期稳定性未单独证明] | pending DISCON 的`SR=0x1c`已从`http_open_listener()`分离并调用既有 graceful `DISCON`；同一候选已烧录，OpenOCD输出`Programming Finished/Verified OK/Resetting Target`。首轮与退出后新页第二轮完成后，概览`lastNonclosedClose=0`；仅说明本次回归未再观察到旧`0x11c`，不作绝对长期结论。 |
+| 网页 CAN 发送控制 | [客观通过] | 经典 CAN窄合同保持为`GET/POST /api/can/tx`、`GET /api/can/tx/signals`、标准 ID、DLC、8字节HEX、周期`100..10000 ms`，TX/RX缓存分离。用户已将更新版`www`写入TF并上电；状态灯`status-lamp ok`、TX/RX累计、默认折叠详情、CANoe式TX/RX DBC表和可逆控制均由浏览器实测。最终配置`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，已应用且result=0；TX self-test与CANtest外部输入RX表均为`42434/4660/ok`。自动刷新`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。未直接读取CANtest接收显示确认新TX帧，不能把该边界写成外部接收器逐帧证据。 |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
 | TF CSV 落盘 | [一期边界客观已验证] | 独立LogTask默认路径长跑、F-19冷启动、F-26下电取卡实体CSV及G-1同映像write/flush/size增长均通过，failure=0；运行中热插拔不支持 |
 | 最小 LogTask | [默认路径客观已验证] | 独立任务每秒采样、768 B 缓冲在 512 B 或 5 秒 flush；正式固件默认路径连续写入已验证。TF 卡操作边界为插拔前下电，运行中热插拔/recovery 不支持也不作为验收项 |
@@ -35,7 +37,7 @@
 
 ## 当前阻断项
 
-- 当前无 W-1现场阻断：新网页已人工写入 TF 并上电，同一候选 HEX 已实际烧录；首轮与退出后新页第二轮均完成。最终概览RTOS started/ready=`1/1`，W5500 status/link/version/phycfgr/lastNonclosedClose=`0/1/4/191/0`，TF/QSPI=`0/0`，active DBC=`loaded=true/generation=3/151 B/3 lines/1 message/2 signals/errors=0`；CAN重新进入时tx/rx=`111/1088`且errors/busOff/tec/rec/sendResult均为0。手动继电器最终恢复disabled、request/applied=`4/4`、输出`1/0`；规则已回读`v3`并完成slot1暂改、删除、重建还原。本轮禁止据此扩大规则/继电器/DBC/TF/CAN语义或宣称长期稳定性结论。
+- 本轮无现场阻断。此前旧页误部署、活动 DBC 缺失、首次输入被覆盖和浮点 threshold=`0`均已修复并最终复验。TX self-test 仍不等于外部接收器证明；外部 RX 的本轮证据为 RX 表实际解析和累计增长，不能扩大为 CANtest 对本轮 TX 帧的逐帧读回。
 
 ### 历史过程与已接受边界（以下不构成当前阻断）
 
@@ -68,6 +70,8 @@
 - macOS 串口曾出现乱码，硬件结论优先用 ST-Link 变量和外部工具确认。
 
 ## 下一步建议
+
+- 仅在用户完成更新版`www`写入 TF 并上电后，按单 socket 串行约束从浏览器验收状态灯、TX/RX 区、折叠和 TX/RX DBC 表；再由 CANtest 明确确认新控制帧的外部接收。TX self-test `42434/4660`、RX 独立计数和 CAN errors=`0`均不能替代该外部接收证据。
 
 一期无必做下一步。后续新需求必须重新定义阶段与验收，不从下列历史过程继续。
 
@@ -122,6 +126,12 @@ F-75源码已完成、未烧录：新增可追溯`www/index.html`单文件资产
 F74-r02的curl虽为200（首字节15.734 ms），但抓包终端实际报`sudo: a password is required`、pcap不存在，故该轮无效且不作网络稳定性结论；下一轮必须先在终端显示`listening on en2`后才允许唯一GET。
 
 F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源为仓库`www/index.html`（10615 B，需用户下电取卡覆盖到TF的`/www/index.html`后再插回上电）；页面只使用内嵌CSS/JS，含概览/DBC、可见时每1000 ms严格串行`/api/can/status→250 ms→/api/signals→250 ms`、两槽规则CRUD和手动继电器。新增`GET/POST /api/relay/manual`；POST严格要求三个完整`0|1` form字段，在`main.c`短临界区提交手动状态/requestSeq，RuleTask完成既有`rule_apply_relays()`后回写appliedSeq，HTTP最多等100 ms且不直接写GPIO。主机CTest现为15/15（新增`manual_relay`验证0|1、应用序号及绕过0）；最终`verify.sh`已完成STM32 ELF链接，FLASH=`91904 B / 128 KB=70.12%`、RAM_D1=`242480 B / 512 KB=46.25%`。本阶段尚未执行反汇编、OpenOCD烧录、TF部署、浏览器/pcap/CANtest/GPIO验收，不能写成已交付或提交。
+
+## 2026-07-23 阶段14外部条件阻断
+
+- 最新候选的代码、构建与烧录事实已经分别记录，但它们不构成网页、外部RX、规则持久回读或继电器的运行时验收。
+- 用户需将最新`www/index.html`写入TF、上电并让CANtest发送；该同一外部条件已连续三次未收到明确确认。当前阶段按治理状态标记为等待现场条件（blocked），不据此推断功能失败或通过。
+- 收到用户明确确认“已写TF、已上电、CANtest已发送”后，恢复单socket严格顺序的现场复测；此前不改动源码、网页、CMake或验收文档，也不把候选证据扩写为验收结论。
 
 ## 阶段 C 实际快照
 
@@ -197,3 +207,10 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - G-3逐域复核F-76、G-1、G-2以及可复用的长跑、网线、冷启动、bus-off、TF实体CSV、QSPI/规则证据，全部一期验收域PASS，不需要重复现场操作或烧录。
 - 旧“部分验证/阶段F进行中/外部RX未验证/队列未建立”只属于历史过程或过时当前描述，本次已在计划、验收合同、Feature索引、架构和当前状态区统一修正。明确非目标继续作为边界，不计为缺口。
 - 治理封口提交`fe2154c`已推送；推送后工作树干净，本地与远端ahead/behind=`0/0`，发布完整性转为PASS。
+
+## 2026-07-23 网页 CAN 发送控制首轮、修复部署与重入回归
+
+- 用户已部署网页、上电并确认CANtest正在发送。首轮网页显示绿灯、TX/RX累计；页面停发再恢复后显示标准ID `0x321`、DLC=`4`、`C2 A5 34 12 00 00 00 00`、周期`1000 ms`。TX/RX DBC表为 marker/sequence=`42434/4660`，重复自动刷新期间计数与时间戳持续增长。此结果只证明首轮页面功能和外部RX显示，不替代CANtest接收受控TX帧的证据。
+- 页面重入后端口80连续5次连接失败，而ping=3/3。GDB当时为socket0=`0x17 (ESTABLISHED)`、HTTP status/error=`0/0`、requestCount=`403`、`RX_RSR=0`、HTTP任务tick仍增长；网页端到端验收因此未通过。
+- 随后仅修改`www/index.html`恢复第4个请求后的250ms收尾等待；`node --check`与`git diff --check`通过。用户随后已将该网页写TF并上电，自动刷新样本为TX/RX=`120/273→134/417`，两次reload重入样本为`145/527`、`162/694`，均无连接拒绝；四个details默认折叠、灯为`status-lamp ok`、控制台warn/error为空。原先ESTABLISHED且无RX失败样本未复现，故不再列为当前阻断或既定根因。
+- 网页可逆关闭再恢复发送后，最终受控配置为`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，`requestSeq=appliedSeq`且result=0。TX self-test和用户确认CANtest正在发送的外部RX两张DBC表均显示`42434/4660/ok`，外部RX随后增长。该结论不声称已直接从CANtest接收显示屏读到本轮控制帧。

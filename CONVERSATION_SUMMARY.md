@@ -3174,3 +3174,117 @@
 ## 2026-07-22 Git 提交推送结果补记
 
 - 用户请求提交推送后，提交 `66b2528 Fix web request FIFO and CLOSE_WAIT handling` 已推送至 `origin/codex/W5500`；本地/上游 ahead/behind=`0/0`。
+
+## 2026-07-23 网页实时 CAN 字段问答
+
+- 用户询问网页实时 CAN 字段含义。回答要点：`can2` 表示 CAN 控制器状态与累计计数；`signals` 表示由 DBC 解码得到的外部 RX 快照。
+- 字段解码：`marker=42434=0xA5C2` 取数据字节 0–1，按小端序解析；`sequence=4660=0x1234` 取数据字节 2–3，按小端序解析；`quality=ok` 表示该快照有效。
+- 本次仅追加对话记录，未修改其他文件，未构建、烧录、访问网络或执行 Git 写操作；因此未执行新的固件反汇编检查。
+
+## 2026-07-23 网页 CAN 发送与展示需求范围待确认
+
+- 用户提出网页新增板卡 CAN 发送开关与数据控制、CANoe 式收发解析展示、红绿控制器状态灯加 TX/RX 累计、详情折叠。
+- 当前已确认：现有发送为固定标准 CAN `0x321`、8 字节周期测试帧；网页尚无发送控制接口。
+- 本轮等待用户确认新帧支持范围与节奏；未改代码、未构建、未烧录，因未生成新固件而未执行固件反汇编检查。
+
+## 2026-07-23 网页 CAN 发送参数确认阻断
+
+- 本轮连续等待用户确认网页 CAN 发送帧的标识符、帧型、数据格式与发送周期；该选择决定新板端 API 和总线行为，不能安全默认，当前暂停。
+- 未改代码、未构建、未烧录、未访问网络，亦未执行 Git 写操作；本次未编译，因此未执行固件反汇编检查。
+
+## 2026-07-23 网页 CAN 发送控制候选：治理记录
+
+- 用户已确认本轮合同只覆盖经典 CAN。新增并已构建的接口为`GET/POST /api/can/tx`和`GET /api/can/tx/signals`；请求边界固定为标准 ID、DLC、最多8字节HEX和`100..10000 ms`周期。TX self-test与外部RX缓存保持分离；网页候选包含控制器状态灯、TX/RX区域、折叠详情和TX/RX DBC表，不扩大为CAN-FD、扩展ID或通用发送管理。
+- 已提供的候选验证事实：`./scripts/verify.sh`的CTest=`16/16`；ELF/HEX SHA-256前缀=`f589...`/`37b9...`；`text/data/bss=93976/384/242448`；关键`objdump`确认50 ms poll、队列和请求解析路径。OpenOCD/ST-Link烧录输出为`Programming Finished`、`Verified OK`、`Resetting Target`。
+- 顺序API已观测默认态、POST request/applied、关闭和重启；TX self-test信号为`42434/4660`，RX保持独立，CAN status的errors=`0`。这些结果不表示CANtest已经收到新的控制帧。
+- 当前明确未验收：更新版`www`尚未写入TF，浏览器新UI未验收，CANtest未证明新控制帧被外部接收。因此本阶段仍为候选，不能宣布完成或提交。后续先由用户在开发板下电取卡流程中部署`www`并上电，再按单socket串行边界验收网页，最后以CANtest外部接收关闭总线证据缺口。
+- 本次子任务只修改治理Markdown，未修改源码、网页、构建文件或`PROJECT_FINAL_ACCEPTANCE.md`；未构建、烧录、访问网络或执行提交。故本次本身未产生新的固件反汇编检查；上列构建/反汇编/烧录均为本轮已提供的候选事实。
+
+## 2026-07-23 网页 CAN 发送控制：部署后重复现场验收通过
+
+- 用户已将修复后的`www/index.html`写入TF并上电，随后明确确认CANtest已发送。浏览器首次严格串行自动刷新后，控制器状态灯为绿色`status-lamp ok`，TX/RX累计由`120/273`增长至`134/417`；四个details均保持默认折叠，控制台warn/error为空。
+- 网页从启用状态可逆关闭发送后再恢复，最终表单和板端应用状态为标准ID`0x321`、DLC=`4`、数据`C2 A5 34 12 00 00 00 00`、周期`1000 ms`，`requestSeq=appliedSeq`且`lastResult=0`。TX self-test CANoe式DBC表和外部RX CANoe式DBC表均显示marker=`42434`、sequence=`4660`、quality=`ok`；用户确认CANtest持续发送后，外部RX累计继续增长。
+- 为满足“不能只顺序测试一次”，完成重复自动刷新与两次网页reload重入：重入样本TX/RX分别为`145/527`、`162/694`，均未出现此前端口80连接拒绝。此前“更新版网页未写TF”和“重入连续失败”的当前阻断已由本轮真实部署与复测关闭；历史`ESTABLISHED/RX_RSR=0`样本保留为历史事实，但本轮未复现，不能当作已证实根因。
+- 证据边界：CANtest“已发送”与外部RX表增长证明外部输入到达板端；本轮没有直接读取CANtest作为接收器的屏幕或日志来确认其逐帧收到了本次网页受控TX帧，因此不得将TX self-test或RX表写成该外部接收器读回。网页控制、TX自检展示、外部RX展示、状态灯、TX/RX累计和详情折叠的本轮目标据此客观通过。
+- 本次仅同步治理Markdown；未修改功能源码、构建输出或`PROJECT_FINAL_ACCEPTANCE.md`，未构建、反汇编、烧录、网络或硬件操作。因此本次不新增固件构建/反汇编/烧录结论，既有候选固件证据仅作为前序事实引用。
+
+## 2026-07-23 新阶段启动：网页手动 TX 与两槽 DBC `signalKey` 规则
+
+- 用户新目标：网页继续保持 W5500 单 socket 非并发；手动 TX 操作只等当前一个请求。规则固定两槽，每槽选择活动 DBC 的 `signalKey`，RuleTask 只导出已配置的两个信号；无活动 DBC 时不允许规则写；旧 v3 回退 `marker`。
+- 已核实根因：现有网页的全局 FIFO 使手动 TX 与后台刷新共享历史排队，手动操作可能等待多个既有请求；现有 RuleFile v3 用 `marker` 表达固定规则，尚无每槽活动 DBC `signalKey` 选择，且无活动 DBC 不是规则写入的前置拒绝条件。
+- 假设：保持单 socket 与非并发 HTTP；手动 TX 只等待提交瞬间的一个在途请求。成功标准：两槽各自只能绑定活动 DBC 的 `signalKey`，RuleTask 仅导出两项；无活动 DBC 的规则写入无持久化或运行态副作用；新配置加载失败时旧 v3 `marker` 可作为兼容回退。验证方式：后续源码实现后执行`./scripts/verify.sh`、定向反汇编、单 socket 严格顺序网页操作、活动/无活动 DBC 规则写及旧 v3 回退现场验证。
+- 当前状态：新阶段未验收。既有网页 CAN 发送控制、DBC 展示、v3 CRUD 和一期 Web 回归均不能替代本阶段证据。本次子任务只修改`CURRENT_TASK.md`、`03_Context.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`05_Lessons.md`和本记录；未修改源码、构建输出或`PROJECT_FINAL_ACCEPTANCE.md`，未编译，故未执行本次固件反汇编检查；未烧录、访问网络或硬件。
+
+## 2026-07-23 阶段14构建、反汇编与烧录记录：现场验收待用户条件
+
+- 本轮目标为网页运行中可手动TX，以及两槽规则选择活动DBC `signalKey`。网页调度已发现并修复“手动操作取消自动轮后不恢复”。
+- 已执行`./scripts/verify.sh`：host tests=`17/17`通过；STM32 firmware构建成功，ELF `text/data/bss=97180/388/243680`。
+- 已检查关键反汇编：`rule_task`以capacity=`2`调用`can2_signal_cache_export_rule_snapshots_for_engine`；该函数在临界区调用`signal_cache_export_rule_snapshots_for_engine`。RuleFile V4 builder与DBC catalog分页路径也已检查。
+- 2026-07-23 OpenOCD已编程`build/stm32h750/can_bus_gateway_stm32h750.hex`，输出`Programming Finished`、`Verified OK`、`Resetting Target`。
+- 当前阻断：必须由用户替换TF卡`/www/index.html`、上电并启动CANtest，随后才能做网页运行中手动TX/自动轮恢复、两槽活动DBC `signalKey`、外部RX与继电器验收。本轮尚无这些运行时证据，不能声称现场验证已经完成。
+
+## 2026-07-23 阶段14：浏览器导航超时治理补记
+
+- 已有候选新固件的烧录事实保持不变：此前OpenOCD已报告`Programming Finished`、`Verified OK`、`Resetting Target`。本次不重做构建、反汇编或烧录。
+- 本次仅只读浏览器导航`http://192.168.1.88/`；导航超时，未建立页面会话。因此无法确认当前TF卡是否已部署新`/www/index.html`，也没有执行网页运行中手动TX、自动轮恢复、两槽活动DBC `signalKey`、外部RX或继电器的运行时验收。
+- 浏览器导航超时不是代码功能失败证据，不能据此改动源码、网页或构建配置。后续等待用户确认已更新TF、已上电并启动CANtest后，再从浏览器首页按单socket严格顺序条件开始现场验收。
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、构建文件或`PROJECT_FINAL_ACCEPTANCE.md`，未编译，故未执行本次新的固件反汇编检查。
+
+## 2026-07-23 阶段14：现场发现治理补记
+
+- 用户已确认新网页已部署上电且 CANtest 已发送。浏览器自动刷新期间 TX/RX 计数增长，RX 显示`marker=42434`、`sequence=4660`；这证明本轮外部输入与页面刷新存在，但不替代后续缺口复测。
+- 首次在自动刷新中编辑 TX 数据并提交时，自动`/api/can/tx`重绘以旧值覆盖正在编辑的输入，故现场尚不满足“可随时变更”。已安排最小前端 dirty-state 修复，尚未部署或现场验证。
+- 规则 UI 成功列出`marker`和`sequence`，slot1 已回读为`v4/Can2Data.sequence`。输入 threshold=`4660`后持久回读为`0`；已确认为 nano `printf`未链接浮点支持。等待固件阈值修复构建、烧录后复测。
+- 规则保存后手动读取成功显示`relay1Output=1, relay2Output=1`。其后自动刷新出现`Failed to fetch`并停止；此故障尚未定位，本记录不对其根因作归属。
+- 当前唯一后续：前端 dirty-state 修复部署与固件浮点格式化修复构建、烧录后，在单socket严格顺序条件下复测输入不被覆盖、threshold=`4660`持久回读以及规则保存后的自动刷新连续性。本次仅修改治理Markdown，未修改源码、网页、CMake或验收文档；未编译，故未执行本次新的固件反汇编检查。
+
+## 2026-07-23 阶段14：浮点格式化候选烧录后的治理记录
+
+- 本次范围仅为治理记录；未修改源码、网页、CMake或`PROJECT_FINAL_ACCEPTANCE.md`，且未启动新的构建、反汇编、烧录或运行时调试。本条构建/烧录事实来自本轮已完成的实际结果。
+- 为修复RuleFile V4 threshold 浮点格式化为`0`，CMake STM32链接选项已增加`-Wl,-u,_printf_float`。`./scripts/verify.sh`已实际通过，host tests=`17/17`；STM32 firmware构建成功，最终ELF `text/data/bss=106748/764/243688`。
+- 已实际检查`nm`/map存在`_printf_float`、`_dtoa_r`、`_vfiprintf_r`；`objdump`显示`rule_file_format_decimal`调用`sniprintf`。OpenOCD刚对`build/stm32h750/can_bus_gateway_stm32h750.hex`报告`Programming Finished`、`Verified OK`、`Resetting Target`。
+- 前端 dirty-state 修复已在`www`，但最新`www/index.html`尚未写入TF。本轮尚无网页、外部RX、threshold=`4660`持久回读、规则保存后自动刷新或继电器的运行时证据；此前`Failed to fetch`不作归因，禁止把构建、反汇编或烧录写成已修复/已验收。
+- 唯一下一动作：用户下电覆盖最新`www/index.html`、上电并启动CANtest发送；随后才按W5500单socket严格顺序复测编辑输入不被覆盖、`Can2Data.sequence` threshold=`4660`正确持久回读及规则保存后的自动刷新连续性。
+
+## 2026-07-23 阶段14：外部现场条件连续未确认，治理标记为 blocked
+
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、CMake或验收文档，未构建、反汇编、烧录、访问网络或调试硬件。因此本次未产生新的固件反汇编检查。
+- 所需外部条件固定为：用户将最新`www/index.html`写入TF、开发板上电，并使CANtest开始发送。该同一条件已连续三次未获用户明确确认，当前任务按治理标记为等待现场条件（blocked）。
+- 既有代码修改、`./scripts/verify.sh`构建、关键反汇编与OpenOCD `Programming Finished`/`Verified OK`均为已完成事实，但不等于网页、外部RX、threshold=`4660`持久回读、规则保存后自动刷新或继电器的运行时验收。
+- 收到明确确认“已写TF、已上电、CANtest已发送”后恢复现场复测；确认前不继续推断、不宣称通过，也不扩大修改范围。
+
+## 2026-07-24 阶段14：旧TF网站根目录页面阻断
+
+- 用户已确认重新部署、开发板上电并让CANtest发送；浏览器访问`http://192.168.1.88/`实际返回旧网页，title为`CAN Bus Gateway`、正文为`W5500 HTTP status API is running.`。页面没有本轮`CAN 网关控制台`、自动刷新、TX或规则UI。
+- 该现场只能说明TF网站根目录实际未部署最新`www/index.html`；网页运行时验收不能开始，不能归因代码失败，也不对此前threshold=`4660`回读`0`或规则保存后`Failed to fetch`作新的因果判断。
+- 恢复要求固定为：将仓库`www/index.html`复制为TF网站根目录中的`index.html`，不是复制`www`目录本身；下电插卡后上电，并让CANtest发送。完成后才在单socket严格顺序条件下继续复测。
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、CMake或验收文档，未编译，故未执行新的固件反汇编检查；未进行烧录、网络或硬件操作。
+
+## 2026-07-24 阶段14：错误部署提示后连续未确认，恢复为等待现场条件（blocked）
+
+- 在已明确提示“仓库`www/index.html`必须直接复制到TF网站根目录为`index.html`，不是复制`www`目录本身”后，所需的TF根目录正确部署、下电插卡后上电及CANtest发送确认仍连续三次未提供。按治理规则，当前阶段再次标记为等待现场条件（blocked）。
+- 恢复条件固定为用户明确确认：`已按根目录部署上电，CAN已发送`。收到该确认前，不继续推断现场状态、不开展网页运行时复测，也不扩大源码、网页、CMake或验收文档修改范围。
+- 已完成的源码修改、`./scripts/verify.sh`构建、关键反汇编及OpenOCD `Programming Finished`/`Verified OK`/`Resetting Target`均仅是既有静态和烧录事实，不等于网页运行、外部RX、threshold=`4660`持久回读、规则保存后自动刷新或继电器的运行时验收。
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、CMake或验收文档，未编译，因此未执行新的固件反汇编检查；未烧录、访问网络或操作硬件。
+
+## 2026-07-24 阶段14：正确根目录部署后的网页与 DBC 候选状态
+
+- 用户正确完成 TF 网站根目录部署后，新网页实际加载。自动刷新期间 TX/RX 连续增长；编辑 TX 数据为`C2 A5 78 56 02 03 04 05`，在`1800 ms`自动刷新后输入仍保留，提交后表格显示已应用且`result=0`。该事实验证本轮网页 TX dirty-state，不扩大为其他规则或外部接收器验收。
+- 活动 DBC 实际状态为`missing`、`loaded=false`，这是当前文件状态，不是功能失败。已由仓库测试 fixture 创建未跟踪临时`.codex-runtime-can2data.dbc`，大小`151 B`；网页上传候选校验有效，报告为`1 message/2 signals`。
+- 候选尚未激活，必须等待用户明确确认才可执行激活；因此当前不得写为活动 DBC 已加载、不得写为两槽活动 DBC `signalKey`规则已验收或通过。
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、CMake或`PROJECT_FINAL_ACCEPTANCE.md`，未编译，故未执行新的固件反汇编检查；未烧录或调试硬件。
+
+## 2026-07-24 阶段14：DBC 激活授权连续未获得，治理标记为 blocked
+
+- 候选 DBC 已由网页校验为有效（`1 message/2 signals`），但活动 DBC 仍实际为`missing`、`loaded=false`。执行激活会持久替换板端活动 DBC，因此不能把候选有效当作可默认执行的授权。
+- 对该同一激活授权已连续三次未获得用户明确确认，当前任务按治理标记为`blocked`。唯一恢复条件为用户回复`确认激活 DBC`；收到前不执行激活、不写入活动文件，也不开展或宣称两槽活动 DBC `signalKey`规则完整验收通过。
+- 已验证的网页手动 TX 实时编辑与提交仅证明 dirty-state/控制边界；TX self-test、提交成功或候选 DBC 有效均不等于完整规则验收。
+- 本次仅更新`CURRENT_TASK.md`、`03_Context.md`和本中文对话记录；未修改源码、网页、CMake或验收文档，未编译，因此未执行新的固件反汇编检查；未烧录、访问网络或调试硬件。
+
+## 2026-07-24 阶段14最终现场验收收尾
+
+- 用户已按正确 TF 网站根目录部署新网页。自动刷新现场 TX/RX 从`55/364`增长至`576/5540`，浏览器 warn/error 日志为空；先前误部署旧页的问题已由本次实际加载与回归关闭。
+- 刷新运行中第一次编辑 TX 为`C2 A5 78 56 02 03 04 05`，经过`1800 ms`后输入仍保留，提交后表格已应用且`result=0`；第二次编辑`C2 A5 00 01 02 03 04 05`，经过`1300 ms`仍保留并提交恢复。最终 TX DBC `sequence=256`，先前首次输入被自动刷新覆盖的问题已复验关闭。
+- 候选 DBC经用户授权激活，runtime最终为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。TX/RX表均解析 marker=`42434`，TX `sequence=256`、RX `sequence=4660`。两槽目录均含 marker/sequence；slot1已保存并从V4回读为`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时manual状态`relay1Output=0`，与高优先级off规则一致；先前浮点threshold回读`0`已由对应修复和本次回读关闭。
+- 证据边界：TX self-test不当作外部接收器证明。本轮外部结论仅限实际 RX 表/外部输入及其规则状态；不写成 CANtest 对本轮 TX 帧的逐帧读回。
+- 本轮仅作治理收尾，未改源码、网页、CMake或`PROJECT_FINAL_ACCEPTANCE.md`，未重新编译、反汇编、烧录或调试硬件；构建、`objdump`和OpenOCD烧录证据均为此前实际完成的同轮候选事实。已运行`git diff --check`，结果见本轮收尾命令记录。
