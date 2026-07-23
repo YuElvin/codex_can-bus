@@ -1008,20 +1008,16 @@ static void signal_log_task(void *argument)
     LOG_FLUSH_THRESHOLD = 512u,
   };
   static char storage[768];
-  static const char log_path[] = "/log/signal-v2.csv";
+  char active_path[SIGNAL_LOG_PATH_MAX];
   SignalLogBuffer buffer;
   uint32_t last_sample_ms;
   uint32_t last_flush_ms;
   size_t file_size = 0u;
-  const int file_size_result = stm32h750_tf_file_size_locked(log_path, &file_size);
+  bool session_active = false;
 
   (void)argument;
-  if (file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) {
-    file_size = 0u;
-  }
-  g_log_path_mode = SIGNAL_LOG_PATH_DEFAULT;
-  g_log_active_file_size = (uint32_t)file_size;
-  g_tf_csv_file_size = (uint32_t)file_size;
+  active_path[0] = '\0';
+  g_log_path_mode = 0xffffffffu;
   signal_log_buffer_init(&buffer, storage, sizeof(storage));
   last_sample_ms = HAL_GetTick();
   last_flush_ms = last_sample_ms;
@@ -1040,6 +1036,23 @@ static void signal_log_task(void *argument)
       g_log_buffer_len = 0u;
       g_log_buffer_samples = 0u;
       last_sample_ms = now_ms;
+      session_active = false;
+    } else if (!session_active || strcmp(active_path, signal_log_control_session_path(&control)) != 0) {
+      int file_size_result;
+
+      signal_log_buffer_clear(&buffer);
+      file_size = 0u;
+      file_size_result = stm32h750_tf_file_size_locked(signal_log_control_session_path(&control), &file_size);
+      if (file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) file_size = 0u;
+      g_log_path_mode = SIGNAL_LOG_PATH_DEFAULT;
+      g_log_active_file_size = (uint32_t)file_size;
+      g_tf_csv_file_size = (uint32_t)file_size;
+      g_log_last_result = (uint32_t)file_size_result;
+      strncpy(active_path, signal_log_control_session_path(&control), sizeof(active_path) - 1u);
+      active_path[sizeof(active_path) - 1u] = '\0';
+      session_active = file_size_result == 0 || file_size_result == SIGNAL_LOG_FILE_NOT_FOUND;
+      last_sample_ms = now_ms;
+      last_flush_ms = now_ms;
     } else if ((uint32_t)(now_ms - last_sample_ms) >= control.sample_period_ms) {
       SignalCacheEntry entries[2];
       const size_t count = can2_signal_cache_copy(entries, 2u);
@@ -1066,14 +1079,14 @@ static void signal_log_task(void *argument)
       }
     }
 
-    if (control.enabled && control.time_synced && signal_log_buffer_should_flush(&buffer,
+    if (session_active && control.enabled && control.time_synced && signal_log_buffer_should_flush(&buffer,
                                        LOG_FLUSH_THRESHOLD,
                                        last_flush_ms,
                                        now_ms,
                                        LOG_FLUSH_MS)) {
       ++g_log_flush_count;
       g_tf_csv_write_len = (uint32_t)buffer.length;
-      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(log_path,
+      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(active_path,
                                                                           (const uint8_t *)buffer.data,
                                                                           buffer.length,
                                                                           &file_size);

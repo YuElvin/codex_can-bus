@@ -22,13 +22,13 @@ static int test_start_requires_time_and_applies_period(void) {
   SignalLogControl control;
   uint64_t unix_ms = 0u;
   signal_log_control_init(&control);
-  ASSERT_TRUE(!signal_log_control_set(&control, true, 100u, false, 0u, 1000u));
-  ASSERT_TRUE(signal_log_control_set(&control, true, 250u, true, 1720000000123u, 1000u));
+  ASSERT_TRUE(!signal_log_control_set(&control, true, 100u, false, 0u, 1000u, 0));
+  ASSERT_TRUE(signal_log_control_set(&control, true, 250u, true, 1720000000123u, 1000u, 0));
   ASSERT_TRUE(control.enabled && control.time_synced && control.sample_period_ms == 250u);
   ASSERT_TRUE(signal_log_control_unix_ms(&control, 1250u, &unix_ms));
   ASSERT_TRUE(unix_ms == 1720000000373u);
-  ASSERT_TRUE(!signal_log_control_set(&control, true, 99u, false, 0u, 1250u));
-  ASSERT_TRUE(!signal_log_control_set(&control, true, 10001u, false, 0u, 1250u));
+  ASSERT_TRUE(!signal_log_control_set(&control, true, 99u, false, 0u, 1250u, 0));
+  ASSERT_TRUE(!signal_log_control_set(&control, true, 10001u, false, 0u, 1250u, 0));
   return 0;
 }
 

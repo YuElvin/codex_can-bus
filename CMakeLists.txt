@@ -23,6 +23,7 @@ add_library(can_bus_core
   src/core/signal_csv.c
   src/core/signal_log_control.c
   src/core/signal_log_buffer.c
+  src/core/signal_log_time.c
   src/core/signal_codec.c
 )
 
@@ -105,6 +106,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/core/signal_csv.c
     src/core/signal_log_control.c
     src/core/signal_log_buffer.c
+    src/core/signal_log_time.c
     src/core/signal_codec.c
     src/ports/can_port.c
     src/ports/tf_card_port.c
@@ -239,6 +241,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_signal_log_buffer tests/test_signal_log_buffer.c)
   target_link_libraries(test_signal_log_buffer PRIVATE can_bus_core)
   add_test(NAME signal_log_buffer COMMAND test_signal_log_buffer)
+
+  add_executable(test_signal_log_time tests/test_signal_log_time.c)
+  target_link_libraries(test_signal_log_time PRIVATE can_bus_core)
+  add_test(NAME signal_log_time COMMAND test_signal_log_time)
 
   add_executable(test_can_port tests/test_can_port.c)
   target_link_libraries(test_can_port PRIVATE can_bus_ports)

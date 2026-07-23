@@ -18,6 +18,12 @@
 /* USER CODE END Header */
 #include "fatfs.h"
 
+#include "FreeRTOS.h"
+#include "signal_log_control.h"
+#include "task.h"
+
+extern SignalLogControl g_signal_log_control;
+
 uint8_t retSD;    /* Return value for SD */
 char SDPath[4];   /* SD logical drive path */
 FATFS SDFatFS;    /* File system object for SD logical drive */
@@ -45,7 +51,16 @@ void MX_FATFS_Init(void)
 DWORD get_fattime(void)
 {
   /* USER CODE BEGIN get_fattime */
-  return 0;
+  SignalLogControl control;
+  uint64_t unix_ms;
+
+  taskENTER_CRITICAL();
+  control = g_signal_log_control;
+  taskEXIT_CRITICAL();
+  if (!signal_log_control_unix_ms(&control, HAL_GetTick(), &unix_ms)) {
+    return (DWORD)((1u << 21) | (1u << 16));
+  }
+  return (DWORD)signal_log_time_fat_timestamp(unix_ms, control.utc_offset_min);
   /* USER CODE END get_fattime */
 }
 

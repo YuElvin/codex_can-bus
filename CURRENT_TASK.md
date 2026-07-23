@@ -8,6 +8,7 @@
 
 ## 当前阶段
 
+- 新一轮“FAT 属性本地时间与记录会话文件”已[最终实体 TF 验收通过]。浏览器本地 UTC offset 用于FAT文件属性本地时间；CSV时间列保持UTC；每次开始记录创建以该次本地开始记录时间开头的会话文件名，停止记录结束该会话；未同步时`get_fattime()`返回FatFs有效下限`1980-01-01 00:00:00`，不再返回导致属性显示为1970的零值。已严格只读确认会话文件`/Volumes/NO NAME/log/20260724_012916204_signal-v2.csv`存在、大小`8035 B`；macOS CST 创建/修改时间为`2026-07-24 01:29:16/01:29:36`，均非1970。表头为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`，首条 UTC 记录为`2026-07-23T17:29:16.745Z`。`/log`目录自身创建时间显示1970仅为旧目录历史元数据，不否定新文件属性通过。
 - 新需求阶段“网页时间同步与可选时间日志”处于[现场主体通过；实体 CSV 内容已只读复核]：无 RTC/NTP 的 RAM 时间基准由`POST /api/time/sync`的`unixMs`设置，重启后失效；`GET/POST /api/log/control`返回或设置`enabled`、`samplePeriodMs`、`timeSynced`、`unixMs`和新路径。记录默认关闭，周期限制`100..10000 ms`；未同步时首次启用携带`unixMs`会自动同步。
 - 新日志仅写`/log/signal-v2.csv`，CSV 新表头为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`；旧`/log/signal.csv`既有内容和六列表头未被混写或改动。本轮`./scripts/verify.sh`实际通过，host tests=`18/18`；首次 STM32 构建仅出现`http_handle_log_control()`局部`enabled`可能未初始化警告，已用最小`= false`初始化修复后重新构建无该警告。最终 ELF `text/data/bss=109276/764/243712`，关键反汇编确认时间基准初始化、日志启停/新路径与两个 HTTP 路由均在最终映像中；OpenOCD/ST-Link已报告`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.280054 V`。
 - 现场主体已完成：TF 新网页正确加载，默认记录关闭、继电器详情折叠；未同步的`250 ms`启动自动同步并可回读，随后完成停止`800 ms`、再启用`1200 ms`、手动同步和最终停止。自动刷新期间安全提交的最终`request/applied=6/6`且 CAN 计数增长；继电器红色闭合/绿色断开两轮反向输出均实际操作并最终恢复关闭。
@@ -31,6 +32,7 @@
 
 ## Git 基线与工作树
 
+- 上一阶段功能提交为`13613f637554102f3b8f105fb88f657e7c1ae38e`（`13613f6 Add time-synced web logging controls`），已推送至`origin/codex/W5500`；本轮启动只读核对为工作树干净、本地与远端ahead/behind=`0/0`。
 - 最终固件源码提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`；之后只有治理Markdown变化。
 - 本轮工作树另有未提交的`firmware/bringup/w5500_bringup.c`最小 CLOSE_WAIT 修复；已将其构建产物`build/stm32h750/can_bus_gateway_stm32h750.hex`烧录并完成本轮现场回归，但它仍不可与`0ef7d3e1`对应的历史映像或证据混用。
 - 分支：`codex/W5500`，跟踪 `origin/codex/W5500`。

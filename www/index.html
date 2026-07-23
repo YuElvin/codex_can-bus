@@ -302,14 +302,14 @@ async function readLogControl() {
 async function saveLogControl() {
   try {
     const periodMs=Number($('log-period').value); if (!Number.isInteger(periodMs) || periodMs<100 || periodMs>10000) throw new Error('记录频率必须是 100–10000 ms 的整数');
-    const body=new URLSearchParams({enabled:$('log-enabled').checked?'1':'0',samplePeriodMs:String(periodMs),unixMs:String(Date.now())}).toString();
+    const body=new URLSearchParams({enabled:$('log-enabled').checked?'1':'0',samplePeriodMs:String(periodMs),unixMs:String(Date.now()),utcOffsetMin:String(-new Date().getTimezoneOffset())}).toString();
     const data=await exclusive('提交数据记录控制',()=>api('/api/log/control',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
     renderLogControl(data); show('数据记录设置已提交', 'ok');
   } catch (error) { show(error.message, 'error'); }
 }
 async function syncSystemTime() {
   try {
-    const body=new URLSearchParams({unixMs:String(Date.now())}).toString();
+    const body=new URLSearchParams({unixMs:String(Date.now()),utcOffsetMin:String(-new Date().getTimezoneOffset())}).toString();
     const data=await exclusive('同步系统时间',()=>api('/api/time/sync',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
     showJson('log-state', data); show('系统时间已同步', 'ok');
   } catch (error) { show(error.message, 'error'); }

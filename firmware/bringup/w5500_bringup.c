@@ -242,7 +242,7 @@ extern SignalLogControl g_signal_log_control;
 #define W5500_HTTP_MANUAL_BODY_MAX 64u
 #define W5500_HTTP_CAN_TX_BODY_MAX 96u
 #define W5500_HTTP_LOG_CONTROL_BODY_MAX 96u
-#define W5500_HTTP_TIME_SYNC_BODY_MAX 32u
+#define W5500_HTTP_TIME_SYNC_BODY_MAX 64u
 #define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
@@ -1532,20 +1532,42 @@ static bool http_form_parse_u64(const char *text, size_t len, uint64_t *value) {
   return true;
 }
 
+static bool http_form_parse_i32(const char *text, size_t len, int32_t *value) {
+  uint32_t magnitude;
+  bool negative = false;
+
+  if (text == NULL || value == NULL || len == 0u) return false;
+  if (text[0] == '-') {
+    negative = true;
+    ++text;
+    --len;
+  }
+  if (!http_form_parse_u32(text, len, &magnitude) ||
+      (!negative && magnitude > INT32_MAX) ||
+      (negative && magnitude > (uint32_t)INT32_MAX + 1u)) {
+    return false;
+  }
+  *value = negative ? (magnitude == (uint32_t)INT32_MAX + 1u ? INT32_MIN : -(int32_t)magnitude)
+                    : (int32_t)magnitude;
+  return true;
+}
+
 static bool http_form_parse_log_control(const char *body,
                                         size_t body_len,
                                         bool *enabled,
                                         uint32_t *sample_period_ms,
                                         bool *has_unix_ms,
-                                        uint64_t *unix_ms) {
+                                        uint64_t *unix_ms,
+                                        int32_t *utc_offset_min) {
   uint32_t fields = 0u;
   size_t offset = 0u;
 
   if (body == NULL || enabled == NULL || sample_period_ms == NULL || has_unix_ms == NULL ||
-      unix_ms == NULL || body_len == 0u || body[body_len - 1u] == '&') {
+      unix_ms == NULL || utc_offset_min == NULL || body_len == 0u || body[body_len - 1u] == '&') {
     return false;
   }
   *has_unix_ms = false;
+  *utc_offset_min = 0;
   while (offset < body_len) {
     size_t equals = offset;
     size_t entry_end;
@@ -1566,20 +1588,51 @@ static bool http_form_parse_log_control(const char *body,
       if (*has_unix_ms ||
           !http_form_parse_u64(&body[equals + 1u], entry_end - equals - 1u, unix_ms)) return false;
       *has_unix_ms = true;
+    } else if (http_form_span_is(&body[offset], equals - offset, "utcOffsetMin")) {
+      if ((fields & 4u) != 0u ||
+          !http_form_parse_i32(&body[equals + 1u], entry_end - equals - 1u, utc_offset_min) ||
+          !signal_log_time_offset_is_valid(*utc_offset_min)) return false;
+      fields |= 4u;
     } else {
       return false;
     }
     offset = entry_end + (entry_end < body_len ? 1u : 0u);
   }
-  return fields == 3u;
+  return (fields & 3u) == 3u;
 }
 
-static bool http_form_parse_time_sync(const char *body, size_t body_len, uint64_t *unix_ms) {
-  static const char key[] = "unixMs=";
-  const size_t key_len = sizeof(key) - 1u;
-  return body != NULL && unix_ms != NULL && body_len > key_len &&
-         memcmp(body, key, key_len) == 0 &&
-         http_form_parse_u64(body + key_len, body_len - key_len, unix_ms);
+static bool http_form_parse_time_sync(const char *body,
+                                      size_t body_len,
+                                      uint64_t *unix_ms,
+                                      int32_t *utc_offset_min) {
+  uint32_t fields = 0u;
+  size_t offset = 0u;
+
+  if (body == NULL || unix_ms == NULL || utc_offset_min == NULL || body_len == 0u ||
+      body[body_len - 1u] == '&') return false;
+  *utc_offset_min = 0;
+  while (offset < body_len) {
+    size_t equals = offset;
+    size_t entry_end;
+    while (equals < body_len && body[equals] != '=' && body[equals] != '&') ++equals;
+    if (equals == offset || equals == body_len || body[equals] != '=') return false;
+    entry_end = equals + 1u;
+    while (entry_end < body_len && body[entry_end] != '&') ++entry_end;
+    if (http_form_span_is(&body[offset], equals - offset, "unixMs")) {
+      if ((fields & 1u) != 0u ||
+          !http_form_parse_u64(&body[equals + 1u], entry_end - equals - 1u, unix_ms)) return false;
+      fields |= 1u;
+    } else if (http_form_span_is(&body[offset], equals - offset, "utcOffsetMin")) {
+      if ((fields & 2u) != 0u ||
+          !http_form_parse_i32(&body[equals + 1u], entry_end - equals - 1u, utc_offset_min) ||
+          !signal_log_time_offset_is_valid(*utc_offset_min)) return false;
+      fields |= 2u;
+    } else {
+      return false;
+    }
+    offset = entry_end + (entry_end < body_len ? 1u : 0u);
+  }
+  return (fields & 1u) != 0u;
 }
 
 static size_t http_append_u64_decimal(char *body, size_t len, size_t used, uint64_t value) {
@@ -1627,7 +1680,8 @@ static size_t build_log_control_body(char *body, size_t len) {
   if (used >= len) {
     return len;
   }
-  written = snprintf(body + used, len - used, ",\"path\":\"/log/signal-v2.csv\"}}");
+  written = snprintf(body + used, len - used, ",\"utcOffsetMin\":%d,\"path\":\"%s\"}}",
+                     (int)control.utc_offset_min, signal_log_control_session_path(&control));
   if (written < 0 || (size_t)written >= len - used) {
     return len;
   }
@@ -1636,13 +1690,14 @@ static size_t build_log_control_body(char *body, size_t len) {
 
 static int http_handle_time_sync(const char *body, size_t body_len) {
   uint64_t unix_ms;
+  int32_t utc_offset_min;
 
-  if (!http_form_parse_time_sync(body, body_len, &unix_ms)) {
+  if (!http_form_parse_time_sync(body, body_len, &unix_ms, &utc_offset_min)) {
     http_record_request(W5500_HTTP_PATH_TIME_SYNC, 400u);
     return http_send_json_error(400u, "invalid_time_sync", "unixMs is required");
   }
   taskENTER_CRITICAL();
-  (void)signal_log_control_sync_time(&g_signal_log_control, unix_ms, HAL_GetTick());
+  (void)signal_log_control_sync_time(&g_signal_log_control, unix_ms, HAL_GetTick(), utc_offset_min);
   taskEXIT_CRITICAL();
   {
     const size_t response_len = build_log_control_body(g_http_response_body, sizeof(g_http_response_body));
@@ -1657,9 +1712,11 @@ static int http_handle_log_control(const char *body, size_t body_len) {
   bool has_unix_ms;
   uint32_t sample_period_ms;
   uint64_t unix_ms = 0u;
+  int32_t utc_offset_min;
   SignalLogControl control;
 
-  if (!http_form_parse_log_control(body, body_len, &enabled, &sample_period_ms, &has_unix_ms, &unix_ms)) {
+  if (!http_form_parse_log_control(body, body_len, &enabled, &sample_period_ms, &has_unix_ms, &unix_ms,
+                                   &utc_offset_min)) {
     http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
     return http_send_json_error(400u, "invalid_log_control", "enabled and samplePeriodMs required");
   }
@@ -1675,7 +1732,8 @@ static int http_handle_log_control(const char *body, size_t body_len) {
     http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
     return http_send_json_error(400u, "time_not_synced", "starting log requires unixMs");
   }
-  if (!signal_log_control_set(&control, enabled, sample_period_ms, has_unix_ms, unix_ms, HAL_GetTick())) {
+  if (!signal_log_control_set(&control, enabled, sample_period_ms, has_unix_ms, unix_ms, HAL_GetTick(),
+                              utc_offset_min)) {
     taskEXIT_CRITICAL();
     http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
     return http_send_json_error(400u, "invalid_log_control", "unable to apply log control");
