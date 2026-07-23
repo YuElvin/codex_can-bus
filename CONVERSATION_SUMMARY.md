@@ -3288,3 +3288,8 @@
 - 候选 DBC经用户授权激活，runtime最终为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。TX/RX表均解析 marker=`42434`，TX `sequence=256`、RX `sequence=4660`。两槽目录均含 marker/sequence；slot1已保存并从V4回读为`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时manual状态`relay1Output=0`，与高优先级off规则一致；先前浮点threshold回读`0`已由对应修复和本次回读关闭。
 - 证据边界：TX self-test不当作外部接收器证明。本轮外部结论仅限实际 RX 表/外部输入及其规则状态；不写成 CANtest 对本轮 TX 帧的逐帧读回。
 - 本轮仅作治理收尾，未改源码、网页、CMake或`PROJECT_FINAL_ACCEPTANCE.md`，未重新编译、反汇编、烧录或调试硬件；构建、`objdump`和OpenOCD烧录证据均为此前实际完成的同轮候选事实。已运行`git diff --check`，结果见本轮收尾命令记录。
+
+## 2026-07-24 阶段14：功能提交已推送
+
+- 阶段14当前功能变更已提交为`57a9fc4 Enable live CAN control and DBC rule signals`，并已成功推送到`origin/codex/W5500`。
+- 在该功能提交前，`git diff --check`已通过；推送完成后工作树为干净状态。本次仅追加本中文治理记录，未修改源码或其他项目文件，未编译，因此未执行新的固件反汇编检查。
