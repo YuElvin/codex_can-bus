@@ -203,6 +203,11 @@ if(CAN_BUS_BUILD_TESTS)
   target_link_libraries(test_dbc_parser PRIVATE can_bus_core)
   add_test(NAME dbc_parser COMMAND test_dbc_parser)
 
+  add_executable(test_tf_deploy_assets tests/test_tf_deploy_assets.c)
+  target_link_libraries(test_tf_deploy_assets PRIVATE can_bus_core)
+  add_test(NAME tf_deploy_assets COMMAND test_tf_deploy_assets)
+  set_tests_properties(tf_deploy_assets PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
   add_executable(test_dbc_decoder tests/test_dbc_decoder.c)
   target_link_libraries(test_dbc_decoder PRIVATE can_bus_core)
   add_test(NAME dbc_decoder COMMAND test_dbc_decoder)

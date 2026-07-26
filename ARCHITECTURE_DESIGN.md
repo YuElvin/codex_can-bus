@@ -130,11 +130,11 @@ Web/API 或周期发送生成 `TxRequest`；原始帧直接入 `can_tx_q`；DBC 
 
 | 资源 | 机制 | 原因 |
 | --- | --- | --- |
-| CAN RX/TX | FreeRTOS Queue，当前固定深度RX 8、TX 1 | 轮询生产者与CanDecodeTask解耦，背压/drop可统计 |
+| CAN RX/TX | FreeRTOS Queue，当前RX为`32 x 16 B Can2RxQueueFrame`、TX深度1 | 中断通知高优先级任务drain FIFO，紧凑RX元素由CanDecodeTask重建既有`CanFrame`，背压/drop可统计 |
 | W5500 SPI/socket | 单 W5500 任务或 mutex | 防止多个任务同时访问 SPI/socket 寄存器 |
 | 信号缓存 | 外部RX与TX self-test两个固定缓存；短临界区复制外部快照 | Web、规则和日志只读外部快照，来源与计数不混写 |
 | 当前 DBC | RCU 风格指针切换 + `dbc_mutex` 管理生命周期 | 切换时不中断解码 |
-| FatFs/TF | 全局 `fs_mutex` + 单次操作超时 | 避免并发损坏文件系统 |
+| FatFs/TF | 全局`fs_mutex` + `f_sync()` + 底层卡ready有界等待 | 避免并发访问；`CTRL_SYNC`与非对齐scratch写路径超时返回错误，不把FAT32描述为原子掉电文件系统 |
 | W25Q128 | `qspi_mutex` + ConfigTask 串行写 | 防止配置备份与其他 QSPI 操作冲突 |
 | 配置文件 | `config_mutex` + ConfigTask 串行保存 | 防止多请求交叉写 |
 | 周期发送/规则列表 | 写时复制快照 | 执行任务使用稳定数组 |
@@ -259,7 +259,7 @@ API 统一返回 `{ok:true,data}` 或 `{ok:false,error:{code,message}}`。大列
 | 128KB Flash 不足 | 裁剪 HAL/FatFs/HTTP；禁用浮点 printf；Web/DBC/日志放 TF；必要时 W25Q128 放备份资源 |
 | FreeRTOS 多任务后旧硬件验证回归 | 先拆 CAN2/W5500 低风险周期任务，上板读 `g_freertos_*` 和各模块状态后再拆 TF/QSPI/HTTP |
 | W5500 socket 层阻塞 CAN | 网络服务单任务或 mutex，限制单次处理时间，CAN 任务优先级更高 |
-| TF/FatFs 并发损坏或文件错误 | 全局 `fs_mutex`，LogTask 与 HTTP/DBC 共用该锁；TF 卡必须在开发板下电后插拔，运行中热插拔/recovery 不支持。当前插卡冷启动时格式化、重新挂载、bring-up 和默认日志连续写入均成功；正式产品不保留临时格式化、重挂载或状态旁路 |
+| TF/FatFs 并发损坏或文件错误 | 全局`fs_mutex`，LogTask与HTTP/DBC共用该锁；TF卡必须在开发板下电后插拔，运行中热插拔/recovery不支持。P0首次断电失败后已修复底层同步假成功/未等ready；干净FAT32介质复测的断电后`fsck=0`、CSV无撕裂尾行且重启可继续记录。该现场结果不把FAT32扩写为原子掉电文件系统；正式产品不保留临时格式化、重挂载或状态旁路 |
 | W25Q128 诊断擦写正式数据 | 默认启动已不擦写；`0x00FFF000` 固定诊断保留区，ConfigTask/正式备份必须另选地址并串行化 |
 | DBC 上传占 RAM | 流式落盘、逐行解析、固定池，不整文件读入 |
 | Motorola 编码错误 | 独立 bit iterator，PC 单元测试先行 |

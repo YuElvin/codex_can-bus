@@ -398,7 +398,7 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
           while((WriteStatus == 0) && ((HAL_GetTick() - timeout) < SD_TIMEOUT))
           {
           }
-          if (WriteStatus == 0)
+          if (WriteStatus == 0 || SD_CheckStatusWithTimeout(SD_TIMEOUT) < 0)
           {
             break;
           }
@@ -439,7 +439,7 @@ DRESULT SD_ioctl(BYTE lun, BYTE cmd, void *buff)
   {
   /* Make sure that no pending write process */
   case CTRL_SYNC :
-    res = RES_OK;
+    res = SD_CheckStatusWithTimeout(SD_TIMEOUT) == 0 ? RES_OK : RES_ERROR;
     break;
 
   /* Get number of sectors on the disk (DWORD) */

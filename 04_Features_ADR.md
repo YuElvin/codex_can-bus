@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | F-001 | W5500 SPI 网络 bring-up | [客观已验证] | 作为当前网络主路径，替代 LAN8720/RMII |
 | F-002 | FDCAN2 外部 CAN 收发 | [客观已验证] | `PB5/PB6` + MCP2562FD + USBCAN-2E-U 是当前外部 CAN 主通道 |
-| F-003 | TF 卡 FatFs 存储 | [客观已验证] | 当前 smoke test 通过；`/www/index.html` 默认静态页已可通过 W5500 HTTP 读取，HTTP 静态页路径已使用 FatFs mutex 下的分块读取 |
+| F-003 | TF 卡 FatFs 存储 | [基础路径已验证；P0断电恢复待复测] | smoke test与既有静态页/日志路径通过；首次持续写入物理断电后的主机只读检查发现文件系统错误且目标CSV不可见。已完成底层同步最小源码修复和静态验证，但尚未在干净介质上烧录复测 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [一期边界客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask及固定深度RX/TX/DBC/config队列均已运行验证；W5500与FatFs共享资源由mutex串行化。通用消息总线和通用配置服务为非目标 |
@@ -244,10 +244,10 @@ G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与
 
 独立 IWDG 仅在 CAN、解码、W5500、HTTP、DBC、配置、日志和规则任务自上一巡均有进展时刷新；首次巡检只建立基线。MemManage、BusFault、UsageFault 和 HardFault 保存堆栈寄存器、LR 与 SCB fault 状态到 RAM_D3 `.noinit` 的 68 B XOR 校验记录后系统复位。该记录用于复位后调试读取，不新增网络导出或持久化 API。
 
-DBC 沿用当前 classic CAN 窄合同：仅标准 ID`0..0x7ff`、DLC`0..8`，每个信号必须在所属消息 DLC 位范围内且 factor 非零、minimum 不大于 maximum；不在本 ADR 中支持扩展帧。RuleTask 按当前启用规则的最大 timeout 维护 SignalCache `stale`质量，规则自身仍按各自 timeout 判定安全态。TF 追加写成功后执行 `f_sync()`，不改变现有 512 B/5 s 批量策略，也不把它表述为已完成掉电恢复协议。
+DBC 沿用当前 classic CAN 窄合同：仅标准 ID`0..0x7ff`、DLC`0..8`，每个信号必须在所属消息 DLC 位范围内且 factor 非零、minimum 不大于 maximum；不在本 ADR 中支持扩展帧。RuleTask 按当前启用规则的最大 timeout 维护 SignalCache `stale`质量，规则自身仍按各自 timeout 判定安全态。TF 追加写成功后执行`f_sync()`，底层`CTRL_SYNC`必须有界等待卡进入`SD_TRANSFER_OK`，非对齐scratch写分支在每扇区DMA完成后也必须等待ready；超时向FatFs返回错误。保持现有512 B/5 s批量策略，不把该修复表述为FAT32原子事务或绝对掉电保证。
 
 IWDG启动额外显式等待LSI ready，并按`0xCCCC -> 0x5555 -> PR/RLR -> 等待SR -> 0xAAAA`顺序配置，避免硬件拒绝预启动配置。Fault record位于`RAM_D3+0x100`，复制后显式Clean D-Cache再复位，确保`.noinit`记录在软件复位后可按XOR校验读取。
 
-本 ADR 已完成 CTest=`19/19`、最终 STM32H750 ELF链接/关键反汇编、生产映像烧录，以及实验室IWDG任务卡死复位和受控HardFault处理链路验证。后者证明记录复制、D-Cache回写、复位及RAM_D3保持，不等价于真实硬件异常的堆栈根因采集。外部 CAN 高负载已通过非停机读取验证；TF 物理断电仍未验证。LAN 写授权与 TX 白名单因缺少生产允许报文合同和授权来源，明确不在本 ADR 中擅自假定。
+本 ADR 的最终候选已完成CTest=`20/20`、STM32H750 ELF链接/关键反汇编、烧录、IWDG任务卡死复位、受控HardFault处理链路、外部CAN高负载和TF物理断电复测。HardFault受控跳转证明记录复制、D-Cache回写、复位及RAM_D3保持，不等价于真实硬件异常的堆栈根因采集。首次TF断电复核失败且存在测试前介质污染混杂；底层同步补丁修复后在测试前`fsck=0`的干净FAT32介质上复测，断电后目标CSV为399223 B/4159行、所有数据行可解析、无撕裂尾行，`fsck_msdos -n`退出0。重新上电后TF、网页、active DBC、网络、外部CAN均恢复，新日志file/write/flush继续增长且failure/drop=0。最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。LAN写授权与TX白名单因缺少生产允许报文合同和授权来源，明确不在本ADR中擅自假定。
 
 高负载暂停式GDB首测会在内核暂停期人为填满FIFO，故不能以该读数评估运行态。完整`32 x CanFrame`RX队列确因FreeRTOS heap耗尽导致rule任务创建失败，故不采用该方案。保持任务、队列和DecodeTask边界不变，RX队列改为`32 x Can2RxQueueFrame`（`id/IDE/DLC/8字节数据`，反汇编为`xQueueGenericCreate(32, 16)`），DecodeTask再重建既有`CanFrame`。在用户持续外部输入下，OpenOCD telnet `mdw`非停机C→D→E两个20秒窗口中FIFO full/lost和RX queue drop均无增长，而RX与DBC匹配持续增长；该候选的FDCAN高负载P0通过。

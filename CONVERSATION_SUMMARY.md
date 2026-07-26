@@ -3479,3 +3479,168 @@
 
 - 已将本阶段19个受控文件提交为`ff457df Harden P0 CAN reliability paths`，并成功推送至`origin/codex/W5500`（`10cb28d..ff457df`）。提交包含FDCAN诊断/紧凑RX队列、IWDG与Crash Dump、DBC/SignalCache/TF最小P0整改、测试和全部治理记录。
 - 推送后`git status --short --branch`只显示`codex/W5500...origin/codex/W5500`，没有未提交文件；`pgrep`未发现OpenOCD或GDB。此提交关闭的是FDCAN高负载整改阶段，不把TF物理断电恢复或真实硬件fault根因栈误记为已验收。
+
+## 2026-07-26 P0 TF物理断电：会话启动但外部业务信号前置条件未满足
+
+- 只读HTTP确认路由经`en2`可达且`GET /api/log/control`为200；初始日志为`enabled=false`、`timeSynced=false`。按既有POST合同，以`enabled=1&samplePeriodMs=100&unixMs=1785066561000&utcOffsetMin=480`启动会话，200回读`enabled=true`、`timeSynced=true`、路径`/log/20260726_194921000_signal-v2.csv`；该写入是本项TF断电验收必要前置，不改变规则、CAN或固件。
+- 非停机OpenOCD telnet读数显示LogTask已启动，但`g_log_write_count=0`、`g_log_drop_count=248`，不满足“写入连续增长两次”的断电前基线；未执行断电。只读HTTP确认CAN总RX=`400240`持续增长、活动DBC已`loaded=true`且有`1 message/2 signals`，但`GET /api/signals`为空。TX self-test仍有两项`quality=ok`，不作为外部RX或TF日志输入证据。
+- 结论：当前外部输入仅维持负载流或DBC探针未持续到达，导致RX SignalCache过期。日志会话保持开启，恢复条件是CANtest持续发送标准`0x321`、DLC4、`C0 A5 34 12`、每10 ms（可与`0x322`负载并行）；收到用户确认后，必须先观察`g_log_write_count`连续增长、写入/同步/失败结果为0，才请求物理断电。此次未修改源码、未构建、未烧录或提交。
+
+## 2026-07-26 P0 TF物理断电现场阻断
+
+- 已连续等待外部`0x321` DBC探针恢复，但未收到“探针已发送”确认；因此不能以CAN总RX增长、TX self-test或空日志会话替代“外部业务信号持续写入TF”的断电前基线。
+- 当前不操作物理电源、不停止会话、不改固件或配置。唯一恢复条件是持续发送标准`0x321`、DLC4、`C0 A5 34 12`、每10 ms并回复“探针已发送”；随后先确认写入连续增长，才进行一次用户操作的物理瞬断。
+
+## 2026-07-26 P0 TF物理断电：用户确认CAN发送后的板端帧ID核对
+
+- 用户回复“can已发送”后，`GET /api/can/status`确认CAN RX=`578275`且无错误，活动DBC仍`loaded=true`；但`GET /api/signals`仍为空。非停机`mdw`读数显示外部RX解码尝试=`605263`、DBC RX frame=`603842`，而DBC matched=`1421`恰好等于TX self-test frame=`1421`，last message ID=`0x321`、外部cache count=`0`。这证明`0x321`当前仅来自板端TX自检，外部输入没有命中活动DBC；TX self-test绝不替代外部日志输入。
+- 先前口头探针参数中的`C0 A5`与当前已验证的marker=`42434`不一致，现将TF验收外部帧明确为标准classic CAN `0x321`、DLC8、数据`C2 A5 34 12 00 00 00 00`、每10 ms；其中marker=`0xA5C2=42434`、sequence=`0x1234=4660`，与当前活动DBC和既有规则/日志样例一致。保持`0x322`负载可选，但不能替代此帧。
+- 日志会话继续保持启用；在外部`0x321`实际匹配、SignalCache非空、`g_log_write_count`连续增长且写入/同步/失败结果均正常前，不执行物理断电。本次无源码、构建、烧录或提交。
+
+## 2026-07-26 P0 TF物理断电：外部DBC帧参数确认阻断
+
+- 用户“can已发送”后的板端原始计数已证明外部发送未命中活动DBC；已明确要求标准`0x321`、DLC8、`C2 A5 34 12 00 00 00 00`、每10 ms，但连续等待后仍未收到“探针已发送”确认。
+- 断电前没有外部SignalCache与实际CSV写入增长时，物理瞬断只会测试空会话，不能满足P0验收。因此当前保持日志会话启用但不进行断电、取卡或源码修改；收到明确确认后恢复基线读取。
+
+## 2026-07-26 P0 TF物理断电：第二次“已发送”后的板端核验
+
+- 用户回复“已发送”后，HTTP仍显示RX=`651340`增长而`/api/signals`为空。非停机`mdw`复核：DBC RX frame=`663555`、decode attempts=`665110`，但DBC matched=`1555`仍严格等于TX self-test frame=`1555`，external cache count=`0`；因此外部输入仍未命中活动DBC，不能进入TF写入或物理断电步骤。
+- 为消除CANtest基数/帧类型歧义，要求发送列表显示标准帧、ID十六进制`0x321`（十进制`801`，不是十进制`321`）、DLC=`8`、`C2 A5 34 12 00 00 00 00`、周期10 ms。当前日志会话继续保持开启；未执行断电、取卡、源码修改、构建、烧录或提交。
+
+## 2026-07-26 P0 TF物理断电：CANtest配置确认阻断
+
+- 已给出可直接核对的标准帧ID、DLC、数据和周期，但连续等待后未收到参数确认或CANtest发送列表截图；板端最后证据仍是“CAN RX增长、外部DBC匹配为0”。
+- 由于物理断电是不可逆的现场动作，且空会话不能验收CSV恢复，当前不执行断电或取卡。恢复条件为用户确认上述精确发送参数，或提供发送列表截图供逐字段核对。
+
+## 2026-07-26 P0 TF物理断电：CANtest发送列表截图核对
+
+- 用户提供`/Users/elvin/Downloads/1785067367116.jpg`。截图中列表两项参数正确：标准数据帧`ID(0x)=321`、长度8、`C2 A5 34 12 00 00 00 00`、10 ms；以及标准数据帧`322`、长度8、全零、1 ms。
+- 但截图“状态”列的两项均为“无”，而非持续发送状态；这与板端证据（CAN总RX增长但外部DBC matched为0，matched只等于TX self-test）一致。结论是列表已配置但未证明列表发送已启动，不能仅凭勾选项进入断电步骤。
+- 后续需要在该工具中启动“列表发送”（不是右上角只对当前编辑帧的“立即发送”），并确认`321`和`322`两行状态变为发送中/计数增长后回复“列表已启动”。日志会话保持开启；未断电、取卡、改源码、构建、烧录或提交。
+
+## 2026-07-26 P0 TF物理断电：用户确认列表已启动后的隔离建议
+
+- 用户回复“已启动发送”后，板端HTTP再次确认CAN RX=`939528`且无错误、日志会话仍开启，但`/api/signals`仍为空。这说明仅凭工具端“已启动”不能证明外部`0x321`确实在总线上；当前仍不能断电。
+- 为把发送端问题与1 ms负载流隔离，下一步请求用户暂时停用`0x322`行，仅保留标准`0x321`、DLC8、`C2 A5 34 12 00 00 00 00`、10 ms并从列表发送启动；状态应不再为“无”。该低速业务帧足以让SignalCache与TF日志持续写入，随后才恢复/不恢复负载均不影响TF断电验收。
+- 当前保持日志会话开启，不取卡、不瞬断电、不修改源码或固件。
+
+## 2026-07-26 P0 TF物理断电：仅321隔离发送现场阻断
+
+- 已提出仅发送`0x321`以隔离问题，但连续等待后仍未收到“仅321已启动”确认，无法验证外部SignalCache或CSV实际写入。
+- 物理断电、取卡和文件系统只读检查均保持未执行。恢复条件不变：仅标准`0x321`、DLC8、`C2 A5 34 12 00 00 00 00`、10 ms实际发送后确认。
+
+## 2026-07-26 P0 TF物理断电：用户确认仅321后实际总线仍为322
+
+- 用户回复“仅321已启动”后，HTTP仍为`/api/signals count=0`。非停机原始读数直接确认FDCAN2最后接收帧为`ID=0x322`、DLC=`8`、首字节=`0x00`；RX enqueue/dequeue均为`1700227`、drop=`0`。DBC matched=`3508`仍等于TX self-test=`3508`，外部cache=`0`，因此外部`0x321`实际未上总线。
+- 结合截图，上方“帧发送”区域仍配置`322`、发送次数`10000000`、1 ms，且有发送时间增长；下方列表的状态此前为“无”。为避开列表启动歧义，下一步改用已确认能工作的上方发生器：先停止当前322，再将上方帧ID改为321、标准数据帧、DLC8、数据`C2 A5 34 12 00 00 00 00`、间隔10 ms、足够大的发送次数并点击“立即发送”。
+- 在板端最后RX ID变为`0x321`、SignalCache两项出现且日志写入增长前，不断电、不取卡、不修改固件。
+
+## 2026-07-26 P0 TF物理断电：上方321发生器切换阻断
+
+- 已明确要求把截图上方已实际工作的周期发生器从`0x322/1 ms`改为`0x321/10 ms`，但连续等待后未收到“上方321已发送”确认。
+- 当前最后原始证据仍为FDCAN2收到`0x322`，外部SignalCache为空；物理断电和取卡保持未执行。恢复条件是用户确认上方发生器已经按精确参数持续发送。
+
+## 2026-07-26 P0 TF物理断电：列表发送纠正与断电前基线通过
+
+- 用户澄清此前发送设置错误：只启用了上方单条`0x322`发送，现已正确启用列表发送。这与此前板端最后ID始终为`0x322`的证据闭合，不是固件DBC或紧凑队列缺陷。
+- 列表发送后`GET /api/signals`实际返回两项外部信号：marker=`42434`、sequence=`4658`、quality=`ok`；sequence与最初预期4660差2，按实际值记录，但不影响TF掉电完整性验收。日志控制仍为enabled=true、100 ms、timeSynced=true、路径`/log/20260726_194921000_signal-v2.csv`。一次CAN status GET因W5500单socket时序超时，不作为CAN故障；signals与后续log control均HTTP 200。
+- 非停机OpenOCD断电前A/B读数：write=`2039->2198`、flush=`2039->2199`、active/TF file size=`1193019->1285557 B`（增长92538 B）、sample=`63107->63585`，历史drop=`56990->56990`、failure=`0->0`。最近TF写入长度=`582 B`，open/write/`f_sync`/close结果全为0。DBC matched=`57020->61902`且外部cache=`2`，证明外部业务信号与TF写入同时持续。
+- C项现已满足物理瞬断前置；尚未断电、取卡、执行`fsck_msdos -n`、检查CSV尾行或重新上电，因此仍未通过。下一步由用户在不停止CAN和日志、不等待空闲的情况下切断目标板电源并回复“已断电”。本次只更新治理文档，未修改固件源码、未构建或反汇编、未烧录、未提交。
+
+## 2026-07-26 P0 TF物理断电：等待瞬断确认阻断
+
+- 断电前写入、flush、文件增长、外部SignalCache和TF `f_sync`均已满足，但连续等待后仍未收到“已断电”确认。
+- 当前不假定目标已断电，不要求取卡、不执行主机文件系统检查或重上电。恢复条件是用户实际切断目标板电源后明确回复“已断电”。
+
+## 2026-07-26 P0 TF物理断电：ST-Link同步断电边界确认
+
+- 用户说明切断目标板电源会同时断掉ST-Link。该现象符合物理掉电测试预期：断电后不需要ST-Link，先确认目标网络离线，再在完全失电状态取出TF并进行主机只读文件系统/CSV检查。
+- 后续恢复顺序固定为：断电确认→安全取卡只读检查→将TF插回板端→恢复目标板与ST-Link供电→验证TF初始化、CAN、规则和日志控制启动。不得因ST-Link离线把断电步骤写为失败，也不得在板端仍带电时拔卡。
+- 本次仅澄清操作边界并更新治理记录，未执行断电、取卡、源码修改、构建、烧录或提交。
+
+## 2026-07-26 P0 TF物理瞬断已执行并确认离线
+
+- 用户明确回复“已断电”，确认整板与ST-Link同时失电；该动作发生在日志和CAN列表发送未停止的前提下，满足物理瞬断步骤。
+- 断电后只读网络检查：`curl http://192.168.1.88/api/status`在2秒连接超时，状态28；ping发送2包、接收0包，100%丢失。`pgrep`和3333/4444监听检查均无OpenOCD/GDB服务，目标离线得到客观确认。
+- 当前安全下一步是在保持目标断电时取出TF并插入主机；尚未执行主机挂载、`fsck_msdos -n`、CSV表头/尾行检查或重新上电，因此C项仍未完成。本次未修改固件源码、未构建、反汇编、烧录或提交。
+
+## 2026-07-26 P0 TF物理断电：主机只读复核失败
+
+- 用户确认TF卡已在整板断电状态取出并插入电脑。主机识别为外置物理盘`/dev/disk4`、FAT32分区`/dev/disk4s1`、卷标`NO NAME`；为避免改变证据，分区卸载后重新以只读方式挂载，未执行修复、格式化或文件写入。
+- 只读目录复核中`/log`不存在，目标会话`/log/20260726_194921000_signal-v2.csv`也不存在；根目录出现异常名称且`ls`返回`No such file or directory`。命令记录中的`session_exists=1`、`log_dir_exists=1`是shell `test`的退出状态，1表示不存在，不得误读为存在。
+- 直接执行`/sbin/fsck_msdos -n /dev/rdisk4s1`因权限不足退出8，该次不作为文件系统结论。随后`diskutil verifyVolume /dev/disk4s1`调用受权的只读`fsck_msdos -n`，报告`.Spotlight-V100/...`存在`Invalid long filename entry`，文件系统检查退出码206并返回`Error -69845`。卷之后仍保持只读挂载。
+- 本轮C项客观失败：验收所需“无未修复文件系统错误、`/log`与目标CSV可见且可检查”均未满足，故不进行CSV尾行或重上电恢复通过判定。`.Spotlight-V100`是macOS元数据且可能在本轮测试前已存在，不能据此把全部异常唯一归因于此次断电；但这不改变本轮失败结论。后续复测必须先使用只读校验无错的干净FAT32介质，以隔离测试前污染。
+
+## 2026-07-26 P0 TF物理断电：底层同步合同缺陷定位
+
+- 沿`f_sync()`调用链复核：`stm32h750_tf_append_file_locked()`每批执行`f_write`、`f_sync`、`f_close`；FatFs `sync_fs()`最终调用`disk_ioctl(fs->drv, CTRL_SYNC, 0)`。但`cube_mx/FATFS/Target/sd_diskio.c`当前`CTRL_SYNC`分支仅设置`res = RES_OK`，没有调用已有的`SD_CheckStatusWithTimeout()`等待`BSP_SD_GetCardState()==SD_TRANSFER_OK`。
+- 结论是板端调试变量显示`f_sync=FR_OK`时，只能证明缓存和FatFs调用链未报错，不能证明底层介质已完成内部编程；这是保持现有架构即可修复的明确P0缺陷。拟采用最小修改让`CTRL_SYNC`有界等待卡ready并在超时时返回`RES_ERROR`，随后按规定执行完整构建、固件关键路径反汇编和干净卡物理断电复测。
+- 当前未修改源码、未构建、未烧录；目标板仍断电，TF卡仍在电脑中只读挂载。
+
+## 2026-07-26 P0 TF物理断电：最小底层同步整改与静态验证
+
+- 采用任务外派的只读复核补充确认：除`CTRL_SYNC`无条件成功外，启用的`ENABLE_SCRATCH_BUFFER`路径对非32字节对齐FatFs缓冲逐扇区写入时，只等待`WriteStatus` DMA回调，没有继续等待`BSP_SD_GetCardState()==SD_TRANSFER_OK`；FatFs缓冲没有对齐合同，不能假设该路径不会执行。长文件名修改会破坏现有会话命名合同，预分配会引入容量、截断和轮换策略，均不属于本轮最小整改。
+- 外科式修改仅两行行为：`SD_ioctl(CTRL_SYNC)`调用已有`SD_CheckStatusWithTimeout(SD_TIMEOUT)`，在30秒内未ready时返回`RES_ERROR`；scratch分支每扇区DMA回调成功后同样执行该检查，失败立即保持写错误。LogTask、CSV、HTTP、512 B/5 s批量策略、文件名和FatFs架构均未改变。该修复只能消除“报告同步成功但卡仍busy”的明确缺陷，不能把FAT32表述为原子掉电文件系统。
+- `./scripts/verify.sh`实际通过：主机CTest=`19/19`，STM32固件链接成功，text/data/bss=`112700/768/243932`；编译仅报告`sd_diskio.c`既有int/UINT signedness警告。新ELF/HEX SHA-256分别为`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`和`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。
+- 定向反汇编确认`SD_CheckStatusWithTimeout.constprop.0`调用`HAL_GetTick`、以29999为界比较并轮询`BSP_SD_GetCardState`；`SD_ioctl`的`CTRL_SYNC`分支调用该函数并将非零转成`RES_ERROR`，`SD_write`的scratch回调成功分支也调用该函数。`git -c core.whitespace=cr-at-eol diff --check`通过，保留CubeMX源文件原有CRLF。
+- 已同步`CURRENT_TASK.md`、`01_Project_Plan.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`、`ARCHITECTURE_DESIGN.md`和`docs/P0_FAULT_INJECTION.md`：P0状态保持进行中，FDCAN架构记录为32项紧凑队列，TF同步合同与首次断电失败边界一致。
+- 最终状态复核发现`diskutil verifyVolume`之后卷曾恢复成`Volume Read-Only: No`；立即卸载并执行`diskutil mount readOnly /dev/disk4s1`，回读为`Volume Read-Only: Yes (read-only mount flag set)`。没有人为写文件，但macOS自动可写挂载是额外因果混杂，复测必须从主机插卡起阻止可写介入。
+- 当前候选尚未烧录或上板；板仍断电，失败卡现已重新只读挂载。下一步必须使用测试前已只读校验无错的FAT32介质，插回断电板、上电烧录后重新建立外部CAN/持续日志基线并执行物理断电；未经用户授权不修复或格式化现有证据卡。
+
+## 2026-07-26 P0 TF介质：授权备份、格式化与干净基线
+
+- 用户明确回复“授权备份镜像并格式化当前TF卡”。操作前再次核对物理目标：`/dev/disk4`为外置physical、USB、可移除、非虚拟、15.6GB，精确30560256个512 B扇区；分区`disk4s1`为原`NO NAME` FAT32。主机Downloads所在卷可用141 GiB，足够容纳镜像。
+- 在整盘卸载状态用`hdiutil create -srcdevice /dev/disk4 -format UDZO`创建只读压缩UDIF：`/Users/elvin/Downloads/tf_card_powerloss_failure_20260726.dmg`。镜像处理全部30560256扇区，`hdiutil verify`总CRC=`797DBC20`有效，SHA-256=`0d0da27415ed931651ab0656aa06d63db6f824e5ead25d6d1e0dbc51d4af5382`；只读挂载为`/dev/disk5`后仍是15.6GB、同扇区数、MBR加FAT32，证明镜像结构可读，随后已弹出虚拟盘。
+- 镜像验证完成后再次解析并确认物理目标仍是同一`/dev/disk4`，才执行用户授权的`diskutil eraseDisk FAT32 CANLOG MBRFormat /dev/disk4`。输出为创建分区表、格式化`disk4s1`、`Finished erase on disk4`；新分区30558208扇区、8192 B/cluster。
+- 格式化后立即卸载卷，在未挂载状态执行`diskutil verifyVolume /dev/disk4s1`；`fsck_msdos -n`完成FAT、目录和孤立簇检查，退出码0。macOS的短暂自动挂载已创建`.Spotlight-V100`和`.fseventsd`，但这些目录已包含在本次退出0的测试前无错基线内。随后显式只读挂载确认`Volume Read-Only: Yes`，再安全卸载并`eject /dev/disk4`；系统已找不到该设备，允许物理拔插。
+- 用户提醒格式化后需要恢复TF所需文件（如网页）。当前代码/仓库核对结果：必须复制仓库最新`www/index.html`到卡内`/www/index.html`；为恢复DBC解码和日志输入，还须复制精确151 B的标准Can2Data DBC到`/dbc/active.dbc`，并同步一份到`/dbc/candidate.dbc`，其内容哈希应为`271f20f923343c9f923bd6db4da4599e0349983b0a5bd43edeae87d152855417`。`/config`的v1/v2默认由固件空卡启动创建，`/log`由记录会话创建；不从失败镜像回拷这些可疑运行数据。
+- 已再次把备份UDIF以`Media/Volume Read-Only: Yes`挂载，尝试选择性恢复原active DBC和V4规则；镜像可见内容仍只有异常根目录项、macOS索引和`System Volume Information`，`/dbc`、`/config`均不可见，无法可靠提取生产V4配置。只读镜像随后已弹出。因此不猜测或合成`rules-v4.conf`；标准151 B DBC则有此前用户授权激活、运行态151 B/1 message/2 signals和精确SHA-256共同证明，可安全恢复。V4规则留给启动回退及网页重新保存。
+- 卡当前已逻辑弹出，`diskutil list external physical`无设备；需要用户把仍在电脑读卡器中的TF物理拔出再插入并回复“已重新插入电脑”，随后主会话才能创建目录、复制上述文件、逐文件`cmp`/SHA-256核对并再次只读校验。当前未烧录、未上电、未提交或推送。
+
+## 2026-07-26 P0 TF介质：部署资产恢复和只读复核
+
+- 为消除格式化后的部署来源歧义，新增`deploy/tf/dbc/active.dbc`：内容为此前用户授权激活并在运行态验证的标准Can2Data DBC，精确151 B、SHA-256=`271f20f923343c9f923bd6db4da4599e0349983b0a5bd43edeae87d152855417`。新增`deploy/tf/README.md`记录网页/DBC复制映射、禁止恢复项、V4规则不可猜测边界和复制后验证步骤。只读外派审计确认固件会创建目录和v1/v2默认配置，但缺失active DBC不会自动恢复解码；完整网页也不能由极简备用页替代。
+- 用户回复“卡已重新插入电脑”。实际设备再次解析为`/dev/disk4` external physical、USB、可移除、非虚拟、15.6GB，分区`disk4s1`为`CANLOG` FAT32；未依赖旧设备编号盲写。
+- 创建`/www`和`/dbc`后，复制仓库`www/index.html`到`/www/index.html`，复制受控DBC到`/dbc/active.dbc`和`/dbc/candidate.dbc`。网页源/目标`cmp`通过，为28989 B、SHA-256=`c9c8e057f1d7bd89672b2c84ef6b03c00b6ac13f3677f779373a9f4d4504ca9c`；两DBC源/目标及相互`cmp`通过，均为151 B和上述DBC哈希。
+- 普通`cp`同时生成了`/._dbc`、`/._www`及三个目录内`._*` AppleDouble文件；这些不是项目资产。已只删除这5个精确新生成目标，未删除网页、DBC或原有系统元数据。删除后项目文件清单只含`/www/index.html`、`/dbc/active.dbc`和`/dbc/candidate.dbc`。
+- 卡卸载后`diskutil verifyVolume /dev/disk4s1`调用`fsck_msdos -n`完成三阶段检查，退出码0。再以`Volume Read-Only: Yes`重挂载，三份文件大小/哈希不变且`find -name '._*'`无输出；随后安全卸载并弹出，系统已找不到`/dev/disk4`。`/log`保持空，故障镜像不可读的V4规则未被猜测恢复。
+- 新增`tests/test_tf_deploy_assets.c`和CTest项，直接从仓库实际资产读取151 B并验证DBC解析为3行、`0x321`/DLC8、1 message/2 signals、marker/sequence、零错误。最新`./scripts/verify.sh`实际通过CTest=`20/20`，固件text/data/bss仍为`112700/768/243932`，ELF/HEX SHA-256仍为`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。定向反汇编再次确认`SD_ioctl`的`CTRL_SYNC`和`SD_write` scratch分支调用`SD_CheckStatusWithTimeout`。
+- 当前卡已安全弹出，目标板仍断电，新候选尚未烧录。下一步必须由用户把TF插回断电开发板并恢复目标板/ST-Link供电；收到明确确认后才启动OpenOCD烧录、网络/DBC/TF启动基线和第二次物理断电复测。本阶段尚未提交或推送。
+
+## 2026-07-26 P0 TF第二轮：候选烧录与冷启动基线
+
+- 用户明确回复“板卡已插入TF卡并已上电”。烧录前检查无遗留OpenOCD/GDB和3333/4444监听，电脑也不再把TF识别为外置盘。候选ELF/HEX SHA-256复核为`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。
+- 单独OCD握手识别`STLINK V2J37S7`、STM32H7 Cortex-M7、SWD 1800 kHz、目标电压3.266890 V；握手会话已shutdown。随后烧录修复HEX，OpenOCD实际输出`Programming Finished`、`Verified OK`、`Resetting Target`，烧录电压3.247626 V并正常退出。
+- 冷启动网络与介质基线通过：主机路由en2，ping=`3/3`；`GET /api/status`返回RTOS ready、W5500 status/link/version=`0/1/4`、TF/QSPI status=`0/0`。`GET /`内容SHA-256=`c9c8e057f1d7bd89672b2c84ef6b03c00b6ac13f3677f779373a9f4d4504ca9c`，与部署源一致。
+- `GET /api/dbc/runtime`为active `/dbc/active.dbc`、loaded=true、generation=1、151 B/3 lines/1 message/2 signals/skipped=0/errors=0；`GET /api/rules`显示缺失V4后的v2安全回退，两条默认marker规则均有效。该结果不冒充V4精确恢复。
+- 当前外部输入未恢复：`GET /api/can/status`为`tx=55/rx=0/errors=0/busOff=0`，`GET /api/signals`为空；日志控制默认`enabled=false/samplePeriodMs=1000/timeSynced=false`。因此本轮不启动空日志、不请求断电。下一外部动作是用户启动CANtest列表发送：标准`0x321`/DLC8/`C2 A5 34 12 00 00 00 00`/10 ms，以及可选负载`0x322`全零/1 ms；收到明确确认后才读取SignalCache、启动100 ms日志并建立A/B增长基线。
+
+## 2026-07-26 P0 TF第二轮：外部CAN与持续落盘基线
+
+- 用户明确回复“CAN列表已发送”。两组串行HTTP快照相隔约3秒：CAN2 `rx=57899→60031`，`errors=0`、`busOff=0`、`tec=0`、`rec=0`；SignalCache稳定解码`Can2Data.marker=42434`、`Can2Data.sequence=4658`且`quality=ok`。这证明本轮外部`0x321`输入和活动DBC解码有效。
+- 用当前时间`unixMs=1785075758000`、`utcOffsetMin=480`、`samplePeriodMs=100`启动日志，HTTP 200回读`enabled=true`、`timeSynced=true`，新会话路径为`/log/20260726_222238000_signal-v2.csv`。
+- 运行态OpenOCD首次附加后执行多余`resume`，因目标本来就在运行而返回`target not halted/context restore failed`并退出；未复位、未烧写、未停核。随后只执行`init`并通过telnet `mdw`读取运行态变量，不设置断点、不启动GDB。
+- A/B快照相隔8秒：活动文件大小`122743→138295 B`，`g_log_write_count=213→240`，`g_log_flush_count=213→240`，`g_log_failure_count=0`、`g_log_drop_count=0`；`g_tf_write_open_result/g_tf_write_result/g_tf_write_sync_result/g_tf_write_close_result`均为0。关闭OpenOCD后再次确认CAN2 `rx=145592`、错误/Bus-Off/TEC/REC均为0，日志仍启用且路径不变；3333/4444/6666无监听。
+- 当前满足第二次物理断电的前置条件：CAN列表发送和TF日志均保持活动。下一动作必须由用户直接切断整板电源，不先停止CAN或日志；断电后再确认网络与ST-Link离线。当前尚未执行第二次断电、主机只读文件系统/CSV检查或恢复上电。
+- 等待物理操作期间再次只读复核：CAN2 `rx=193836`且`errors/busOff/tec/rec=0`，日志仍为`enabled=true`、100 ms、路径不变。该快照只证明持续运行前置条件仍成立，不替代物理断电和取卡验收。
+- 连续多个目标回合均停在同一外部依赖：需要用户直接切断整板电源，当前会话无法远程代替该物理动作。目标已按门控标记为`blocked`，含义仅为等待现场操作，不表示整改失败或阶段已验收；用户回复“已断电”后从网络/ST-Link离线确认继续，已通过的构建、烧录、CAN和落盘基线不重做。
+
+## 2026-07-26 P0 TF第二轮：断电后主机只读验收通过
+
+- 用户回复“卡已插入电脑”，该操作表明TF已从板端取出；主机侧`192.168.1.100`地址已不存在，HTTP和ping无法绑定本地地址，3333/4444/6666无调试监听。识别出的介质仍为`/dev/disk4`：external physical、USB、removable、非virtual、15.6 GB、30560256个512 B扇区，分区`disk4s1`为FAT32 `CANLOG`。
+- 识别后立即卸载macOS自动挂载并用`diskutil mount readOnly /dev/disk4s1`重挂载，回读`Volume Read-Only: Yes`；未修复、格式化或写卡。目标会话`/log/20260726_222238000_signal-v2.csv`存在，大小399223 B、mtime=`2026-07-26 22:26:22`、SHA-256=`6d520cd29fede3553566062ca182c1f984276c6b313e4fab20e64794960f1a04`。
+- CSV逐行只读验证：共4159行，其中1行精确表头、4158行数据即2079对marker/sequence；每行8列，`unix_ms`和`updated_ms`单调不减，marker固定42434、sequence固定4658、quality全部为`ok`，最后字节为`0x0a`换行，没有撕裂尾行。末条时间`unix_ms=1785075982208`、`updated_ms=520492`。
+- 在卷卸载状态执行`diskutil verifyVolume /dev/disk4s1`，实际调用`fsck_msdos -n`完成FAT、目录和孤立簇三阶段检查，退出码0；卷恢复只读挂载后再次确认网页及active/candidate DBC均与仓库源`cmp`一致，SHA-256分别为`c9c8e057f1d7bd89672b2c84ef6b03c00b6ac13f3677f779373a9f4d4504ca9c`和`271f20f923343c9f923bd6db4da4599e0349983b0a5bd43edeae87d152855417`。
+- TF已安全卸载并`eject /dev/disk4`，系统不再列出外置物理盘。第二轮断电后的“文件系统无错、CSV可见且完整、部署资产未损坏”已通过；完整C项仍需把TF插回断电板并重新上电，确认冷启动TF/DBC/网络/CAN和新日志会话可继续工作。
+- 等待恢复上电期间完成变更范围复核：唯一固件行为改动仍是`sd_diskio.c`两处ready等待，CMake只新增部署DBC解析测试，未改变LogTask、HTTP、规则、CAN或总体架构；`git -c core.whitespace=cr-at-eol diff --check`通过。未重新构建，故本条没有新增反汇编证据，继续复用本轮同一候选的20/20构建和定向反汇编结果。
+- 离线校验和静态范围审计均已穷尽，剩余冷启动恢复必须等待用户把已弹出的TF插回板卡并上电；连续目标回合未发生该外部状态变化，故目标再次标记为`blocked`。这不改变第二轮断电后文件系统与CSV已通过的事实，恢复后从网络/TF/DBC启动检查直接继续。
+
+## 2026-07-26 P0 TF第二轮：重新上电恢复通过
+
+- 用户明确回复“已上电”。电脑端不再列出外置TF，`en2`恢复`192.168.1.100`且路由正确；ping目标`3/3`。只读OCD握手识别`STLINK V2J37S7`、STM32H7 Cortex-M7、目标电压3.267470 V并正常shutdown，未烧录或复位。
+- 首个串行API脚本误把zsh特殊变量`path`用作循环变量，导致仅该已退出子进程内的`PATH`被改写，所有`curl/shasum`均提示command not found，未向板卡发出请求。改用`api_path`和绝对命令路径后重试。
+- 冷启动API确认RTOS started/ready、W5500 status/link=`0/1`、TF/QSPI status=`0/0`，active DBC=`151 B/3 lines/1 message/2 signals/skipped=0/errors=0`；CAN RX=76447、errors/busOff/TEC/REC=0，SignalCache为marker=`42434`、sequence=`4658`、quality=`ok`。日志按设计复位为关闭且未同步。状态首读一度显示W5500 version=80，留出单socket关闭窗口后复读为4；网页首次紧邻前序连接失败，间隔2秒后内容SHA-256=`c9c8e057f1d7bd89672b2c84ef6b03c00b6ac13f3677f779373a9f4d4504ca9c`并成功，不把瞬态首读扩写为持久故障。
+- 以`unixMs=1785076473000`、100 ms启动恢复会话`/log/20260726_223433000_signal-v2.csv`。非停机A/B快照相隔8秒：活动文件=`39223→54775 B`，write/flush=`68/68→95/95`，failure/drop=0；TF最近open/write/sync/close结果均为0。由此证明断电后的文件系统、活动DBC、CAN输入和新日志创建/同步均可继续运行。
+- OpenOCD已shutdown，随后正常POST停止日志；最终CAN RX=146762且错误/Bus-Off/TEC/REC均为0，3333/4444/6666无监听。P0 TF物理断电C项与FDCAN高负载A项、IWDG/Crash Dump B项均判定通过；本阶段进入文档治理、最终验证、提交和推送。
+- 治理同步后再次执行`./scripts/verify.sh`：host CTest=`20/20`全部通过，STM32固件无待重新编译目标但验证入口完整成功；最终ELF text/data/bss=`112700/768/243932`，ELF/HEX SHA-256保持`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。
+- 同一最终ELF定向反汇编再次确认：`SD_CheckStatusWithTimeout`调用`HAL_GetTick`并以29999为界轮询`BSP_SD_GetCardState`；`SD_ioctl`的CTRL_SYNC分支调用该函数并把超时映射为`RES_ERROR`；`SD_write`的非对齐scratch分支在DMA回调成功后也调用该函数。该结果与本轮已烧录并完成物理断电复测的候选哈希一致。
