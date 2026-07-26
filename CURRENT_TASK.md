@@ -35,6 +35,7 @@
 
 ## Git 基线与工作树
 
+- P0 TF掉电同步修复、部署资产测试和治理提交为`691d509 Complete P0 TF power-loss hardening`，已推送到`origin/codex/W5500`。该提交对应最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`及本轮20/20、反汇编、烧录、物理断电与恢复证据。
 - 上一阶段功能提交为`13613f637554102f3b8f105fb88f657e7c1ae38e`（`13613f6 Add time-synced web logging controls`），已推送至`origin/codex/W5500`；本轮启动只读核对为工作树干净、本地与远端ahead/behind=`0/0`。
 - 最终固件源码提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`；之后只有治理Markdown变化。
 - 本轮工作树另有未提交的`firmware/bringup/w5500_bringup.c`最小 CLOSE_WAIT 修复；已将其构建产物`build/stm32h750/can_bus_gateway_stm32h750.hex`烧录并完成本轮现场回归，但它仍不可与`0ef7d3e1`对应的历史映像或证据混用。

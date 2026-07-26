@@ -3644,3 +3644,4 @@
 - OpenOCD已shutdown，随后正常POST停止日志；最终CAN RX=146762且错误/Bus-Off/TEC/REC均为0，3333/4444/6666无监听。P0 TF物理断电C项与FDCAN高负载A项、IWDG/Crash Dump B项均判定通过；本阶段进入文档治理、最终验证、提交和推送。
 - 治理同步后再次执行`./scripts/verify.sh`：host CTest=`20/20`全部通过，STM32固件无待重新编译目标但验证入口完整成功；最终ELF text/data/bss=`112700/768/243932`，ELF/HEX SHA-256保持`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。
 - 同一最终ELF定向反汇编再次确认：`SD_CheckStatusWithTimeout`调用`HAL_GetTick`并以29999为界轮询`BSP_SD_GetCardState`；`SD_ioctl`的CTRL_SYNC分支调用该函数并把超时映射为`RES_ERROR`；`SD_write`的非对齐scratch分支在DMA回调成功后也调用该函数。该结果与本轮已烧录并完成物理断电复测的候选哈希一致。
+- 暂存区最终为13个明确文件、293行新增/12行删除，`git -c core.whitespace=cr-at-eol diff --cached --check`通过；未纳入备份镜像、构建产物或其他机器文件。阶段提交`691d509 Complete P0 TF power-loss hardening`创建成功，并已推送`origin/codex/W5500`（`83dd048..691d509`）。
