@@ -3474,3 +3474,8 @@
 - 当前工作树实际重跑`./scripts/verify.sh`：host CTest=`19/19`通过，STM32H750构建无待执行任务；`git diff --check`通过。当前ELF/HEX SHA-256保持`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`，`text/data/bss=112684/768/243932`。
 - 重新定向反汇编确认`MX_FDCAN2_Init`写入FIFO0元素数`16`；`can2_analyzer_rx_queue_init`调用`xQueueGenericCreate(32,16)`；接收函数压缩classic CAN帧后入队，DecodeTask重建既有`CanFrame`后调用原`decode_can2_frame`。`nm`同时确认`f_sync`、`signal_cache_mark_stale`、`HardFault_Handler`和RAM_D3 `g_fault_record=0x38000100`仍在最终ELF。
 - 本阶段完成治理后提交并推送。TF持续写入中物理断电、取卡只读恢复仍为唯一未完成P0现场项；该未验证状态不在本次提交中改写为通过。
+
+## 2026-07-26 P0 高负载阶段已提交并推送
+
+- 已将本阶段19个受控文件提交为`ff457df Harden P0 CAN reliability paths`，并成功推送至`origin/codex/W5500`（`10cb28d..ff457df`）。提交包含FDCAN诊断/紧凑RX队列、IWDG与Crash Dump、DBC/SignalCache/TF最小P0整改、测试和全部治理记录。
+- 推送后`git status --short --branch`只显示`codex/W5500...origin/codex/W5500`，没有未提交文件；`pgrep`未发现OpenOCD或GDB。此提交关闭的是FDCAN高负载整改阶段，不把TF物理断电恢复或真实硬件fault根因栈误记为已验收。
