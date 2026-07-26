@@ -36,6 +36,7 @@
 
 ## Git 基线与工作树
 
+- 最新网页全功能回归治理提交为`df79705 Record full web regression results`，已推送到`origin/codex/W5500`；该提交只同步`CURRENT_TASK.md`、`03_Context.md`、`04_Features_ADR.md`、`05_Lessons.md`和`CONVERSATION_SUMMARY.md`，没有固件行为变化。
 - P0 TF掉电同步修复、部署资产测试和治理提交为`691d509 Complete P0 TF power-loss hardening`，已推送到`origin/codex/W5500`。该提交对应最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`及本轮20/20、反汇编、烧录、物理断电与恢复证据。
 - P0治理提交`b288f48 Record P0 TF delivery`也已推送，本地/远端ahead/behind=`0/0`。重新对照原始5页审查报告后，报告明确列出的5个P0均已关闭；剩余确认高风险必要项为局域网写操作授权和生产CAN TX白名单。当前阻断是缺少生产合同：允许的CAN ID/DLC/数据约束/最小周期，以及采用何种授权载体；不得把测试帧`0x321`或仓库内默认token擅自固化为生产策略。
 - 上一阶段功能提交为`13613f637554102f3b8f105fb88f657e7c1ae38e`（`13613f6 Add time-synced web logging controls`），已推送至`origin/codex/W5500`；本轮启动只读核对为工作树干净、本地与远端ahead/behind=`0/0`。
