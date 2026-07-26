@@ -3645,3 +3645,24 @@
 - 治理同步后再次执行`./scripts/verify.sh`：host CTest=`20/20`全部通过，STM32固件无待重新编译目标但验证入口完整成功；最终ELF text/data/bss=`112700/768/243932`，ELF/HEX SHA-256保持`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。
 - 同一最终ELF定向反汇编再次确认：`SD_CheckStatusWithTimeout`调用`HAL_GetTick`并以29999为界轮询`BSP_SD_GetCardState`；`SD_ioctl`的CTRL_SYNC分支调用该函数并把超时映射为`RES_ERROR`；`SD_write`的非对齐scratch分支在DMA回调成功后也调用该函数。该结果与本轮已烧录并完成物理断电复测的候选哈希一致。
 - 暂存区最终为13个明确文件、293行新增/12行删除，`git -c core.whitespace=cr-at-eol diff --cached --check`通过；未纳入备份镜像、构建产物或其他机器文件。阶段提交`691d509 Complete P0 TF power-loss hardening`创建成功，并已推送`origin/codex/W5500`（`83dd048..691d509`）。
+
+## 2026-07-26 P0交付推送与原始报告完成度复核
+
+- 实际创建并推送纯治理提交`b288f48 Record P0 TF delivery`（`691d509..b288f48`）；随后`git status`干净，本地/远端ahead/behind=`0/0`。
+- 依照documents读取流程重新打开原始`/Users/elvin/Downloads/codex_can_bus_security_audit_report.docx`，完整结构化读取32个非空段落并渲染检查5页。渲染环境仍缺中文字体而显示方框，但英文标识、分页及结构可核，中文结论以DOCX XML文本为准；未修改或重新导出报告。
+- 报告明确P0共5项：CAN TX Scheduler、CAN Bus-Off恢复、任务级Watchdog、STM32H750 Cache/DMA一致性、TF日志掉电保护。当前代码和证据分别覆盖单路受限周期TX及范围校验、真实Bus-Off恢复、任务进展聚合IWDG、当前无活动DMA/D-Cache路径且Crash记录显式Clean、以及本轮TF断电/只读检查/重启续写；因此报告定义的P0阶段可判定完成。
+- 整份报告仍未全部整改完成：此前只读审计确认的高风险必要剩余项是所有局域网写操作授权与生产CAN TX白名单。当前没有生产允许的ID/DLC/数据掩码/最小周期，也没有确定token或物理配置模式的授权载体；不能把实验室`0x321`或硬编码默认token当作生产合同。下一阶段在用户确认合同前不修改业务源码。
+- 用户询问“现已修复多少问题”。统一计数口径：原报告明确列出的5项P0当前为5/5关闭，其中CAN TX Scheduler与Bus-Off恢复是审查时已存在且经核验，不应冒充本轮新写；本轮实际新增或补强并关闭6个高风险点：任务健康IWDG、Crash Dump、FDCAN FIFO/高负载、DBC边界、SignalCache stale、TF掉电同步与恢复。按项目复核的7个高风险发现口径，当前关闭6/7，剩余1个组合发现包含局域网写授权和生产CAN TX白名单两项控制。
+- 用户继续询问剩余两项对功能的影响。写授权若覆盖全部修改型HTTP请求，会让CAN TX、DBC上传/激活、规则保存、手动继电器、日志启停和时间同步在提交时必须携带有效授权；GET状态、网页静态资源、CAN RX/解码、规则后台执行和既有运行配置不应受影响。token缺失或失效会使维护操作被拒绝，因此必须设计可恢复的本地部署/轮换方式，且明文HTTP下token只适合受控隔离LAN。
+- 生产CAN TX白名单只应拦截板端主动发送：按ID、帧型、DLC、固定/可变数据范围和最小周期拒绝越界请求；CAN RX、DBC解码、日志和当前仅驱动继电器的规则路径不应受影响。白名单遗漏合法生产帧会直接造成相应发送功能不可用，范围过宽则失去安全意义，所以不能用实验室`0x321`自动代替生产合同。两项均可在现有HTTP分派和TX入口增加窄保护层，无需重构任务架构。
+
+## 2026-07-26 最新固件网页全功能回归
+
+- 本轮目标固定为“按照当前最新版本进入网页测试所有完整功能”，不修改源码。测试基线为`codex/W5500`、已推送HEAD=`b288f48`，板上最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`；主机`en2`到`192.168.1.88`路由和ping正常。网页实际打开为“CAN 网关控制台”，盘点并操作了概览、CAN自动刷新、标准CAN TX、TX/RX DBC表、manual、时间/日志、两槽规则和DBC上传/激活。因本轮无源码修改和编译，未执行新增反汇编；不得把此前同一映像的构建/反汇编冒充为本轮重新执行。
+- CAN页面功能通过：自动刷新启动时TX/RX由`1689/1181234→1691/1182832`，停止后页面计数保持，再启动继续增长；编辑TX数据为`C2 A5 34 12 00 00 00 00`、周期1200 ms后跨刷新保持，提交最终由request/applied=`1/1`确认。页面关闭TX后板端计数保持，非法标准ID`0x800`被前端拒绝且未改变后端；最终恢复启用、`0x321`、DLC8、`C2 A5 00 01 02 03 04 05`、1000 ms，最终API回读request/applied=`0/0`、result=0。最后一轮自动刷新TX/RX=`208/143980→236/164017`，随后明确停止。
+- manual业务应用通过但响应交付失败：自动刷新运行时提交`enabled=1/relay1=0/relay2=1`，页面先保持旧状态，最终显示`Failed to fetch`；随后直接回读却确认request/applied=`1/1`、实际输出=`0/1`，证明业务动作已应用但响应未交付。停止自动刷新后，页面提交关闭覆盖得到request/applied=`2/2`并恢复自动输出`1/0`。后续复位使RAM序号回零，最终API仍确认manual disabled、输出`1/0`。
+- 时间与日志功能在停止自动刷新后通过：页面同步时间成功，UTC offset=`480`；启用250 ms后路径为`/log/20260726_231144855_signal-v2.csv`。非停机A/B相隔6秒，文件=`19435→23425 B`、write/flush=`34/34→41/41`、sample=`102→124`，failure/drop=0且TF open/write/sync/close结果全0。随后页面停止日志并恢复1000 ms。后续运行态复位按设计清除RAM时间，最终安全态为日志disabled、1000 ms、timeSynced=false；这不否定复位前已完成的时间/写入测试。
+- 规则页面完成可逆写入、删除和恢复：slot1 threshold由42435临时保存为42436并从V4回读，再由“禁用/删除”确认disabled，最后通过页面恢复为enabled、`Can2Data.marker`、relay0、threshold42435、action off、delay0、timeout1500、safe off、priority20。slot0始终为marker42434/action on/delay1000/timeout1500/safe off/priority10。最终`GET /api/rules`为source v4且两槽精确匹配基线，manual自动输出为`1/0`。
+- DBC页面上传仓库`deploy/tf/dbc/active.dbc`成功，返回151 B、3行、1消息、2信号、skipped/errors=`0/0`、valid=true。第一次点击激活时浏览器确认框控制中断，非停机板端读数证明upload count=1而active count=0、runtime generation=1，因此没有冒充激活成功；复位恢复后重新按确认框流程只执行一次，页面返回`activated=true/runtimeGeneration=2`，最终runtime为loaded、activeSlot1、151 B/3行/1消息/2信号、errors=0。
+- HTTP稳定性全局判定失败。第一次组合页面操作后ping仍为2/2，但80端口持续拒绝；非停机读数中HTTP/W5500/CAN任务循环均增长，link=1，曾记录ACK wait timeout=1、recovery=1、`lastNonclosedClose=0x11c`，日志POST虽在页面停留旧状态但RAM已启用。停止日志后执行一次`reset run`恢复。后续规则会话结束时再次出现ping正常但80端口拒绝；A/B非停机读数中HTTP loop=`0x3082→0x3175`、W5500 loop=`0x3085→0x3178`、CAN loop=`0x69c99→0x6bed8`，socket0一直`0x17(ESTABLISHED)`，request count固定22，关闭空白浏览器标签后仍未释放，只能再次复位。DBC上传后的确认框中断窗口又观察到socket0=`0x17`、`lastNonclosedClose=0x11c`、runtime未激活，故再次复位后才完成正确激活。上述失败不能由后续成功窗口覆盖。
+- 最终封口窗口页面保持打开且自动刷新停止，console warn/error为空。ping=`2/2`；以1秒间隔顺序读取status、CAN status、CAN TX、TX signals、RX signals、manual、log control、DBC runtime、rules共9个GET，全部HTTP200、单次total约`17..33 ms`。最终CAN tx/rx=`293/203864`、errors/busOff/TEC/REC=0；TX/RX信号分别为marker/sequence=`42434/256`和`42434/4658`、quality=ok；manual disabled且输出`1/0`；日志disabled/1000 ms；DBC generation=2；规则两槽恢复。status仍保留`lastNonclosedClose=284`，所以本阶段结论是“所有业务功能均已操作并可回读，但完整网页HTTP稳定性不通过”，下一任务必须先用同连接pcap与现有trace定位响应/ACK/关闭时间线，再决定最小修复。

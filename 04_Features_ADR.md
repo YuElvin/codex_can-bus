@@ -6,11 +6,11 @@
 | --- | --- | --- | --- |
 | F-001 | W5500 SPI 网络 bring-up | [客观已验证] | 作为当前网络主路径，替代 LAN8720/RMII |
 | F-002 | FDCAN2 外部 CAN 收发 | [客观已验证] | `PB5/PB6` + MCP2562FD + USBCAN-2E-U 是当前外部 CAN 主通道 |
-| F-003 | TF 卡 FatFs 存储 | [基础路径已验证；P0断电恢复待复测] | smoke test与既有静态页/日志路径通过；首次持续写入物理断电后的主机只读检查发现文件系统错误且目标CSV不可见。已完成底层同步最小源码修复和静态验证，但尚未在干净介质上烧录复测 |
+| F-003 | TF 卡 FatFs 存储 | [P0物理断电与恢复通过] | 首次污染介质复核失败保留为历史；底层`CTRL_SYNC`和scratch写ready等待修复后，干净FAT32介质已完成持续写入物理断电、只读CSV完整性、`fsck_msdos -n=0`及重新上电续写验证 |
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [一期边界客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask及固定深度RX/TX/DBC/config队列均已运行验证；W5500与FatFs共享资源由mutex串行化。通用消息总线和通用配置服务为非目标 |
-| F-007 | W5500 HTTP/API | [一期边界客观已验证] | 状态、CAN、signals、静态页、DBC、规则和manual受限API均已烧录/现场验证；F-76完整响应与双向FIN、G-1的200/400/404和G-2的500均通过。保持单socket非并发边界 |
+| F-007 | W5500 HTTP/API | [历史一期通过；最新全量回归阻断] | 历史F-76、G-1和G-2证据保留；最新最终固件网页全功能回归中，业务POST已应用但页面`Failed to fetch`，随后两次多操作会话出现ping正常、80端口拒绝、socket0=`0x17(ESTABLISHED)`且任务继续增长，其中一次`lastNonclosedClose=0x11c`。复位后9个串行GET均200不能抵消失败，当前HTTP稳定性不得标为通过 |
 | F-008 | DBC 解析和信号缓存 | [一期边界客观已验证] | runtime active DBC双槽快照、mutex、外部CANtest RX解码、独立TX self-test缓存和最多两项`/api/signals`均已验证；G-1外部marker/sequence及DBC RX增长且decode error=0 |
 | F-009 | 日志和规则引擎 | [一期边界客观已验证] | LogTask长跑、实体CSV、冷启动恢复及G-1同映像增长通过；QSPI单规则与TF固定两槽v2/v3、优先级、manual、timeout/safeState、HTTP CRUD和GPIO均有现场证据。热插拔、无界规则和通用配置为非目标 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |
@@ -237,6 +237,8 @@ G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与
 首轮页面曾在重入后端口80连续5次失败；GDB当时为socket0=`0x17(ESTABLISHED)`、HTTP status/error=`0/0`、requestCount=`403`、RX_RSR=`0`、HTTP任务tick增长。该历史失败不单独证明根因。
 
 最小修复恢复`www/index.html`第4个串行请求后的250ms收尾等待。用户已部署该网页并上电，严格串行自动刷新和两次reload重入均无连接拒绝；样本TX/RX=`120/273→134/417`、`145/527`、`162/694`。因此此修复在本验证窗口内通过，原先ESTABLISHED无RX不再是当前阻断，也不被扩写为既定状态机根因。
+
+2026-07-26最新最终固件全功能回归推翻了上一段“当前无阻断”的时效性：在manual、日志、规则和DBC组合页面操作中再次观察到业务已应用但浏览器`Failed to fetch`，以及ping正常、socket0=`0x17(ESTABLISHED)`、80端口拒绝且关闭标签不能恢复，其中一次`lastNonclosedClose=0x11c`。复位后成功的低频串行窗口只证明恢复可用，不能覆盖失败样本；ADR-030的250ms网页收尾仍保留，但已不足以关闭当前HTTP稳定性问题，下一补丁必须等待同连接pcap/trace证据。
 
 ### ADR-031：安全审查 P0 保持既有架构的可靠性防护
 

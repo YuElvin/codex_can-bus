@@ -8,6 +8,7 @@
 
 ## 当前阶段
 
+- 最新固件网页全功能回归已于2026-07-26完成，业务功能逐项均可操作，但HTTP传输稳定性未通过：自动刷新期间手动继电器POST曾在板端实际应用后由页面显示`Failed to fetch`；后续两次多操作会话均出现ping正常、80端口拒绝，非停机读数显示RTOS/HTTP/W5500/CAN任务继续增长而socket0停在`0x17(ESTABLISHED)`，其中一次`lastNonclosedClose=0x11c`。两次均需`reset run`恢复。恢复后的最终窗口中DBC上传为151 B/3行/1消息/2信号，激活使runtime generation=`1→2`；规则slot1已恢复为`Can2Data.marker/42435/off/priority20`，manual关闭且输出`1/0`，日志关闭/1000 ms，TX恢复`0x321`/DLC8/`C2 A5 00 01 02 03 04 05`/1000 ms。最终低频串行9个GET全部HTTP200且网页保持打开、自动刷新停止、控制台warn/error为空，但status仍保留`lastNonclosedClose=284`。本轮只做运行态测试与治理，不改源码、不编译，故没有新增反汇编；下一固定工程任务是先以同连接pcap和现有HTTP trace定位该回归，再决定最小修复，不得把“各业务接口最终200”误写成网页全功能稳定通过。
 - 安全审查P0整改已完成源码、CTest=`19/19`、最终ELF反汇编、ST-Link烧录、IWDG受控任务卡死复位、Crash Dump保持链路及外部CAN高负载验证。当前板上为紧凑队列候选ELF/HEX SHA-256=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`：FIFO0=`16`，RX队列为`32 x 16 B Can2RxQueueFrame`。完整32项`CanFrame`候选已因FreeRTOS heap不足导致rule任务创建失败而撤回。烧录实际得到`Programming Finished`、`Verified OK`、`Resetting Target`；外部500 kbit/s负载的两个连续非停机20秒窗口中FIFO `full/lost=2/2->2/2->2/2`、RX queue drop=`0->0->0`，RX入队=`117033->140962->167987`、DBC匹配=`614->653->696`，故当前候选的运行态无丢帧通过。前一生产快照IWDG=`PR=6/RLR=1000/SR=0`、refresh=`32->35`、CAN loop=`1086->1182`、unhealthy=`0`。Crash record在`0x38000100`，写入后Clean D-Cache，受控HardFault handler复位前后校验和一致；这不替代真实硬件异常的根因栈证据。
 - 早期“FIFO full/lost和RX drop增长”的GDB暂停式读数已确认被调试暂停污染：目标暂停期间外部1 kfps输入会填满FIFO并在恢复时突发drain，后续只采用非停机读取；高负载P0已闭合。TF首次物理断电复核失败：`/log`及目标会话文件不可见，`fsck_msdos -n`返回206。源码已最小修复`CTRL_SYNC`无条件成功和scratch写分支未等卡ready；最新`./scripts/verify.sh` CTest=`20/20`，ELF/HEX=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`，反汇编确认两条有界ready等待。失败卡整盘镜像已校验，介质重建为MBR/FAT32后恢复网页/active/candidate DBC并以卸载后`fsck=0`确认；候选烧录、冷启动TF/DBC/网页基线、外部CAN持续落盘和第二次物理断电后的主机只读验收均通过。目标CSV为399223 B/4159行，4158条数据全部8列、时间单调、末尾换行且无撕裂行；`fsck_msdos -n`退出0，网页和两份DBC与仓库源一致。TF插回重新上电后RTOS/W5500/TF/QSPI、网页、active DBC和外部CAN恢复；新日志文件=`39223→54775 B`、write/flush=`68→95`，failure/drop=0且底层open/write/sync/close均为0。P0故障注入A/B/C阶段判定通过，下一步在阶段提交后按审查报告选择仍未关闭的下一项高风险整改，不扩大本次P0补丁。执行细节见`docs/P0_FAULT_INJECTION.md`。
 
@@ -36,9 +37,10 @@
 ## Git 基线与工作树
 
 - P0 TF掉电同步修复、部署资产测试和治理提交为`691d509 Complete P0 TF power-loss hardening`，已推送到`origin/codex/W5500`。该提交对应最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`及本轮20/20、反汇编、烧录、物理断电与恢复证据。
+- P0治理提交`b288f48 Record P0 TF delivery`也已推送，本地/远端ahead/behind=`0/0`。重新对照原始5页审查报告后，报告明确列出的5个P0均已关闭；剩余确认高风险必要项为局域网写操作授权和生产CAN TX白名单。当前阻断是缺少生产合同：允许的CAN ID/DLC/数据约束/最小周期，以及采用何种授权载体；不得把测试帧`0x321`或仓库内默认token擅自固化为生产策略。
 - 上一阶段功能提交为`13613f637554102f3b8f105fb88f657e7c1ae38e`（`13613f6 Add time-synced web logging controls`），已推送至`origin/codex/W5500`；本轮启动只读核对为工作树干净、本地与远端ahead/behind=`0/0`。
-- 最终固件源码提交：`0ef7d3e1bf5bd5eecffd1f2f0c912fbe3e230304`；之后只有治理Markdown变化。
-- 本轮工作树另有未提交的`firmware/bringup/w5500_bringup.c`最小 CLOSE_WAIT 修复；已将其构建产物`build/stm32h750/can_bus_gateway_stm32h750.hex`烧录并完成本轮现场回归，但它仍不可与`0ef7d3e1`对应的历史映像或证据混用。
+- 当前最新固件源码提交为`691d509 Complete P0 TF power-loss hardening`；板上同一提交候选的ELF/HEX哈希为`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。`0ef7d3e`仅为P0之前的历史一期固件基线，不再是当前最新源码提交。
+- 本轮网页全功能回归未修改固件、网页、CMake或测试源码；提交前工作树只包含本轮状态、风险、教训和对话记录的治理Markdown。
 - 分支：`codex/W5500`，跟踪 `origin/codex/W5500`。
 - G-3治理封口提交`fe2154c`已推送；推送后工作树干净，本地与远端ahead/behind=`0/0`。
 
