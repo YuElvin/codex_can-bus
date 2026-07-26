@@ -222,3 +222,20 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 页面重入后端口80连续5次连接失败，而ping=3/3。GDB当时为socket0=`0x17 (ESTABLISHED)`、HTTP status/error=`0/0`、requestCount=`403`、`RX_RSR=0`、HTTP任务tick仍增长；网页端到端验收因此未通过。
 - 随后仅修改`www/index.html`恢复第4个请求后的250ms收尾等待；`node --check`与`git diff --check`通过。用户随后已将该网页写TF并上电，自动刷新样本为TX/RX=`120/273→134/417`，两次reload重入样本为`145/527`、`162/694`，均无连接拒绝；四个details默认折叠、灯为`status-lamp ok`、控制台warn/error为空。原先ESTABLISHED且无RX失败样本未复现，故不再列为当前阻断或既定根因。
 - 网页可逆关闭再恢复发送后，最终受控配置为`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，`requestSeq=appliedSeq`且result=0。TX self-test和用户确认CANtest正在发送的外部RX两张DBC表均显示`42434/4660/ok`，外部RX随后增长。该结论不声称已直接从CANtest接收显示屏读到本轮控制帧。
+
+## 2026-07-26 安全审查 P0 整改与板端故障注入状态
+
+- 当前实际工作目录为`/Users/elvin/Desktop/project/can_bus_W5500`，分支`codex/W5500`。本轮已完成源码、host CTest、固件链接/反汇编、ST-Link烧录和有限故障注入；当前板端候选ELF/HEX SHA-256=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`。
+- 已完成静态整改：FDCAN2 FIFO0 新帧/满/丢失 IRQ 通知与诊断计数、任务健康门控 IWDG、`.noinit` fault record 与复位、标准 CAN/DLC/信号布局 DBC 校验、SignalCache stale 返回计数、TF `f_sync()`。
+- 已通过`./scripts/verify.sh`：CTest=`19/19`，最终 STM32H750 ELF=`text/data/bss 112596/768/243932`，FLASH=`113376 B`。最终反汇编已核对 CAN 通知无二次 50 ms 延迟、FDCAN2 IRQ 回调、IWDG条件刷新、IWDG正确启动顺序及 fault record复制后的D-Cache Clean/reset路径。
+- IWDG实验室卡死注入已实际导致复位：复位快照`0x04460000`包含IWDG1 reset flag，且任务恢复；生产映像正常3秒窗口中refresh=`32->35`、CAN loop=`1086->1182`、unhealthy=`0`，IWDG=`PR=6/RLR=1000/SR=0`。受控跳转HardFault handler后，RAM_D3的17字fault record在复位前后完全一致且checksum有效；该受控跳转不能替代真实硬件异常堆栈证据。
+- 暂停式GDB高负载首测曾显示FDCAN FIFO `full=3->5`、`lost=4->6`和RX队列`drop=15->25`；后续确认该读数方法会暂停内核，而外部约1 kfps输入会在暂停期填满FIFO并在恢复时突发drain到软件队列，故不得作为正常运行丢帧结论。已改用OpenOCD telnet `mdw`非停机读取：在同一外部输入下C→D→E两个连续20秒窗口FIFO `full/lost=2/2->2/2->2/2`、RX queue drop=`0->0->0`，RX入队=`117033->140962->167987`、出队=`117030->140957->167983`、DBC匹配=`614->653->696`，last ID始终`0x321`，因此当前候选的FDCAN高负载运行态通过。TF物理掉电恢复仍待现场试验；真实硬件fault的根因栈也未采集。Cache/DMA当前数据路径未发现DMA传输，但fault record已证明D-Cache开启时需要显式Clean。LAN写授权和CAN TX白名单需要明确生产CAN合同与授权来源后才能实现。
+
+- P0 补充核对：最终 ELF 的`BSP_SD_*_DMA`兼容入口实际调用阻塞`HAL_SD_ReadBlocks/WriteBlocks`，W5500也使用阻塞 SPI；当前应用没有 D-Cache enable。因而不存在当前活跃 DMA/cache 未一致性路径，但任何未来 DMA、D-Cache 或 Ethernet 重新纳入构建的变更必须同时补齐 RAM 区域和 cache 维护验证。`f_sync()`已进入日志 append 成功路径，物理掉电恢复仍未验证。
+
+- 剩余 P0 现场验收已固化到`docs/P0_FAULT_INJECTION.md`：FDCAN外部高负载已取得非停机原始读数并通过，当前仅TF物理断电需要继续取得原始读数。IWDG卡死复位及Crash Dump保持链路已执行并记录；真实硬件fault的根因栈属于更高强度补验，不能用受控handler跳转替代。
+
+- 2026-07-26已完成 IWDG 正向板端验证、IWDG受控卡死复位和Crash Dump D-Cache保持修复。历史`95ac.../d6bf...`候选仅保留为前一轮IWDG正向证据；当前验收必须使用本节开头的`37ede.../3336...`最终生产映像哈希，不得混用。
+
+- 高负载首次缓冲候选`FIFO16 + 32 x CanFrame`已被否定：增加约1920 B FreeRTOS heap后，最后rule任务创建失败，目标停在`bringup_default_task`，不能用于验收。已回退完整队列扩容并烧录稳定的FIFO16中间映像（ELF/HEX=`69eac...f59a5`/`8e9ab...02945`）；其CAN/Decode任务重新运行，但实际RX queue drop仍增长，故仅FIFO16不足。
+- `FIFO16 + 32 x Can2RxQueueFrame`候选已烧录：紧凑元素仅携带classic CAN所需`id/IDE/DLC/8字节数据`，32项约512 B，小于原8项完整队列约640 B，DecodeTask取出后重建既有`CanFrame`。`./scripts/verify.sh` CTest=`19/19`、关键反汇编和`git diff --check`通过；候选ELF/HEX=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`。OpenOCD得到`Programming Finished`、`Verified OK`、`Resetting Target`。随后外部高负载在两段连续非停机20秒窗口内FIFO full/lost和RX drop都无增长，且RX/DBC计数持续增长，已闭合该候选的启动与运行态验收。

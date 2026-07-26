@@ -62,6 +62,17 @@ typedef struct {
   RuleFileV4 rule_file_v4;
 } ConfigCommand;
 
+typedef struct {
+  uint32_t can_task;
+  uint32_t decode_task;
+  uint32_t w5500_task;
+  uint32_t http_task;
+  uint32_t dbc_task;
+  uint32_t config_task;
+  uint32_t log_task;
+  uint32_t rule_task;
+} WatchdogSnapshot;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -92,6 +103,7 @@ extern volatile uint32_t g_can2_rx_queue_ready;
 extern volatile uint32_t g_can2_rx_queue_enqueue_count;
 extern volatile uint32_t g_can2_rx_queue_drop_count;
 extern volatile uint32_t g_can2_rx_queue_dequeue_count;
+extern volatile uint32_t g_can2_dbc_stale_mark_count;
 extern volatile uint32_t g_can2_decode_task_started;
 extern volatile uint32_t g_can2_decode_task_loop_count;
 extern volatile uint32_t g_can2_tx_queue_ready;
@@ -115,6 +127,17 @@ volatile uint32_t g_tf_task_started;
 volatile uint32_t g_tf_task_complete;
 volatile uint32_t g_tf_task_last_result = 0xffffffffu;
 static SemaphoreHandle_t g_w5500_mutex;
+static TaskHandle_t g_can2_rx_task_handle;
+#if defined(CAN_BUS_P0_FAULT_INJECTION)
+volatile uint32_t g_p0_fault_inject_can_stall;
+#endif
+static WatchdogSnapshot g_watchdog_snapshot;
+static uint32_t g_watchdog_baseline_ready;
+volatile uint32_t g_watchdog_started;
+volatile uint32_t g_watchdog_init_result = 0xffffffffu;
+volatile uint32_t g_watchdog_refresh_count;
+volatile uint32_t g_watchdog_unhealthy_mask;
+volatile uint32_t g_watchdog_reset_flags;
 extern volatile uint32_t g_w5500_http_dbc_reload_queue_ready;
 extern volatile uint32_t g_w5500_http_dbc_reload_enqueue_count;
 extern volatile uint32_t g_w5500_http_dbc_reload_queue_drop_count;
@@ -231,6 +254,8 @@ static void config_task(void *argument);
 static void signal_log_task(void *argument);
 static void rule_task(void *argument);
 static void rule_task_request_engine_reload(const RuleEngine *candidate);
+static int watchdog_start(void);
+static void watchdog_service(void);
 
 /* USER CODE END PFP */
 
@@ -955,6 +980,16 @@ static void rule_task(void *argument)
       (void)rule_task_load_config(&engine);
     }
 
+    uint32_t stale_after_ms = 0u;
+    for (size_t i = 0u; i < engine.rule_count; ++i) {
+      if (engine.rules[i].enabled && engine.rules[i].timeout_ms > stale_after_ms) {
+        stale_after_ms = engine.rules[i].timeout_ms;
+      }
+    }
+    if (stale_after_ms != 0u) {
+      g_can2_dbc_stale_mark_count +=
+        (uint32_t)can2_signal_cache_mark_stale(now_ms, stale_after_ms);
+    }
     const size_t count = can2_signal_cache_export_rule_snapshots_for_engine(&engine, signals, 2u);
 
     g_rule_task_input_count = (uint32_t)count;
@@ -1117,9 +1152,15 @@ static void can2_periodic_task(void *argument)
 
   g_can_task_started = 1u;
   for (;;) {
+#if defined(CAN_BUS_P0_FAULT_INJECTION)
+    if (g_p0_fault_inject_can_stall != 0u) {
+      vTaskDelay(pdMS_TO_TICKS(50u));
+      continue;
+    }
+#endif
+    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50u));
     (void)can2_analyzer_poll();
     g_can_task_loop_count++;
-    vTaskDelay(pdMS_TO_TICKS(50u));
   }
 }
 
@@ -1228,10 +1269,88 @@ static void monitor_task(void *argument)
   g_monitor_task_started = 1u;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(1000u));
+    watchdog_service();
     ++g_freertos_loop_count;
     ++g_monitor_task_loop_count;
     bringup_print_status("run");
     bringup_print_http_trace();
+  }
+}
+
+static int watchdog_start(void)
+{
+  uint32_t wait_started_ms;
+
+  g_watchdog_reset_flags = RCC->RSR;
+  RCC->RSR = RCC_RSR_RMVF;
+  RCC->CSR |= RCC_CSR_LSION;
+  wait_started_ms = HAL_GetTick();
+  while ((RCC->CSR & RCC_CSR_LSIRDY) == 0u) {
+    if ((uint32_t)(HAL_GetTick() - wait_started_ms) >= 100u) {
+      g_watchdog_init_result = 1u;
+      return 1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+
+  IWDG1->KR = 0xccccu;
+  IWDG1->KR = 0x5555u;
+  IWDG1->PR = 6u;
+  IWDG1->RLR = 1000u;
+  wait_started_ms = HAL_GetTick();
+  while ((IWDG1->SR & (IWDG_SR_PVU | IWDG_SR_RVU)) != 0u) {
+    if ((uint32_t)(HAL_GetTick() - wait_started_ms) >= 100u) {
+      g_watchdog_init_result = 2u;
+      return 1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+
+  IWDG1->KR = 0xaaaau;
+  g_watchdog_baseline_ready = 0u;
+  g_watchdog_unhealthy_mask = 0u;
+  g_watchdog_init_result = 0u;
+  g_watchdog_started = 1u;
+  return 0;
+}
+
+static void watchdog_service(void)
+{
+  WatchdogSnapshot current = {
+    .can_task = g_can_task_loop_count,
+    .decode_task = g_can2_decode_task_loop_count,
+    .w5500_task = g_w5500_task_loop_count,
+    .http_task = g_http_task_loop_count,
+    .dbc_task = g_dbc_task_loop_count,
+    .config_task = g_config_task_loop_count,
+    .log_task = g_log_task_loop_count,
+    .rule_task = g_rule_task_loop_count,
+  };
+  uint32_t unhealthy = 0u;
+
+  if (g_watchdog_started == 0u) {
+    return;
+  }
+  if (g_watchdog_baseline_ready == 0u) {
+    g_watchdog_snapshot = current;
+    g_watchdog_baseline_ready = 1u;
+    return;
+  }
+
+  if (current.can_task == g_watchdog_snapshot.can_task) unhealthy |= 1u << 0;
+  if (current.decode_task == g_watchdog_snapshot.decode_task) unhealthy |= 1u << 1;
+  if (current.w5500_task == g_watchdog_snapshot.w5500_task) unhealthy |= 1u << 2;
+  if (current.http_task == g_watchdog_snapshot.http_task) unhealthy |= 1u << 3;
+  if (current.dbc_task == g_watchdog_snapshot.dbc_task) unhealthy |= 1u << 4;
+  if (current.config_task == g_watchdog_snapshot.config_task) unhealthy |= 1u << 5;
+  if (current.log_task == g_watchdog_snapshot.log_task) unhealthy |= 1u << 6;
+  if (current.rule_task == g_watchdog_snapshot.rule_task) unhealthy |= 1u << 7;
+
+  g_watchdog_snapshot = current;
+  g_watchdog_unhealthy_mask = unhealthy;
+  if (unhealthy == 0u) {
+    IWDG1->KR = 0xaaaau;
+    ++g_watchdog_refresh_count;
   }
 }
 
@@ -1421,10 +1540,11 @@ static void bringup_default_task(void *argument)
                   1024u,
                   NULL,
                   tskIDLE_PRIORITY + 3u,
-                  NULL) != pdPASS) {
+                  &g_can2_rx_task_handle) != pdPASS) {
     g_can_task_started = 0xffffffffu;
     Error_Handler();
   }
+  can2_analyzer_set_rx_task_handle(g_can2_rx_task_handle);
   if (xTaskCreate(can2_decode_task,
                   "can2dec",
                   512u,
@@ -1498,6 +1618,9 @@ static void bringup_default_task(void *argument)
     Error_Handler();
   }
   rule_file_load_from_tf();
+  if (watchdog_start() != 0) {
+    Error_Handler();
+  }
 
   vTaskDelete(NULL);
 }

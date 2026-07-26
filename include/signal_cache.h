@@ -53,6 +53,6 @@ size_t signal_cache_export_rule_snapshots_for_engine(const SignalCache *cache,
                                                      const RuleEngine *engine,
                                                      SignalSnapshot *out_signals,
                                                      size_t out_capacity);
-void signal_cache_mark_stale(SignalCache *cache, uint32_t now_ms, uint32_t stale_after_ms);
+size_t signal_cache_mark_stale(SignalCache *cache, uint32_t now_ms, uint32_t stale_after_ms);
 
 #endif

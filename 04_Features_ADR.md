@@ -237,3 +237,17 @@ G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与
 首轮页面曾在重入后端口80连续5次失败；GDB当时为socket0=`0x17(ESTABLISHED)`、HTTP status/error=`0/0`、requestCount=`403`、RX_RSR=`0`、HTTP任务tick增长。该历史失败不单独证明根因。
 
 最小修复恢复`www/index.html`第4个串行请求后的250ms收尾等待。用户已部署该网页并上电，严格串行自动刷新和两次reload重入均无连接拒绝；样本TX/RX=`120/273→134/417`、`145/527`、`162/694`。因此此修复在本验证窗口内通过，原先ESTABLISHED无RX不再是当前阻断，也不被扩写为既定状态机根因。
+
+### ADR-031：安全审查 P0 保持既有架构的可靠性防护
+
+本轮不新增 HTTP、网页、规则动作或存储架构。FDCAN2 继续由高优先级 CAN 任务消费，但在原有最多 50 ms 轮询基础上启用 FIFO0 新帧、满和丢失通知；ISR 仅计数和 `vTaskNotifyGiveFromISR`，任务被通知后立即 drain FIFO，FIFO fill/满/丢失计数仅作诊断，不改变 CAN 业务语义。
+
+独立 IWDG 仅在 CAN、解码、W5500、HTTP、DBC、配置、日志和规则任务自上一巡均有进展时刷新；首次巡检只建立基线。MemManage、BusFault、UsageFault 和 HardFault 保存堆栈寄存器、LR 与 SCB fault 状态到 RAM_D3 `.noinit` 的 68 B XOR 校验记录后系统复位。该记录用于复位后调试读取，不新增网络导出或持久化 API。
+
+DBC 沿用当前 classic CAN 窄合同：仅标准 ID`0..0x7ff`、DLC`0..8`，每个信号必须在所属消息 DLC 位范围内且 factor 非零、minimum 不大于 maximum；不在本 ADR 中支持扩展帧。RuleTask 按当前启用规则的最大 timeout 维护 SignalCache `stale`质量，规则自身仍按各自 timeout 判定安全态。TF 追加写成功后执行 `f_sync()`，不改变现有 512 B/5 s 批量策略，也不把它表述为已完成掉电恢复协议。
+
+IWDG启动额外显式等待LSI ready，并按`0xCCCC -> 0x5555 -> PR/RLR -> 等待SR -> 0xAAAA`顺序配置，避免硬件拒绝预启动配置。Fault record位于`RAM_D3+0x100`，复制后显式Clean D-Cache再复位，确保`.noinit`记录在软件复位后可按XOR校验读取。
+
+本 ADR 已完成 CTest=`19/19`、最终 STM32H750 ELF链接/关键反汇编、生产映像烧录，以及实验室IWDG任务卡死复位和受控HardFault处理链路验证。后者证明记录复制、D-Cache回写、复位及RAM_D3保持，不等价于真实硬件异常的堆栈根因采集。外部 CAN 高负载已通过非停机读取验证；TF 物理断电仍未验证。LAN 写授权与 TX 白名单因缺少生产允许报文合同和授权来源，明确不在本 ADR 中擅自假定。
+
+高负载暂停式GDB首测会在内核暂停期人为填满FIFO，故不能以该读数评估运行态。完整`32 x CanFrame`RX队列确因FreeRTOS heap耗尽导致rule任务创建失败，故不采用该方案。保持任务、队列和DecodeTask边界不变，RX队列改为`32 x Can2RxQueueFrame`（`id/IDE/DLC/8字节数据`，反汇编为`xQueueGenericCreate(32, 16)`），DecodeTask再重建既有`CanFrame`。在用户持续外部输入下，OpenOCD telnet `mdw`非停机C→D→E两个20秒窗口中FIFO full/lost和RX queue drop均无增长，而RX与DBC匹配持续增长；该候选的FDCAN高负载P0通过。

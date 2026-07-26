@@ -8,6 +8,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(CAN_BUS_BUILD_TESTS "Build host-side unit tests" ON)
 option(CAN_BUS_BUILD_STM32H750_FIRMWARE "Build STM32H750 firmware image" OFF)
+option(CAN_BUS_P0_FAULT_INJECTION "Build the lab-only P0 watchdog fault injection hook" OFF)
 
 add_library(can_bus_core
   src/core/can_tx_control.c
@@ -143,6 +144,10 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     USE_HAL_DRIVER
     STM32H750xx
   )
+
+  if(CAN_BUS_P0_FAULT_INJECTION)
+    target_compile_definitions(can_bus_gateway_stm32h750 PRIVATE CAN_BUS_P0_FAULT_INJECTION=1)
+  endif()
 
   target_compile_options(can_bus_gateway_stm32h750 PRIVATE
     -mcpu=cortex-m7

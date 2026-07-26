@@ -52,7 +52,7 @@ static int test_stale_and_rule_snapshot_export(void) {
 
   ASSERT_TRUE(signal_cache_upsert(&cache, "EngineData", "rpm", "rpm", 1200.0, 9600, 10u));
   ASSERT_TRUE(signal_cache_upsert(&cache, "EngineData", "temp", "degC", 80.0, 120, 70u));
-  signal_cache_mark_stale(&cache, 120u, 100u);
+  ASSERT_EQ_SIZE(1u, signal_cache_mark_stale(&cache, 120u, 100u));
 
   SignalSnapshot snapshots[4];
   const size_t count = signal_cache_export_rule_snapshots(&cache, snapshots, 4u);

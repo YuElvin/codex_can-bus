@@ -47,6 +47,7 @@ volatile uint32_t g_can2_dbc_matched_frame_count;
 volatile uint32_t g_can2_dbc_signal_update_count;
 volatile uint32_t g_can2_dbc_decode_error_count;
 volatile uint32_t g_can2_dbc_cache_count;
+volatile uint32_t g_can2_dbc_stale_mark_count;
 volatile uint32_t g_can2_dbc_last_message_id;
 volatile uint32_t g_can2_dbc_tx_self_test_frame_count;
 volatile uint32_t g_can2_dbc_rx_frame_count;
@@ -60,6 +61,10 @@ volatile uint32_t g_can2_tx_queue_ready;
 volatile uint32_t g_can2_tx_queue_enqueue_count;
 volatile uint32_t g_can2_tx_queue_drop_count;
 volatile uint32_t g_can2_tx_queue_dequeue_count;
+volatile uint32_t g_can2_rx_fifo_irq_count;
+volatile uint32_t g_can2_rx_fifo_full_count;
+volatile uint32_t g_can2_rx_fifo_lost_count;
+volatile uint32_t g_can2_rx_fifo_fill_max;
 volatile uint32_t g_can2_bus_off_recovery_attempt_count;
 volatile uint32_t g_can2_bus_off_recovery_result;
 
@@ -67,8 +72,16 @@ static Stm32FdcanContext g_can2_ctx;
 static CanPort g_can2_port;
 static SignalCache g_can2_signal_cache;
 static SignalCache g_can2_tx_self_test_signal_cache;
+typedef struct {
+  uint32_t id;
+  uint8_t ide;
+  uint8_t dlc;
+  uint8_t data[8];
+} Can2RxQueueFrame;
+
 static QueueHandle_t g_can2_rx_queue;
 static QueueHandle_t g_can2_tx_queue;
+static TaskHandle_t g_can2_rx_task_handle;
 static CanTxControlState g_can2_tx_control;
 static uint32_t g_can2_tx_last_due_tick;
 static uint32_t g_can2_tx_deadline_ready;
@@ -335,6 +348,13 @@ int can2_analyzer_bringup_run(void) {
   if (can_port_start(&g_can2_port) != CAN_PORT_OK) {
     return 2;
   }
+  if (HAL_FDCAN_ActivateNotification(&hfdcan2,
+                                     FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                                       FDCAN_IT_RX_FIFO0_FULL |
+                                       FDCAN_IT_RX_FIFO0_MESSAGE_LOST,
+                                     0u) != HAL_OK) {
+    return 3;
+  }
 
   can_tx_control_init(&g_can2_tx_control);
   g_can2_tx_last_due_tick = 0u;
@@ -344,14 +364,46 @@ int can2_analyzer_bringup_run(void) {
   return 0;
 }
 
+void can2_analyzer_set_rx_task_handle(void *task_handle) {
+  g_can2_rx_task_handle = (TaskHandle_t)task_handle;
+}
+
+void can2_analyzer_rx_notify_from_isr(uint32_t events) {
+  BaseType_t task_woken = pdFALSE;
+
+  ++g_can2_rx_fifo_irq_count;
+  if ((events & FDCAN_IT_RX_FIFO0_FULL) != 0u) {
+    ++g_can2_rx_fifo_full_count;
+  }
+  if ((events & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0u) {
+    ++g_can2_rx_fifo_lost_count;
+  }
+  if (g_can2_rx_task_handle != NULL) {
+    vTaskNotifyGiveFromISR(g_can2_rx_task_handle, &task_woken);
+    portYIELD_FROM_ISR(task_woken);
+  }
+}
+
 int can2_analyzer_receive(void) {
   CanFrame rx;
+  const uint32_t fill_level = hfdcan2.Instance->RXF0S & FDCAN_RXF0S_F0FL_Msk;
+
+  if (fill_level > g_can2_rx_fifo_fill_max) {
+    g_can2_rx_fifo_fill_max = fill_level;
+  }
 
   while (can_port_receive(&g_can2_port, &rx) == CAN_PORT_OK) {
+    Can2RxQueueFrame queued = {
+      .id = rx.id,
+      .ide = (uint8_t)rx.ide,
+      .dlc = rx.dlc,
+    };
+
+    memcpy(queued.data, rx.data, rx.dlc);
     g_can2_rx_id = rx.id;
     g_can2_rx_dlc = rx.dlc;
     g_can2_rx_first_byte = rx.data[0];
-    if (g_can2_rx_queue == NULL || xQueueSend(g_can2_rx_queue, &rx, 0u) != pdPASS) {
+    if (g_can2_rx_queue == NULL || xQueueSend(g_can2_rx_queue, &queued, 0u) != pdPASS) {
       ++g_can2_rx_queue_drop_count;
     } else {
       ++g_can2_rx_queue_enqueue_count;
@@ -362,17 +414,25 @@ int can2_analyzer_receive(void) {
 }
 
 int can2_analyzer_decode_pending(void) {
-  CanFrame rx;
+  CanFrame tx;
+  Can2RxQueueFrame queued;
 
-  while (g_can2_tx_queue != NULL && xQueueReceive(g_can2_tx_queue, &rx, 0u) == pdPASS) {
+  while (g_can2_tx_queue != NULL && xQueueReceive(g_can2_tx_queue, &tx, 0u) == pdPASS) {
     ++g_can2_tx_queue_dequeue_count;
-    g_can2_send_result = can_port_send(&g_can2_port, &rx);
+    g_can2_send_result = can_port_send(&g_can2_port, &tx);
     if (g_can2_send_result == CAN_PORT_OK) {
-      decode_can2_frame(&rx, true);
+      decode_can2_frame(&tx, true);
     }
   }
 
-  while (g_can2_rx_queue != NULL && xQueueReceive(g_can2_rx_queue, &rx, 0u) == pdPASS) {
+  while (g_can2_rx_queue != NULL && xQueueReceive(g_can2_rx_queue, &queued, 0u) == pdPASS) {
+    CanFrame rx = {
+      .id = queued.id,
+      .ide = (CanIdType)queued.ide,
+      .dlc = queued.dlc,
+    };
+
+    memcpy(rx.data, queued.data, sizeof(queued.data));
     ++g_can2_rx_queue_dequeue_count;
     decode_can2_frame(&rx, false);
   }
@@ -380,7 +440,7 @@ int can2_analyzer_decode_pending(void) {
 }
 
 int can2_analyzer_rx_queue_init(void) {
-  g_can2_rx_queue = xQueueCreate(8u, sizeof(CanFrame));
+  g_can2_rx_queue = xQueueCreate(32u, sizeof(Can2RxQueueFrame));
   g_can2_rx_queue_ready = g_can2_rx_queue != NULL ? 1u : 0u;
   return g_can2_rx_queue_ready == 1u ? 0 : 1;
 }
@@ -475,6 +535,15 @@ size_t can2_tx_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capac
   count = signal_cache_copy(&g_can2_tx_self_test_signal_cache, out_entries, out_capacity);
   taskEXIT_CRITICAL();
   return count;
+}
+
+size_t can2_signal_cache_mark_stale(uint32_t now_ms, uint32_t stale_after_ms) {
+  size_t marked;
+
+  taskENTER_CRITICAL();
+  marked = signal_cache_mark_stale(&g_can2_signal_cache, now_ms, stale_after_ms);
+  taskEXIT_CRITICAL();
+  return marked;
 }
 
 size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity) {

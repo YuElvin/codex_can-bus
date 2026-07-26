@@ -76,10 +76,13 @@ int can2_analyzer_receive(void);
 int can2_analyzer_decode_pending(void);
 int can2_analyzer_rx_queue_init(void);
 int can2_analyzer_tx_queue_init(void);
+void can2_analyzer_set_rx_task_handle(void *task_handle);
+void can2_analyzer_rx_notify_from_isr(uint32_t events);
 int can2_tx_control_submit(const CanTxControlConfig *config, uint32_t *request_seq);
 void can2_tx_control_snapshot(CanTxControlState *state);
 size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
 size_t can2_tx_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
+size_t can2_signal_cache_mark_stale(uint32_t now_ms, uint32_t stale_after_ms);
 size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity);
 size_t can2_signal_cache_export_rule_snapshots_for_engine(const RuleEngine *engine,
                                                           SignalSnapshot *out_signals,

@@ -128,7 +128,7 @@ static bool parse_message(DbcDatabase *db, const char *line) {
     ++db->error_lines;
     return false;
   }
-  if (db->message_count >= DBC_MAX_MESSAGES || dlc > CAN_FRAME_MAX_DATA_LEN) {
+  if (db->message_count >= DBC_MAX_MESSAGES || id > 0x7ffu || dlc > CAN_FRAME_MAX_DATA_LEN) {
     ++db->error_lines;
     return false;
   }
@@ -141,6 +141,29 @@ static bool parse_message(DbcDatabase *db, const char *line) {
   message->signal_count = 0u;
   db->last_message_index = (int)db->message_count;
   ++db->message_count;
+  return true;
+}
+
+static bool signal_fits_message(unsigned long start_bit,
+                                unsigned long bit_length,
+                                char endian,
+                                uint8_t dlc) {
+  const int frame_bits = (int)dlc * 8;
+
+  if (start_bit >= (unsigned long)frame_bits) {
+    return false;
+  }
+  if (endian == '1') {
+    return start_bit + bit_length <= (unsigned long)frame_bits;
+  }
+
+  int bit = (int)start_bit;
+  for (unsigned long i = 0u; i < bit_length; ++i) {
+    if (bit < 0 || bit >= frame_bits) {
+      return false;
+    }
+    bit = (bit % 8 == 0) ? bit + 15 : bit - 1;
+  }
   return true;
 }
 
@@ -189,7 +212,9 @@ static bool parse_signal(DbcDatabase *db, const char *line) {
     ++db->error_lines;
     return false;
   }
-  if (start_bit > 511u || bit_length == 0u || bit_length > 63u) {
+  const DbcMessage *message = &db->messages[db->last_message_index];
+  if (start_bit > 511u || bit_length == 0u || bit_length > 63u || factor == 0.0 ||
+      minimum > maximum || !signal_fits_message(start_bit, bit_length, endian, message->dlc)) {
     ++db->error_lines;
     return false;
   }
@@ -206,8 +231,7 @@ static bool parse_signal(DbcDatabase *db, const char *line) {
   signal->spec.maximum = maximum;
   copy_name(signal->unit, sizeof(signal->unit), unit);
 
-  DbcMessage *message = &db->messages[db->last_message_index];
-  ++message->signal_count;
+  ++db->messages[db->last_message_index].signal_count;
   ++db->signal_count;
   return true;
 }

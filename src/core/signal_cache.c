@@ -155,15 +155,19 @@ size_t signal_cache_export_rule_snapshots_for_engine(const SignalCache *cache,
   return written;
 }
 
-void signal_cache_mark_stale(SignalCache *cache, uint32_t now_ms, uint32_t stale_after_ms) {
+size_t signal_cache_mark_stale(SignalCache *cache, uint32_t now_ms, uint32_t stale_after_ms) {
+  size_t marked = 0u;
+
   if (cache == NULL || stale_after_ms == 0u) {
-    return;
+    return 0u;
   }
 
   for (size_t i = 0u; i < cache->count; ++i) {
     SignalCacheEntry *entry = &cache->entries[i];
     if (entry->quality == SIGNAL_QUALITY_OK && now_ms - entry->updated_ms > stale_after_ms) {
       entry->quality = SIGNAL_QUALITY_STALE;
+      ++marked;
     }
   }
+  return marked;
 }

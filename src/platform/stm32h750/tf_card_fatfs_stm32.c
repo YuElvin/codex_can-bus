@@ -20,6 +20,7 @@ volatile uint32_t g_tf_mkdir_result;
 volatile uint32_t g_tf_write_attempts;
 volatile uint32_t g_tf_write_open_result;
 volatile uint32_t g_tf_write_result;
+volatile uint32_t g_tf_write_sync_result;
 volatile uint32_t g_tf_write_close_result;
 volatile uint32_t g_tf_write_len;
 volatile uint32_t g_tf_replace_unlink_result;
@@ -421,6 +422,7 @@ int stm32h750_tf_append_file_locked(const char *path,
     return 1;
   }
   g_tf_append_stage = 3u;
+  g_tf_write_sync_result = FR_OK;
   g_tf_write_result = f_lseek(&file, f_size(&file));
   if (g_tf_write_result != FR_OK) {
     failure_stage = 3u;
@@ -429,6 +431,11 @@ int stm32h750_tf_append_file_locked(const char *path,
     g_tf_write_result = f_write(&file, data, (UINT)len, &written);
     if (g_tf_write_result != FR_OK || written != len) {
       failure_stage = 4u;
+    } else {
+      g_tf_write_sync_result = f_sync(&file);
+      if (g_tf_write_sync_result != FR_OK) {
+        failure_stage = 4u;
+      }
     }
   }
   *file_size = (size_t)f_size(&file);
@@ -439,7 +446,8 @@ int stm32h750_tf_append_file_locked(const char *path,
     failure_stage = 5u;
   }
   tf_fs_unlock();
-  if (g_tf_write_result == FR_OK && g_tf_write_close_result == FR_OK && written == len) {
+  if (g_tf_write_result == FR_OK && g_tf_write_sync_result == FR_OK &&
+      g_tf_write_close_result == FR_OK && written == len) {
     g_tf_append_stage = 6u;
     return 0;
   }

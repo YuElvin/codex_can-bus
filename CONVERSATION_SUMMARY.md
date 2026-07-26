@@ -3361,3 +3361,116 @@
 - CSV 表头精确为`utc_time,unix_ms,updated_ms,key,value,raw,unit,quality`；首条数据为`2026-07-23T17:29:16.745Z,1784827756745,52407,"Can2Data.marker",42434.000000,42434,"count","ok"`。这同时确认 CSV 仍以 UTC 写入，并闭合“每次开始记录按本地开始时间前缀创建会话文件”的需求。
 - `/log`目录自身创建时间仍显示`1970-01-01 08:00:00 CST`，这是既有目录历史元数据；新会话文件的创建/修改时间正常，目录元数据不构成此次文件属性修复失败。
 - 本次仅更新治理 Markdown；未修改源码、网页、测试或构建文件，未构建、反汇编、烧录、浏览器、网络、Git或向TF写入任何数据。
+
+## 2026-07-24 时间同步、断网与复位边界核对
+
+本次只读源码核对确认：当前时间基准由网页提交的`unixMs`与`HAL_GetTick()`组成的 RAM 基准建立，`RTC`未启用；已同步且已启用后的记录路径和`RuleTask`运行路径按源码不依赖网络连接（但首次同步、启停或修改控制仍经网页 HTTP），因此断网不等于这两项本身必然停止。尚无“时间同步后拔网线、持续记录且继电器仍按规则动作”的联合现场证据，不能写为已验证。复位时`signal_log_control_init()`会重新置为未同步和记录关闭，故 RAM 同步状态与记录开关都会丢失；这是源码结论，未在本轮另行现场复位验证。本次仅追加本段治理记录，未修改功能源码、网页或构建文件；未编译，故未执行新的固件反汇编检查；未烧录或进行硬件现场操作。
+
+## 2026-07-26 W5500 分支安全审查报告复核（只读）
+
+- 用户提供`/Users/elvin/Downloads/codex_can_bus_security_audit_report.docx`，审查对象为`codex/W5500`。本轮开始实际目录解析为`/Users/elvin/Desktop/project/can_bus_W5500`，分支为`codex/W5500`、HEAD=`10cb28d`；工作树原有未提交`CONVERSATION_SUMMARY.md`治理记录，未改动其他用户文件。
+- 假设：报告属于通用的嵌入式/CAN可靠性建议，不能直接视为本分支已发生的漏洞。成功标准：逐项以当前源码、单元测试、现有验收记录确认“已覆盖”“确认缺失”或“仅在部署条件满足时成立”；验证方式为只读提取报告、检查相关源文件、测试和治理证据，不执行构建、反汇编、烧录或现场操作。
+- 报告视觉渲染为5页，但本机渲染缺少中文字体，中文显示为方框；已通过DOCX结构化文本完成内容读取，不将此渲染字体问题误作项目固件问题。
+- 已覆盖：`can_tx_control_parse_form()`限制标准ID`0..0x7ff`、DLC`0..8`、周期`100..10000 ms`；`can2_analyzer_poll()`按周期调度且经深度1 TX队列发送。`service_can2_bus_off_recovery()`仅在实际Bus-Off时执行`AbortTxRequest -> Stop -> Start`，并每1000 ms限流重试、记录attempt/result；已有真实Bus-Off和恢复现场证据。`RuleEngine`带逐规则`timeout_ms/safe_state`，SignalCache保存`updated_ms/quality`，RuleTask对失效数据走安全态。W25Q128规则配置已有双槽、版本、sequence、校验和与读回比对；日志已有RAM缓冲（512 B或5 s批量flush）；CAN/解码/规则/HTTP/存储任务优先级已分层，CAN轮询优先级高于HTTP、日志和存储。
+- 确认高风险必要修改：1）未启用IWDG/WWDG，也没有任务心跳聚合与仅健康时喂狗机制；任一关键任务卡死不能受控复位。2）`MemManage_Handler`、`BusFault_Handler`、`UsageFault_Handler`仅无限循环，未保存PC/LR/CFSR/HFSR或持久Crash Dump，现场故障不可诊断。3）FDCAN2为8项硬件RX FIFO、50 ms轮询；源码只统计软件RX队列丢弃，没有启用FIFO满/丢失中断或读取硬件溢出/丢失状态，高负载时不能判定实际帧丢失。4）DBC加载虽限制1 KiB、64消息、256信号和名称长度，但`parse_message()`未限制CAN ID到标准/扩展合法范围，`parse_signal()`也未按所属消息DLC验证bit布局；可能激活运行时永远无法解码的配置。5）`signal_cache_mark_stale()`只在单元测试被调用，运行路径不会把断流后的`quality=ok`转为stale；RuleTask自身仍按每条规则`timeout_ms`进入safe state，但HTTP/日志会持续暴露旧值为正常，应在统一维护点失效并增加断流验证。6）写操作HTTP无认证、配置模式或审计记录，且`/api/can/tx`允许任意标准ID和8字节载荷；在未受物理隔离的LAN上可直接改变规则、继电器、DBC、日志和CAN发送，应在投产前加入设备侧配置授权和TX白名单。
+- 条件性高风险：TF日志在断电时最多丢失当前512 B/5 s缓冲，且没有可验证的FAT断电一致性/恢复协议；若日志承担审计、追溯或安全证据，必须增加断电故障模型、恢复策略和注入验证。当前轮仅能确认W25Q128配置双槽路径已覆盖，不能把它外推为TF日志掉电安全。
+- 不列为当前高风险必要改动：将DBC的`double`一律替换为定点、Rule循环检测/动作事务/动作限流。当前规则只读取SignalCache并驱动两路继电器，不回写CAN/SignalCache，RuleFile V4固定两槽，故报告所述循环和多动作部分成功不构成当前路径；如未来扩展为规则发CAN、多动作或可变规则数，必须重新审计并加入这些保护。
+- 本次只更新本中文治理记录，未修改功能源码、网页、测试、构建文件或报告原件；未编译，故未执行新的固件反汇编检查；未烧录、调试或操作硬件。
+
+## 2026-07-26 安全审查 P0 静态整改：构建与反汇编通过，现场待验
+
+- 本轮保持现有任务和单 socket 架构，未新增 HTTP 路由、网页功能或规则模型。假设为当前 classic CAN 窄合同继续只支持标准 ID；成功标准为把审查中可在当前架构内闭合的 P0 静态缺口改为可验证代码，并保持既有主机测试通过；验证方式为 `./scripts/verify.sh` 与最终 ELF 关键路径反汇编，不烧录或操作硬件。
+- `can2_periodic_task()`改为由 FDCAN2 FIFO0 通知立即轮询、无通知最多 50 ms 兜底轮询；删除通知后的第二个 50 ms 延迟。FDCAN2 启用 FIFO0 新帧/满/丢失通知，IRQ 回调只通知 CAN 任务，并记录 IRQ、FIFO 满、消息丢失和最大 fill level 诊断计数。此为源码和反汇编结论，尚未用外部高负载 CAN 流量验证无丢帧。
+- 新增 IWDG 启动与关键任务进展聚合：CAN、解码、W5500、HTTP、DBC、配置、日志和规则任务都继续前进时才刷新看门狗；启动时读取并清除复位标志。异常处理现在保存异常号、堆栈寄存器、LR 和 SCB fault 状态到 RAM_D3 `.noinit` 的 `g_fault_record`（68 B），随后请求系统复位。尚未在目标板注入死锁或 fault 验证实际复位、记录保留和误复位边界。
+- DBC 解析现拒绝超出标准 CAN `0x7ff` 的 ID、超过 8 字节的 DLC、DLC 外的 Intel/Motorola 位布局、零 factor 和 `minimum > maximum`；SignalCache stale 标记改为返回实际标记数量并补充对应测试。RuleTask 每轮以当前启用规则的最大 timeout 调用该维护函数，使断流旧值最终从`ok`转为`stale`，同时保留每条规则原有的独立超时安全判定。该收紧不支持扩展帧 DBC，若未来引入扩展 CAN 必须先扩展并重新验证完整合同。
+- TF 追加写在成功 `f_write()` 后执行 `f_sync()`；这缩小已返回成功但仍未同步的窗口，但不构成掉电安全证明，512 B/5 s 缓冲与 FAT 掉电恢复仍须物理断电/取卡测试验证。
+- 实际执行`./scripts/verify.sh`：host CTest=`19/19`通过；最终 STM32H750 ELF 链接成功，FLASH=`113280 B/128 KiB (86.43%)`、RAM_D1=`244632 B/512 KiB (46.66%)`、RAM_D3=`68 B/64 KiB`、`text/data/bss=112500/768/243932`。最终反汇编确认 CAN 任务在 `ulTaskGenericNotifyTake(50)` 后直接调用 `can2_analyzer_poll()`并回环；FDCAN2 IRQ 调用 `HAL_FDCAN_IRQHandler()`、FIFO 回调仅对 FDCAN2 进入 ISR 通知；fault handler 保存到`0x38000000`后执行 DSB/AIRCR reset；Monitor 仅在健康掩码为零时向 IWDG 写入`0xaaaa`。
+- 本轮未烧录、未启动 OpenOCD/GDB、未进行 CAN/TF/看门狗现场试验。LAN 写入授权与 CAN TX 白名单仍未实现：必须由用户提供允许的 CAN ID/DLC/载荷范围及授权策略，不能将当前测试配置擅自固化为生产白名单。
+
+## 2026-07-26 安全审查 P0 补充核对：Cache/DMA 与 TF 恢复边界
+
+- 为避免把“DMA”名称误判为实际 DMA，本轮检查最终`can_bus_gateway_stm32h750.elf`符号与反汇编。现有 W5500 SPI 使用阻塞`HAL_SPI_TransmitReceive()`；TF 的`BSP_SD_ReadBlocks_DMA()`和`BSP_SD_WriteBlocks_DMA()`为 FatFs 兼容入口，但最终都调用阻塞`HAL_SD_ReadBlocks()`/`HAL_SD_WriteBlocks()`，未调用 HAL SD DMA API。应用路径也未调用`SCB_EnableDCache()`；`sd_diskio.c`保留的 cache clean/invalidate 分支与生成但未链接的 Ethernet 文件不构成当前 W5500 数据路径的活动 DMA 一致性缺陷。
+- 结论：当前候选不应为了“预防性支持 DMA”引入 MPU、cache 区或 DMA 缓冲重构；以后若切换`HAL_*_DMA`、启用 D-Cache 或把 Ethernet 路径重新纳入构建，必须在同一变更中重新做 buffer 所在 RAM 与 Clean/Invalidate 的逐方向审计和现场验证。
+- TF 方面，已实现的`f_sync()`仅保证一次成功 append 在函数返回前请求 FatFs 同步，且日志任务仅在返回成功时计入 write count；它不能证明电源在写簇或 FAT 更新中断时的文件系统恢复。当前会话日志仍是批量 CSV，物理断电/取卡后的完整行、文件系统可挂载性和最多丢失窗口必须通过报告所列电源瞬断故障注入验证；本轮未操作硬件，不把该项写为已现场通过。
+
+## 2026-07-26 P0 目标板故障注入矩阵已固化
+
+- 新增`docs/P0_FAULT_INJECTION.md`，不创建测试 API、不自动烧录/复位/断电，仅把 P0 剩余的现场验收固定为三项：FDCAN 外部高负载 FIFO、IWDG/Crash Dump、TF 持续写入时电源瞬断。
+- 矩阵绑定当前候选 ELF/HEX SHA-256=`a10fbe7b984046c512cbc755fa6e3318875be22bb4829feac969300b7fe40589`/`da0fc1b7cc981f82dd55625fa092c56c98e886d1887945a16b45fe8a30fc747b`，给出读取的诊断符号、通过/失败标准和恢复动作。`git diff --check`已通过；本次只新增验收文档，未重新构建、烧录或操作硬件。
+- 随后只读查询本机 USB 设备，未发现 ST-Link、STMicroelectronics 或 J-Link 标识；未启动 OpenOCD/GDB。因此当前无法开展矩阵中的板端测试，且该结论不等同于目标板或线缆故障诊断。
+
+## 2026-07-26 P0 板端验收：IWDG 启动顺序修复并通过正向运行验证
+
+- 用户确认硬件已连接后，实际识别到`STLINK V2J37S7`、STM32H7 Cortex-M7，烧录前握手电压`3.263679 V`。初版 P0 映像虽完成`Programming Finished/Verified OK`，但两次快照显示任务计数不增长、PC 停在`bringup_default_task`、`g_watchdog_init_result=1/2`、`g_watchdog_started=0`。该现象未被掩盖为看门狗通过。
+- 实际寄存器读数为 LSI `CSR=0x3`（enable/ready）、IWDG `PR=0/RLR=0xFFF/SR=3`，option `OPTSR_CUR=0x1bc6aaf0`且`IWDG1_SW`为软件控制。根因是 IWDG 启动顺序错误：先解锁配置会被硬件拒绝。最小修复为显式等待 LSI ready 后按`0xCCCC(start) -> 0x5555(write access) -> PR=6/RLR=1000 -> 等待SR清零 -> 0xAAAA(reload)`执行；LSI 与 SR 各保留100 ms超时，并以`g_watchdog_init_result=1/2`区分。未改变任务拓扑、HTTP、CAN或规则语义。
+- 对最终候选执行`./scripts/verify.sh`，host CTest=`19/19`通过，FLASH=`113344 B/128 KiB (86.47%)`、RAM_D1=`244632 B`、`text/data/bss=112564/768/243932`；`git diff --check`通过。最终ELF/HEX SHA-256=`95ac90458f4f5b9d15bef8879d8793463017a042fbf640ad39c307d3c1849936`/`d6bf1419436f904610a42376cd20c7e3bf10755ef32f544dfaed02cd23304784`。反汇编已确认上述 LSI/IWDG 顺序和超时分支。
+- 最终 HEX 已由 ST-Link烧录，输出`Programming Finished`、`Verified OK`、`Resetting Target`，电压`3.247626 V`。复位后两份相隔4秒快照：IWDG为`PR=6/RLR=1000/SR=0`，`g_watchdog_init_result=0`、`g_watchdog_started=1`、refresh=`24->28`、unhealthy mask=`0`；CAN/Decode/W5500/HTTP/DBC/Config/Log/Rule任务计数均增长。FDCAN FIFO IRQ/RX=`287->331`，full/lost始终`0/0`、fill max=`5`、CAN error=`0`。这闭合正常运行和健康门控的板端正向证据，不等于故意阻塞任务后的IWDG复位或CAN高负载无丢帧。
+- 每次 GDB halt 读取后已`resume`并 detach，最终 OpenOCD 已`shutdown`；未执行 HardFault 注入、任务阻塞、TF 断电或外部CAN高负载。`docs/P0_FAULT_INJECTION.md`已更新为本最终候选哈希。
+
+## 2026-07-26 P0 板端故障注入：IWDG复位、Crash Dump D-Cache修复与生产恢复
+
+- 用户确认硬件已连接后，ST-Link实际识别为`V2J37S7`、目标为STM32H7 Cortex-M7，烧录/验证输出为`Programming Finished`、`Verified OK`、`Resetting Target`，电压=`3.247626 V`。本轮使用默认生产映像和一个默认关闭的实验室构建；生产ELF不含`g_p0_fault_inject_can_stall`，实验室构建才含该符号及CAN任务50 ms停滞分支，未把测试钩子保留在生产映像。
+- 实验室构建写入停滞标志后等待12秒，目标自动复位。复位后`g_watchdog_reset_flags=0x04460000`，包含`RCC_RSR_IWDG1RSTF=0x04000000`；测试标志为0且CAN任务循环已重新增长。该结果闭合“受监管任务失去进展时不再喂狗并由IWDG复位”的台架验证，之后立即重烧录生产映像。
+- 首次强制进入HardFault handler后，`.noinit`记录在复位前checksum正确，但复位后最后一个字段改变，校验失败；该失败没有被写为通过。链接映射确认没有第二个对象占用记录区。将记录移到`RAM_D3+0x100`后问题仍存在，确定为Cortex-M7 D-Cache未在软件复位前回写，而非地址冲突。最小修复是在`g_fault_record = record`后执行`SCB_CleanDCache_by_Addr()`，保留DSB/ISB和既有68 B记录结构。
+- 修复后实际重建：`./scripts/verify.sh`的host CTest=`19/19`通过，固件FLASH=`113376 B/128 KiB`、RAM_D1=`244632 B`、RAM_D3=`324 B`、`text/data/bss=112596/768/243932`；反汇编确认`fault_record_capture()`将68 B复制到`0x38000100`，对覆盖的cache line执行clean后才进入AIRCR reset。`git diff --check`通过。最终ELF/HEX SHA-256=`37ede288e4b46fb515323ad6b7adf8df910248b277942ee6f010d57d7c2113ea`/`3336fb12319f479b363ab3fcf9e4e9f1eef1052f38512aefa1d4c2a2c7de6462`。
+- 最终生产HEX已再次烧录并验证。受控跳转`HardFault_Handler`后，复位前后17个记录字完全一致：magic=`0x4641554c`、exception=`4`、checksum=`0x1d7da5c8`；该checksum由记录前16字与种子`0x5a3c19e7`独立复算一致。此测试证明故障处理器记录、D-Cache回写、软件复位与RAM_D3保持链路，不伪称为硬件产生的真实fault或真实PC/LR/CFSR/HFSR根因。
+- 恢复生产映像后的运行读数为IWDG`PR=6/RLR=1000/SR=0`；3秒快照`g_watchdog_refresh_count=32->35`、`g_can_task_loop_count=1086->1182`、unhealthy mask持续`0`。每次halt读取均已resume/detach，OpenOCD未保留为长期服务。外部CAN高负载FIFO测试和TF持续写入时物理断电/取卡恢复均尚未执行，保持P0未关闭项。
+
+## 2026-07-26 P0 外部 CAN 高负载：发送合同说明
+
+- 用户询问需发送的CAN数据与频率。本次只回答现场输入合同，未修改源码、未构建、未执行新的反汇编、烧录或硬件读取。
+- 经当前源码核对，FDCAN2为classic CAN、标准帧、FIFO0深度8；全局过滤接收标准数据帧并拒绝remote frame。为同时验证FIFO负载与业务解码且避免将高频marker帧直接用于继电器规则，建议CANtest在已确认执行器安全/规则可接受的台架上发送两路：负载帧标准ID`0x322`、DLC8、数据`00 00 00 00 00 00 00 00`、每`1 ms`（1000 fps）；DBC探针标准ID`0x321`、DLC4、数据`C0 A5 34 12`、每`10 ms`（100 fps）。两路持续30秒后保持发送并回复“已发送”，由主会话读取FIFO IRQ/full/lost、RX和DBC解码计数。
+- 探针marker为`0xA5C0=42432`、sequence为`0x1234=4660`；其用途是确认现有DBC解码链路。若当前规则/执行器状态不能确认安全，先不要发送`0x321`探针；仅发送`0x322`负载帧可测FIFO压力，但不能单独证明DBC业务解码持续。
+
+## 2026-07-26 P0 外部 CAN 高负载：首次实测失败
+
+- 用户明确回复“已发送”后开始现场读取。首先按用户要求检查OpenOCD：PID=`63708`监听`3333/4444/6666`，ST-Link V2J37S7、STM32H7 SWD枚举与电压`3.247626 V`正常；无遗留GDB客户端。中断的第一组窗口不纳入结果，随后重新读取同一候选生产ELF的完整前后快照。
+- 可用窗口的硬件FIFO计数从`fill_max=8/full=3/lost=4/irq=0xF60D`变为`fill_max=8/full=5/lost=6/irq=0x16795`；软件RX队列从`enqueue=0xF612/dequeue=0xF60D/drop=15`变为`enqueue=0x1679E/dequeue=0x1679E/drop=25`。因此硬件FIFO full/lost各增长2，软件队列drop增长10，不能判定P0高负载通过。
+- 同一窗口CAN错误保持`0`，外部RX、CAN任务、DecodeTask和DBC decode attempt均继续增长；`last_message_id=0x321`，matched frame与signal update也增长，故输入链路和解码没有停滞。该事实不能掩盖FIFO与软件队列已实际丢帧。
+- 现场发送仍在继续；本轮仅完成读数和只读源码定位，未改源码、未构建、未执行新的反汇编、未烧录。当前待办是保持既有CAN任务→RX队列→DecodeTask架构，定位并实施最小背压修复后重新烧录和复验；在用户确认停止发送前不烧录候选。
+
+## 2026-07-26 P0 外部 CAN 高负载：最小候选已构建，待停帧烧录
+
+- 根因候选基于实际计数和源码边界：RX队列深度为8而DecodeTask每10 ms批量消费，在约1 kfps输入下单周期可能积压超过8帧；FDCAN2硬件FIFO也仅8帧。为不改变既有CAN任务→队列→DecodeTask架构、任务优先级、ISR通知、DBC或CAN合同，仅将`hfdcan2.Init.RxFifo0ElmtsNbr`从8改为16，并将`xQueueCreate`的RX深度从8改为32。
+- 实际执行`./scripts/verify.sh`：host CTest=`19/19`通过；STM32H750重新链接成功，FLASH=`113376 B`、RAM_D1=`244632 B`、RAM_D3=`324 B`、`text/data/bss=112596/768/243932`。最终反汇编确认`MX_FDCAN2_Init`装载FIFO值16并调用`HAL_FDCAN_Init`，`can2_analyzer_rx_queue_init`调用`xQueueGenericCreate(32, 80)`；`git diff --check`通过。
+- 新候选ELF/HEX SHA-256=`d43168b089b6f48ab56509fe0432943067fb6e31638a76ec737c870f24e3093c`/`6ec46a52f39ceef9d9827e39bbfd90af57b67f4bd991492aee2e39b49e4b5141`。用户尚未确认停止CANtest，故没有烧录该候选；旧映像上的失败证据保留，未写为修复通过。
+
+## 2026-07-26 P0 高负载复测等待停帧确认
+
+- 已连续请求用户停止CANtest，以便安全烧录新候选；尚未收到“已停止”。本次仅更新本对话记录，未修改功能源码、未构建、未执行新的反汇编、未烧录或读取硬件，不能产生新的验收结论。
+
+## 2026-07-26 P0 高负载候选已烧录，等待重新发送
+
+- 用户回复“已停止”后，对ELF/HEX SHA-256=`d43168b089b6f48ab56509fe0432943067fb6e31638a76ec737c870f24e3093c`/`6ec46a52f39ceef9d9827e39bbfd90af57b67f4bd991492aee2e39b49e4b5141`执行ST-Link烧录。OpenOCD实际输出`Programming Finished`、`Verified OK`、`Resetting Target`，目标电压=`3.247626 V`。
+- 重启后只读检查`g_can_task_started=1`、`g_can2_decode_task_started=1`、`g_can2_rx_queue_ready=1`，FIFO `fill_max/lost/full=0/0/0`。这证明候选已启动，不能替代外部负载验收。OpenOCD/GDB读取后已resume/detach并通过`shutdown`释放调试端口。
+- 下一步需要用户以先前约定的500 kbit/s两路CANtest合同重新发送，再在新映像中采集前后窗口；未收到“已发送”前不读取或编造结果。
+
+## 2026-07-26 P0 高负载候选启动回归、回退与紧凑队列候选
+
+- 用户重新发送后的首个`FIFO16 + 32 x CanFrame`候选没有获得有效高负载窗口：第一份读数显示`g_can_task_loop_count=0`，后续只读定位PC为`bringup_default_task`内`xTaskCreate`失败分支，`g_freertos_bringup_complete=0`、watchdog未启动。根因是32项完整`CanFrame`（每项80 B）比原8项队列额外占用约1920 B FreeRTOS heap，使最后的rule任务创建失败。该启动回归明确失败，未被写为缓冲修复通过。
+- 已立即回退完整RX队列深度为8，保留不占FreeRTOS heap的FDCAN FIFO0=`16`，重新执行`./scripts/verify.sh`（CTest=`19/19`）和关键反汇编后烧录。中间恢复生产ELF/HEX SHA-256=`69eac392e5d7bdf0e4a5e568c26e720d299a9e6a276f03d6cc7137e8feff59a5`/`8e9ab7405a1305db026d9b537c3bd9d1058bd20133c402123010aa15ed602945`；ST-Link报告`Verified OK`。启动3秒后CAN loop=`5693`、DecodeTask loop=`928`，证明已恢复运行，但RX queue drop=`15`，故FIFO扩容单独不足。
+- 最小替代方案改为`Can2RxQueueFrame`：仅保存classic CAN的`id/IDE/DLC/8字节数据`，DecodeTask取出后重建现有`CanFrame`再进入原DBC函数。32项紧凑队列约512 B，小于旧8项完整队列约640 B，保留CAN接收任务→队列→DecodeTask架构和所有CAN合同。实际`./scripts/verify.sh` CTest=`19/19`通过，最终反汇编确认紧凑收发拷贝、`xQueueGenericSend`以及FIFO16配置；候选ELF/HEX SHA-256=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`。该候选尚未烧录，等待用户停止CANtest后再验证启动和高负载。
+
+## 2026-07-26 P0 紧凑RX队列候选烧录与空载启动基线
+
+- 用户明确回复“已停止”后，先复核最终ELF反汇编：`can2_analyzer_rx_queue_init`调用`xQueueGenericCreate(32, 16)`；接收函数从完整`CanFrame`构造紧凑帧并以`memcpy`写入队列，DecodeTask重建`CanFrame`后继续既有DBC解码。固件SHA-256保持ELF=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`、HEX=`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`，最终`text/data/bss=112684/768/243932`。
+- OpenOCD/ST-Link实际输出`Programming Finished`、`Verified OK`、`Resetting Target`，目标电压`3.247626 V`。烧录后约3秒的只读快照：CAN loop=`385`、DecodeTask loop=`1929`、`g_can2_decode_task_started=1`、`g_can2_rx_queue_ready=1`，此时无外部帧，RX queue enqueue/dequeue/drop与FIFO fill/full/lost均为`0`。这证明紧凑队列不会重现完整队列的任务创建失败，但不替代外部高负载验收。
+- 调试读取后已执行resume/detach。发现脚本遗留OpenOCD PID=`65394`且监听3333，随即以TERM停止；最终`pgrep`和`lsof :3333`均无输出，未遗留GDB/OpenOCD服务。下一步必须等待用户按原500 kbit/s、`0x322` 1 ms负载加`0x321` 10 ms DBC探针重新发送，才能取新鲜A/B窗口；高负载P0仍未通过。
+
+## 2026-07-26 P0 高负载复测现场阻断
+
+- 紧凑队列候选已完成烧录和空载启动基线后，连续等待用户恢复外部CANtest发送；截至本记录仍未收到“已发送”，因此不能取得A/B窗口，也不能以空载计数、主机CTest或反汇编替代高负载无丢帧证据。
+- 本次未修改功能源码、未构建、未反汇编、未烧录或连接调试器；仅记录现场依赖。恢复条件是按既定500 kbit/s合同开始`0x322`每1 ms负载和`0x321`每10 ms DBC探针后回复“已发送”。
+
+## 2026-07-26 P0 外部CAN高负载：非停机复测通过并修正测量边界
+
+- 用户回复“已发送”后，第一次窗口A/B尝试因macOS缺少`timeout`命令而没有启动OpenOCD；GDB无法连接后的零值只来自ELF本地符号地址读取，全部作废，不写为目标板读数。根因已记录，后续以端口就绪轮询启动调试服务。
+- 暂停式GDB窗口A有效读取到外部输入和持续解码，但B出现FIFO `full/lost=1/1`。审计确认`monitor halt`会暂停内核，而外部约1 kfps输入会在暂停期填满16项FIFO，恢复后突发drain还会导致软件队列丢弃；因此暂停式读数不能用于判断运行态丢帧。早先同样方法得到的`full/lost/drop`增长也撤销为运行态失败证据，不以其掩盖或反向证明本次候选。
+- 改用OpenOCD telnet的`mdw`非停机读取：日志只有telnet连接和`shutdown`，没有`halted`，每次采样后无OpenOCD/GDB及3333/4444监听残留。C（基线）→D（20秒）→E（再20秒）的FIFO `full/lost=2/2->2/2->2/2`、RX queue drop=`0->0->0`。同时CAN loop=`125434->149363->176388`、FIFO IRQ=`117003->140932->167956`、RX enqueue=`117033->140962->167987`、dequeue=`117030->140957->167983`、DBC matched=`614->653->696`、signal updates=`1228->1306->1392`、decode attempt=`117644->141610->168679`均增长，last message ID一直为`0x321`，错误/解码错误为`0`。故FDCAN外部高负载P0在当前ELF/HEX=`a32adce3...14fef`/`4bb09f44...5f5ad`上通过。
+- 紧凑队列源码、此前`./scripts/verify.sh` CTest=`19/19`、反汇编和烧录证据保持有效；本次只进行现场读取和治理文档更新，未修改功能源码、未重新构建或反汇编。P0唯一待完成现场项为TF持续写入期间的物理断电、取卡只读恢复。
+
+## 2026-07-26 P0 高负载阶段提交前复核
+
+- 当前工作树实际重跑`./scripts/verify.sh`：host CTest=`19/19`通过，STM32H750构建无待执行任务；`git diff --check`通过。当前ELF/HEX SHA-256保持`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`，`text/data/bss=112684/768/243932`。
+- 重新定向反汇编确认`MX_FDCAN2_Init`写入FIFO0元素数`16`；`can2_analyzer_rx_queue_init`调用`xQueueGenericCreate(32,16)`；接收函数压缩classic CAN帧后入队，DecodeTask重建既有`CanFrame`后调用原`decode_can2_frame`。`nm`同时确认`f_sync`、`signal_cache_mark_stale`、`HardFault_Handler`和RAM_D3 `g_fault_record=0x38000100`仍在最终ELF。
+- 本阶段完成治理后提交并推送。TF持续写入中物理断电、取卡只读恢复仍为唯一未完成P0现场项；该未验证状态不在本次提交中改写为通过。
