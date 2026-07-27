@@ -3689,3 +3689,4 @@
 - 最终非停机A/B读数中HTTP loop=`0x229e→0x22c6`、W5500 loop=`0x22a2→0x22cb`、CAN loop=`0xa611→0xa6d2`；socket两次均LISTEN，HTTP error、ACK timeout、W5500 recovery均为0。`lastNonclosedClose=0x11c`是本次运行中曾观察到的粘滞历史字段，A/B未增长，不代表最终实时socket故障。
 - 用户再次要求检查OCD状态并继续。只读检查确认没有OpenOCD/GDB实例，3333/4444/6666均无监听；当前工作树仅包含本轮固件和治理修改。阶段进入差异审计、提交和推送，不再扩大到并发HTTP、半包超时或其他业务功能。
 - 治理同步后再次执行`./scripts/verify.sh`，host CTest=`20/20`全部通过，STM32构建为`ninja: no work to do`并成功结束。通过`. ./env.sh`复核最终ELF text/data/bss仍为`112828/768/243948`，ELF/HEX哈希保持不变；定向反汇编再次确认`cmp #99`后超时分支递增计数、记录elapsed并进入`http_begin_graceful_disconnect()`，该函数下发命令值`8`。直接调用`arm-none-eabi-size`前曾因当前shell未加载项目工具链而提示`command not found`，随后按项目环境加载成功，不是编译或固件失败。
+- 提交前`git fetch origin codex/W5500`确认ahead/behind=`0/0`；暂存仅含1个固件文件和7个治理文档，79行新增/10行删除，`git -c core.whitespace=cr-at-eol diff --cached --check`通过。阶段提交`ae01c57 Recover idle HTTP connections`创建成功，并已推送`origin/codex/W5500`（`3779590..ae01c57`）。
