@@ -10,7 +10,7 @@
 | F-004 | W25Q128 QSPI | [客观已验证] | 默认启动仅完成 JEDEC 检查；`0x00FFF000` 为显式诊断区，单规则配置 v2 在 `0x00FFE000`/`0x00FFD000` 双槽交替保存、读回与复位加载已烧录验证 |
 | F-005 | FreeRTOS 单任务迁移 | [客观已验证] | 已烧录复核，调度器运行且 W5500/CAN/TF/W25Q128 状态保持通过 |
 | F-006 | FreeRTOS 多任务拆分 | [一期边界客观已验证] | MonitorTask、CAN2、CanDecodeTask、LogTask、RuleTask、ConfigTask、DbcTask、TfTask及固定深度RX/TX/DBC/config队列均已运行验证；W5500与FatFs共享资源由mutex串行化。通用消息总线和通用配置服务为非目标 |
-| F-007 | W5500 HTTP/API | [历史一期通过；最新全量回归阻断] | 历史F-76、G-1和G-2证据保留；最新最终固件网页全功能回归中，业务POST已应用但页面`Failed to fetch`，随后两次多操作会话出现ping正常、80端口拒绝、socket0=`0x17(ESTABLISHED)`且任务继续增长，其中一次`lastNonclosedClose=0x11c`。复位后9个串行GET均200不能抵消失败，当前HTTP稳定性不得标为通过 |
+| F-007 | W5500 HTTP/API | [确认缺陷已修复并实板通过] | 已确定根因是普通`ESTABLISHED + RX_RSR=0`无超时；100 ms空连接计时复用既有graceful `DISCON`，不改ACK/recovery/API。最终CTest=`20/20`、反汇编/烧录通过，10轮空连接回收及后续HTTP、浏览器5次新页面/4次manual提交、最终9 API和ping均通过；单socket非并发边界保留 |
 | F-008 | DBC 解析和信号缓存 | [一期边界客观已验证] | runtime active DBC双槽快照、mutex、外部CANtest RX解码、独立TX self-test缓存和最多两项`/api/signals`均已验证；G-1外部marker/sequence及DBC RX增长且decode error=0 |
 | F-009 | 日志和规则引擎 | [一期边界客观已验证] | LogTask长跑、实体CSV、冷启动恢复及G-1同映像增长通过；QSPI单规则与TF固定两槽v2/v3、优先级、manual、timeout/safeState、HTTP CRUD和GPIO均有现场证据。热插拔、无界规则和通用配置为非目标 |
 | F-010 | 最小 RuleTask/继电器 | [客观已验证] | 已烧录 50 ms RuleTask、短临界区外部 RX 快照和 PE7/PE8 集中输出；固定延时/超时/手动优先级/高滞回均已实测，ST-Link pending 候选仅在 QSPI 保存读回成功后提交并自动 reload，失败保留旧运行态配置 |
@@ -239,6 +239,8 @@ G-1复位后统一窗口完成19个严格串行HTTP连接：200/400/404状态与
 最小修复恢复`www/index.html`第4个串行请求后的250ms收尾等待。用户已部署该网页并上电，严格串行自动刷新和两次reload重入均无连接拒绝；样本TX/RX=`120/273→134/417`、`145/527`、`162/694`。因此此修复在本验证窗口内通过，原先ESTABLISHED无RX不再是当前阻断，也不被扩写为既定状态机根因。
 
 2026-07-26最新最终固件全功能回归推翻了上一段“当前无阻断”的时效性：在manual、日志、规则和DBC组合页面操作中再次观察到业务已应用但浏览器`Failed to fetch`，以及ping正常、socket0=`0x17(ESTABLISHED)`、80端口拒绝且关闭标签不能恢复，其中一次`lastNonclosedClose=0x11c`。复位后成功的低频串行窗口只证明恢复可用，不能覆盖失败样本；ADR-030的250ms网页收尾仍保留，但已不足以关闭当前HTTP稳定性问题，下一补丁必须等待同连接pcap/trace证据。
+
+2026-07-27以原始TCP客户端“连接后不发送”稳定复现相同实时状态：socket0持续`0x17`、`RX_RSR=0`、请求计数固定、任务循环增长且后续连接失败；客户端关闭后立即恢复。源码确认普通`ESTABLISHED`零数据分支没有时限，因此只在该分支增加100 ms计时，超时调用既有graceful `DISCON`，任何请求字节、LISTEN、硬关闭或正常断开均清除计时；响应ACK和disconnect recovery仍为500 ms。最终10轮原始连接均回收、浏览器和API回归通过，关闭该确定性缺陷。浏览器偶发长尾的同步快照中socket已LISTEN且idle计数不变，因此不属于本ADR修复触发；不借此引入并发socket或修改半包`HANDLE_WAIT`。
 
 ### ADR-031：安全审查 P0 保持既有架构的可靠性防护
 

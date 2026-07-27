@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-07-26（最新固件网页全功能回归已完成；业务功能可操作但HTTP传输稳定性回归未通过）
+更新时间：2026-07-27（HTTP零数据连接永久占用已最小修复并完成构建、烧录和实板回归）
 
 ## 当前仓库
 
@@ -13,9 +13,9 @@
 | 模块 | 状态 | 证据摘要 |
 | --- | --- | --- |
 | W5500 | [客观已验证] | `VERSIONR=0x04`，静态 IP `192.168.1.88`，主机 ping 通过 |
-| W5500 HTTP/API | [历史一期边界通过；最新全量回归发现阻断] | 历史F-76完整响应/双向FIN、G-1的200/400/404及G-2的500证据保留；但最新最终固件网页全功能回归中，出现业务POST已应用而页面`Failed to fetch`，并两次出现ping正常但80端口拒绝、socket0停在`0x17(ESTABLISHED)`且任务继续增长，其中一次`lastNonclosedClose=0x11c`。复位后最终9个串行GET均200，不足以抵消本轮可复现失败；保持单socket非并发边界，当前HTTP稳定性未通过。 |
+| W5500 HTTP/API | [确认缺陷已修复并实板通过] | 原始TCP零数据连接稳定复现socket0永久`ESTABLISHED`；当前仅为该状态增加100 ms有界等待并复用graceful `DISCON`。最终CTest=`20/20`、反汇编、烧录通过；10轮空连接均在`110.4..146.3 ms`被回收且后续HTTP成功，timeout count=`10`、recovery=`0`、socket最终LISTEN。浏览器5次新页面和4次manual自动刷新提交均成功且无`Failed to fetch`；最终9个API 200、ping 3/3、任务循环增长。单socket非并发边界保留。 |
 | 网页手动 TX / 两槽活动 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录网页后，自动刷新 TX/RX=`55/364→576/5540`，warn/error为空。两次编辑 TX 在`1800 ms`与`1300 ms`自动刷新后仍保留并提交成功，最终 TX DBC `sequence=256`。候选 DBC经用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX均解析 marker=`42434`，sequence分别为`256/4660`。两槽均含 marker/sequence；slot1 V4回读`Can2Data.sequence/4660/priority20/action off`。外部RX sequence=`4660`时 manual `relay1Output=0`，与高优先级off一致。 |
-| W-1 CLOSE_WAIT 关闭修复 | [历史样本通过；最新全量回归再次观察到`0x11c`] | 历史pending DISCON修复与两轮`lastNonclosedClose=0`证据保留；最新最终固件全功能回归中再次出现`lastNonclosedClose=0x11c`、socket0=`ESTABLISHED`和80端口拒绝，且任务继续增长。该失败已使“当前无阻断”的历史判断失效，需重新以pcap/trace定位，不能直接假定仍是同一根因。 |
+| W-1 HTTP连接回收 | [确认缺陷已修复并实板通过] | 历史ACK wait/CLOSE_WAIT graceful DISCON保持不变；本轮新增的只是普通`ESTABLISHED + RX_RSR=0`超时。`lastNonclosedClose=0x11c`是本次运行中的粘滞历史字段，不代表最终实时socket状态；最终A/B均为LISTEN且该字段未增长。浏览器约27秒长尾窗口中socket已LISTEN、idle timeout count未增长，不能把该排队现象误写成本轮零数据超时仍失败。 |
 | 网页 CAN 发送控制 | [客观通过] | 经典 CAN窄合同保持为`GET/POST /api/can/tx`、`GET /api/can/tx/signals`、标准 ID、DLC、8字节HEX、周期`100..10000 ms`，TX/RX缓存分离。用户已将更新版`www`写入TF并上电；状态灯`status-lamp ok`、TX/RX累计、默认折叠详情、CANoe式TX/RX DBC表和可逆控制均由浏览器实测。最终配置`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，已应用且result=0；TX self-test与CANtest外部输入RX表均为`42434/4660/ok`。自动刷新`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。未直接读取CANtest接收显示确认新TX帧，不能把该边界写成外部接收器逐帧证据。 |
 | 实时信号 API | [客观已验证] | `GET /api/signals` 已烧录验证返回最多两项 SignalCache 快照，含 key/value/raw/unit/updated_ms/quality；持续 CANtest 下返回两个已解码信号 |
 | TF CSV 落盘 | [一期历史边界客观已验证] | 旧`/log/signal.csv`的长跑、冷启动和实体CSV证据保留为历史；新实现不向该旧六列文件混写时间列。运行中热插拔仍不支持 |
@@ -39,7 +39,7 @@
 
 ## 当前阻断项
 
-- 最新网页全功能回归的唯一功能级阻断是HTTP响应/连接回收稳定性，而不是CAN、DBC、规则、继电器或TF业务逻辑：手动覆盖POST曾由页面报`Failed to fetch`但板端回读已应用；后续两次服务拒绝期间ping正常、HTTP/W5500/CAN任务循环持续增长，socket0为`0x17(ESTABLISHED)`，关闭页面也未释放，其中一次`lastNonclosedClose=0x11c`。两次`reset run`均恢复服务；最终页面自动刷新停止、console warn/error为空，9个GET均200，但status仍记录`lastNonclosedClose=284`。下一步必须用同连接pcap与现有trace确认请求、响应、ACK、FIN/RST和500 ms恢复时间线，未修复并复验前不得把本轮写为“全功能通过”。
+- 最新回归中可确定复现的“零数据连接永久占用唯一socket”已关闭：最终100 ms候选完成构建、反汇编、烧录、10轮原始TCP回收、浏览器和9 API回归，后续请求无需复位。浏览器短连接在单socket上的偶发长尾仍属已知能力边界；同步读数已证明该长尾发生时socket已LISTEN且idle timeout count未增长，因此当前没有证据授权继续修改该状态机。另一个源码层面的半包`HANDLE_WAIT`超时仍未被现场复现，本轮不做预防性扩展。
 - FAT 属性与会话文件的实体只读检查已完成，不再是当前阻断：`/Volumes/NO NAME/log/20260724_012916204_signal-v2.csv`为`8035 B`，macOS CST 创建/修改时间为`2026-07-24 01:29:16/01:29:36`，均非1970；首条UTC记录为`2026-07-23T17:29:16.745Z`。`/log`目录自身1970创建时间为旧目录历史元数据，不否定新文件验收。ST-Link变量采样曾因`unknown state`未成功，但不影响本次基于实体文件属性的结论。
 - 新时间阶段的主体现场验收和实体 CSV 内容只读复核均已完成，不再等待网页部署或把历史`"unixMs":lu`列为当前阻断。该历史非 JSON 缺陷已最小修复、重建、反汇编和重烧录；`/Volumes/NO NAME/log/signal-v2.csv`已实际只读确认大小`28553 B`、唯一表头及记录行。运行态计数仍不替代该实体内容读取，旧`/log/signal.csv`历史证据也不能替代新文件内容。
 - 现场已确认：TF 新网页加载、默认记录关闭与继电器详情折叠；未同步`250 ms`启动自动同步/回读，停止`800 ms`、再启用`1200 ms`、手动同步和最终停止；继电器红闭合/绿断开两轮反向输出后恢复关闭；自动刷新期间最终`request/applied=6/6`且 CAN 增长。ST-Link 两次采样写入`33→40`、文件`18185→22217 B`、失败/丢弃`0`，证明运行态成功 flush 及增长。

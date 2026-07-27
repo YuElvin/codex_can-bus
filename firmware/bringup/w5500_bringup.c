@@ -40,6 +40,10 @@ volatile uint32_t g_w5500_http_ack_wait_initial_fsr = 0xffffffffu;
 volatile uint32_t g_w5500_http_ack_wait_final_fsr = 0xffffffffu;
 volatile uint32_t g_w5500_http_ack_wait_elapsed_ms = 0u;
 volatile uint32_t g_w5500_http_ack_wait_timeout_count = 0u;
+volatile uint32_t g_w5500_http_idle_connection_pending = 0u;
+volatile uint32_t g_w5500_http_idle_connection_elapsed_ms = 0u;
+volatile uint32_t g_w5500_http_idle_connection_timeout_count = 0u;
+volatile uint32_t g_w5500_http_idle_connection_last_timeout_ms = 0u;
 volatile uint32_t g_w5500_http_socket_ir = 0xffffffffu;
 volatile uint32_t g_w5500_http_trace_seq = 0u;
 volatile uint32_t g_w5500_http_trace_active = 0u;
@@ -256,6 +260,7 @@ extern SignalLogControl g_signal_log_control;
 #define W5500_HTTP_HANDLE_ERROR 1
 #define W5500_HTTP_HANDLE_WAIT 2
 #define W5500_HTTP_DISCONNECT_RECOVERY_TIMEOUT_MS 500u
+#define W5500_HTTP_IDLE_CONNECTION_TIMEOUT_MS 100u
 
 typedef struct {
   size_t bytes;
@@ -282,6 +287,7 @@ static DbcSignalCatalogEntry g_http_dbc_signal_page[DBC_SIGNAL_CATALOG_PAGE_SIZE
 static uint8_t g_w5500_http_disconnect_pending;
 static uint32_t g_w5500_http_disconnect_pending_start_tick;
 static uint32_t g_w5500_http_ack_wait_start_tick;
+static uint32_t g_w5500_http_idle_connection_start_tick;
 static uint32_t g_w5500_http_last_mutex_wait_start_tick;
 static uint32_t g_w5500_http_last_mutex_wait_end_tick;
 static uint32_t g_w5500_http_last_mutex_wait_ms;
@@ -393,7 +399,14 @@ static uint32_t http_connection_sr_seen_bit(uint8_t sr) {
   return W5500_HTTP_SR_SEEN_OTHER;
 }
 
+static void http_idle_connection_reset(void) {
+  g_w5500_http_idle_connection_pending = 0u;
+  g_w5500_http_idle_connection_start_tick = 0u;
+  g_w5500_http_idle_connection_elapsed_ms = 0u;
+}
+
 static void http_connection_reset(void) {
+  http_idle_connection_reset();
   g_w5500_http_connection_sr_seen_mask = W5500_HTTP_SR_SEEN_LISTEN;
   g_w5500_http_connection_last_sr = W5500_S0_SR_LISTEN;
   g_w5500_http_connection_last_ir_result = 0xffffffffu;
@@ -538,6 +551,7 @@ static int http_close_socket(uint32_t source) {
   g_w5500_http_disconnect_pending_start_tick = 0u;
   g_w5500_http_ack_wait_pending = 0u;
   g_w5500_http_ack_wait_start_tick = 0u;
+  http_idle_connection_reset();
   const W5500Result close_result = s0_command(W5500_S0_CR_CLOSE);
   (void)s0_write_u8(W5500_S0_IR, 0x1fu);
   if (close_result != W5500_OK) {
@@ -565,6 +579,7 @@ static int http_begin_graceful_disconnect(void) {
   if (g_w5500_http_disconnect_pending != 0u) {
     return 0;
   }
+  http_idle_connection_reset();
   if (g_w5500_http_trace_active != 0u) {
     g_w5500_http_trace_disconnect_start_tick = HAL_GetTick();
   }
@@ -2761,6 +2776,7 @@ int w5500_http_status_poll(void) {
     }
     const uint32_t rx_rsr_read_end_tick = HAL_GetTick();
     if (rx_size > 0u) {
+      http_idle_connection_reset();
       if (g_w5500_http_trace_active == 0u) {
         http_trace_begin(rx_size,
                          poll_enter_tick,
@@ -2808,6 +2824,27 @@ int w5500_http_status_poll(void) {
         g_w5500_http_error_count++;
         (void)http_close_socket(2u);
         return 1;
+      }
+    }
+    if (sr == W5500_S0_SR_ESTABLISHED) {
+      const uint32_t now = HAL_GetTick();
+      if (g_w5500_http_idle_connection_pending == 0u) {
+        g_w5500_http_idle_connection_start_tick = now;
+        g_w5500_http_idle_connection_pending = 1u;
+        g_w5500_http_idle_connection_elapsed_ms = 0u;
+        return 0;
+      }
+      const uint32_t elapsed_ms = now - g_w5500_http_idle_connection_start_tick;
+      g_w5500_http_idle_connection_elapsed_ms = elapsed_ms;
+      if (elapsed_ms >= W5500_HTTP_IDLE_CONNECTION_TIMEOUT_MS) {
+        ++g_w5500_http_idle_connection_timeout_count;
+        g_w5500_http_idle_connection_last_timeout_ms = elapsed_ms;
+        if (http_begin_graceful_disconnect() != 0) {
+          g_w5500_http_status = 5u;
+          ++g_w5500_http_error_count;
+          (void)http_close_socket(2u);
+          return 1;
+        }
       }
     }
     return 0;

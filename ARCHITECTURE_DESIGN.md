@@ -380,3 +380,9 @@ G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并
 用户确认合同限于经典 CAN。候选新增`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，网页包括状态灯、TX/RX区域、折叠与TX/RX DBC表；输入固定为标准 ID、DLC、最多8字节HEX与`100..10000 ms`。已记录 CTest=`16/16`、ELF/HEX SHA-256 前缀=`f589...`/`37b9...`、`text/data/bss=93976/384/242448`、50 ms poll/队列/解析反汇编和 OpenOCD `Programming Finished/Verified OK/Resetting Target`。顺序API已走默认、POST request/applied、关闭与重启，TX self-test=`42434/4660`、RX独立且CAN errors=`0`。
 
 用户已把更新版`www`写入TF并上电，随后确认CANtest正在发送。浏览器实测状态灯为`status-lamp ok`、TX/RX累计，四个详情区默认折叠；关闭再恢复后最终配置为`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms，request/applied相等且result=0。TX self-test及外部RX两张CANoe式DBC表均为marker=`42434`、sequence=`4660`、quality=`ok`；自动刷新样本TX/RX=`120/273→134/417`，两次reload为`145/527`、`162/694`，无连接拒绝或控制台warn/error。此处外部RX增长证明CANtest输入持续到板端；未直接读取CANtest作为接收器对本轮受控TX帧的显示，不能把它写成外部接收器逐帧确认。
+
+## HTTP零数据连接有界回收
+
+socket0仍是单连接、非并发HTTP。正常响应继续等待`TX_FSR`恢复并在ACK成功后graceful `DISCON`；ACK与disconnect recovery超时保持500 ms。本轮只补齐普通`ESTABLISHED + RX_RSR=0`状态：首次观察时记录tick，连续100 ms无任何请求字节才调用同一graceful `DISCON`；进入LISTEN、硬关闭、正常断开或收到任意数据都清除该计时。该路径不直接硬`CLOSE`，只有既有disconnect recovery失败才进入完整W5500恢复。
+
+最终CTest=`20/20`，ELF text/data/bss=`112828/768/243948`，ELF/HEX SHA-256=`742dbe264a5f6ea7282123fd151ff67aac30cd410ec5a41a0acb331092b2b92f`/`0e6396e22dfb8d85627e626314aa6d9fca61abf40efeab2fd01d8baf41c01025`；反汇编确认比较阈值、诊断计数和`DISCON(0x08)`调用，ST-Link烧录Programming/Verified/Reset通过。10轮空连接均在`110.4..146.3 ms`收到EOF且后续HTTP成功，timeout count=`10`、recovery=`0`、socket最终LISTEN；浏览器5次新页面、4次manual提交及最终9 API均成功。同步诊断显示一次浏览器长尾期间socket已LISTEN且idle计数未增长，故它不属于该空连接路径；架构不扩展为并发HTTP，也不对未复现的半包`HANDLE_WAIT`预设超时。
