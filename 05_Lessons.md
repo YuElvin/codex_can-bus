@@ -117,3 +117,4 @@
 - L-113：单socket长业务请求的HTTP200只证明响应字节到达，不能证明socket已回到LISTEN。若`SEND_OK`后的TX_FSR等待没有保持一致的ack/disconnect状态，可能留下`ESTABLISHED`并拒绝所有后续请求。应将W5500 `SEND_OK`作为响应收口边界，立即走既有graceful DISCON，并用“长请求后两次独立请求”而非单次200验证。
 - L-114：外部Classic CAN正向RX必须同时保留三层证据：CAN状态RX/错误计数增长、受控GDB的ID/DLC与DBC matched/update/decode-error计数、selected-only API的GOOD raw/value；TX self-test或单次HTTP 200不能替代。反向隔离必须在用户明确停止某一ID后再做，不能从混合流量推断STALE。
 - L-115：STALE隔离验收需要在用户明确停止selected消息后，证明未选消息仍让CAN RX增长、selected raw/value和`updatedMs`保持、quality超过阈值进入`STALE`。仅看总RX或单个MISSING不能证明未选消息未污染SignalCache。
+- L-116：选择性日志的HTTP `ACTIVE/STOPPED`只证明控制面状态机和会话锁，不能证明TF文件实体可读或clean footer。必须记录日志路径、active generation、selection CRC、selected count、锁定期间写请求409，并在下电取卡后以只读文件/行列/哈希/FAT证据关闭介质门禁。

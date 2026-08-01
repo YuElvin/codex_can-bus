@@ -126,3 +126,9 @@
 
 - 用户确认已停止`0x100`并继续发送未选`0x110`。样本A/B间隔约11 s，CAN RX=`8034→8140`，errors/Bus-Off/TEC/REC均为0；`/api/signals?page=0`的8个selected项两次均保留raw/value=`12000/-250/3300/80/2/3/10/1`，`updatedMs=847693`不变，quality全部为`STALE`。
 - 该结果关闭selected-only反向隔离和GOOD→STALE门禁：未选消息仍可进入CAN接收计数，但不更新ActiveRuntime/SignalCache/API selected slots。下一步恢复双ID后验证日志会话及TF上的CSV/.meta实体内容。
+
+## 2026-08-01 G选择性日志控制门禁通过，实体介质待核验
+
+- 恢复双ID后，`/api/signals?page=0` 8项回到`GOOD`且raw/value保持实测值；以`samplePeriodMs=1000`启动v3日志，HTTP200后状态进入`ACTIVE`，路径为`/log/20260801_191151000_signal-v3.csv`，锁定active generation=`0000000000000001`、selection CRC=`E5CB6C8F`、selectedCount=`8`。
+- 日志ACTIVE期间尝试`POST /api/dbc/active`得到HTTP409 `logging_active`，日志身份未改变；停止请求经历`STOPPING`并回读`STOPPED`，锁已释放。该证据关闭日志准入、会话锁和正常停止控制面，不替代TF上CSV/.meta实体、clean footer或selected-only介质集合核验。
+- 下一步需要用户下电取卡到电脑；主会话只读检查同名`.csv/.meta`、行列/quality/identity、文件大小和`fsck_msdos -n`，不得在证据读取前修复或格式化。

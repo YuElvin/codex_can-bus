@@ -360,3 +360,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 用户停止`0x100`、保持`0x110`后，CAN RX仍由`8034`增长至`8140`，但8个selected slot的raw/value和`updatedMs`保持不变，quality全部为`STALE`且无CAN错误。
 - 决策：该样本关闭未选消息对ActiveRuntime、SignalCache和`/api/signals`的刷新路径；日志实体内容、TF持久化和掉电恢复仍须独立取卡验证，不由API freshness替代。
+
+### ADR-039：选择性v3日志会话锁定实板控制面（2026-08-01）
+
+- 双ID恢复后以1000 ms周期启动日志，`selectedCount=8`满足20 rows/s合同，实际状态`ACTIVE`，会话锁定active generation=`0000000000000001`与selection CRC=`E5CB6C8F`；active写请求被HTTP409 `logging_active`拒绝。
+- 停止经历`STOPPING→STOPPED`且身份未变。该ADR只接受控制面证据；CSV/.meta实体内容、clean footer、FAT一致性和断电恢复必须由下电取卡后的只读检查另行关闭。

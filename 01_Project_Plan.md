@@ -127,3 +127,8 @@
 
 - 停止`0x100`而保持`0x110`期间，RX继续增长`8034→8140`，selected 8项的raw/value和`updatedMs`保持不变，quality全部为`STALE`，错误/Bus-Off/TEC/REC均为0。
 - 这关闭了“未选消息不得污染selected runtime/API”的实板门禁。G剩余只包含恢复GOOD后的选择性CSV/meta实体核验及TF写失败/掉电异常路径；CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 G日志控制面与锁定已通过
+
+- 双ID恢复后以1 s周期启动选择性v3日志，实际`ACTIVE`并锁定generation1、selection CRC=`E5CB6C8F`、selectedCount8；日志期间active写请求HTTP409 `logging_active`，停止后`STOPPED`并释放锁。
+- 控制面和吞吐准入已通过；G最终剩余为取卡只读核验CSV/.meta是否仅含8个selected key、身份/clean footer/FAT链是否一致。TF写失败注入、物理掉电恢复和CAN-FD实板仍`[未验证]`。

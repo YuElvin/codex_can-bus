@@ -3972,3 +3972,8 @@
 
 - 未修改源码，仅在干净`codex/W5500`工作树上重新运行`./scripts/verify.sh`：CTest=`34/34`，STM32链接尺寸保持`text/data/bss=121384/444/196292`。ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`。
 - `nm`确认candidate/active rollback、selected log session与manifest publish符号仍在ELF；`objdump`确认HTTP响应分支调用`http_begin_graceful_disconnect`。本次未烧录、未暂停目标、未写TF；等待用户恢复`0x100`后继续G实体日志门禁。
+
+## 2026-08-01 G选择性v3日志控制面通过
+
+- 用户恢复发送`0x100`和`0x110`后，预日志`/api/signals?page=0` 8项均为`GOOD`；以`samplePeriodMs=1000`启动日志，HTTP200返回`STARTING`后回读`ACTIVE`，路径`/log/20260801_191151000_signal-v3.csv`，锁定active generation=`0000000000000001`、selection CRC=`E5CB6C8F`、selectedCount=`8`。
+- 日志ACTIVE期间`POST /api/dbc/active`实际返回HTTP409 `logging_active`，随后停止请求HTTP200 `STOPPING`，轮询回读`STOPPED`且身份未变。该结果关闭G控制面准入/锁定/正常停止；实体CSV/.meta、clean footer和TF一致性仍待用户下电取卡后只读核验，不能用HTTP状态替代。

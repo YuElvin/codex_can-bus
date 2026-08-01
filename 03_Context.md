@@ -287,3 +287,8 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 
 - 用户确认停止`0x100`、仅保留`0x110`。约11 s间隔的两个只读样本中CAN RX=`8034→8140`，错误、Bus-Off、TEC、REC均为0；selected 8项 raw/value不变、`updatedMs=847693`不变，quality全部由此前GOOD状态进入并保持`STALE`。
 - 因此未选消息到达不会刷新selected runtime、SignalCache或`/api/signals`；当前仍需恢复双ID取得GOOD后启动日志，并从TF实体只读核验CSV/meta与clean footer。
+
+## 2026-08-01 G选择性v3日志控制面通过
+
+- 用户恢复双ID后，8个selected项回到`GOOD`。以`samplePeriodMs=1000`启动日志实际进入`ACTIVE`，路径`/log/20260801_191151000_signal-v3.csv`，会话锁定active generation=`1`、selection CRC=`E5CB6C8F`、selectedCount=`8`；周期满足`8*1000 <= 20*1000`。
+- 日志期间active写请求返回HTTP409 `logging_active`且身份不变；停止经历`STOPPING`后回读`STOPPED`。当前控制面证据已具备，但卡上实体CSV/.meta、clean footer、选中列集合和FAT一致性尚未读取。
