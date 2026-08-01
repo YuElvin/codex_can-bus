@@ -3967,3 +3967,8 @@
 
 - 用户确认停止`0x100`、继续发送`0x110`。约11 s间隔只读HTTP样本显示CAN RX=`8034→8140`，errors/Bus-Off/TEC/REC均为0；8个selected信号两次均保持raw/value=`12000/-250/3300/80/2/3/10/1`，`updatedMs=847693`不变，quality全部为`STALE`。
 - 该结果证明未选`0x110`虽进入CAN接收计数，但不刷新selected ActiveRuntime/SignalCache/API。下一步需恢复双ID使selected回到GOOD，再启动选择性日志，停止后由用户下电取卡进行CSV/.meta和TF一致性只读核验。
+
+## 2026-08-01 当前分支重建复核
+
+- 未修改源码，仅在干净`codex/W5500`工作树上重新运行`./scripts/verify.sh`：CTest=`34/34`，STM32链接尺寸保持`text/data/bss=121384/444/196292`。ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`。
+- `nm`确认candidate/active rollback、selected log session与manifest publish符号仍在ELF；`objdump`确认HTTP响应分支调用`http_begin_graceful_disconnect`。本次未烧录、未暂停目标、未写TF；等待用户恢复`0x100`后继续G实体日志门禁。
