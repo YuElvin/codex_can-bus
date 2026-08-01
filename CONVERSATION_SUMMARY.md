@@ -3984,3 +3984,7 @@
 - CSV `/log/20260801_191151000_signal-v3.csv`为32850 B、289行含header/288数据行；标准CSV解析确认唯一key恰为8个selected ordinal0..7、每key36行、无额外key、8列正确，quality=`GOOD 253/STALE 35`；SHA-256=`c947eac1f1af9a485393dbaf7fb97ccd334635e41c1b7e07f7ca8d068fb8da05`。
 - meta为1034 B、最终`cleanClose=true`、rowsWritten=`288`、rowsDropped/lateSamples/writeFailures=`0/0/0`、flushCount=`49`；身份active/candidate=`1/2`、sourceSize=`100071`、sourceCrc32=`4B88D9CE`、selectionCrc32=`E5CB6C8F`、selectedCount=`8`；SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`。
 - host `dbc_index_dump verify`对candidate generation1/2和active generation1均返回messages=`112`、signals=`896`、total=`145232`；Python只读交叉检查manifest/index/selection固定尺寸、CRC、popcount、generation/source引用全部通过。G实体介质门禁关闭；H的当前映像TF写失败、物理掉电/active reload失败和CAN-FD实板继续`[未验证]`。
+
+## 2026-08-01 H异常路径host回归复核
+
+- 在`. ./env.sh`后针对性运行`ctest --test-dir build/host --output-on-failure -R 'dbc_(active_commit|candidate_commit|candidate_format|selected_runtime)|tf_card_port|selected_signal_log|signal_log_(control|buffer)'`，8/8通过；覆盖manifest/candidate I/O失败保旧、selection/runtime边界、日志控制/缓冲及TF port模拟错误。该证据不替代当前映像上的TF写失败注入、物理掉电或active reload失败现场读数。
