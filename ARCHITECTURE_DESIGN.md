@@ -386,3 +386,18 @@ G-3复核确认F-76之后无固件源码变化；当前ELF/HEX仍为已烧录并
 socket0仍是单连接、非并发HTTP。正常响应继续等待`TX_FSR`恢复并在ACK成功后graceful `DISCON`；ACK与disconnect recovery超时保持500 ms。本轮只补齐普通`ESTABLISHED + RX_RSR=0`状态：首次观察时记录tick，连续100 ms无任何请求字节才调用同一graceful `DISCON`；进入LISTEN、硬关闭、正常断开或收到任意数据都清除该计时。该路径不直接硬`CLOSE`，只有既有disconnect recovery失败才进入完整W5500恢复。
 
 最终CTest=`20/20`，ELF text/data/bss=`112828/768/243948`，ELF/HEX SHA-256=`742dbe264a5f6ea7282123fd151ff67aac30cd410ec5a41a0acb331092b2b92f`/`0e6396e22dfb8d85627e626314aa6d9fca61abf40efeab2fd01d8baf41c01025`；反汇编确认比较阈值、诊断计数和`DISCON(0x08)`调用，ST-Link烧录Programming/Verified/Reset通过。10轮空连接均在`110.4..146.3 ms`收到EOF且后续HTTP成功，timeout count=`10`、recovery=`0`、socket最终LISTEN；浏览器5次新页面、4次manual提交及最终9 API均成功。同步诊断显示一次浏览器长尾期间socket已LISTEN且idle计数未增长，故它不属于该空连接路径；架构不扩展为并发HTTP，也不对未复现的半包`HANDLE_WAIT`预设超时。
+## 大 DBC selected-only v1 合同补充（2026-07-31）
+
+阶段17采用`upload -> candidate -> active`三对象分离。完整DBC与目录常驻TF；candidate/active分别由不可变generation文件组和`current/previous` manifest指向，`current`是唯一提交点。FAT32语义只称“事务式、断电可恢复提交”，不称跨文件原子。
+
+TF catalog上限为2048消息/2048信号，RAM双槽runtime只保存最多64个selected message和128个selected signal。单一2048 bit正向selection驱动decode、SignalValueState、分页`/api/signals`、CSV和新规则候选；未选信号不能进入这些消费者。规则激活兼容同时检查key与版本化definition hash。
+
+格式、提交顺序、parser矩阵、Classic/FD/DLC、HTTP/JSON、日志吞吐、RAM/Flash/heap/stack和lab授权边界以`docs/LARGE_DBC_P0_CONTRACT.md`与`include/large_dbc_contract.h`为准。当前真实输入是标准Classic CAN/DLC8；CAN-FD只保留数据模型，实板为`[未验证]`。A0未改HTTP、TF、FDCAN、网页或runtime业务，不包含硬件结论。
+
+A1 portable层由`dbc_stream_parser`、`dbc_catalog_index`和`dbc_stream_index`组成：parser只保留当前行/当前消息，callback把有界record送入双spool index builder；最终index显式小端序列化并由独立verify重新校验。host的`dbc_index_build`/`dbc_index_dump`提供实际文件build、verify和可审计dump。真实100KB输入的三种chunk结果逐字节一致；该层当前尚未由固件任务调用，因此不代表TF candidate、active runtime或实板功能已实现。
+
+B阶段把`DbcUploadState`接入既有W5500 socket0和TF互斥层，不新增task、socket或heap。请求头保留在1536 B有界buffer，正文复用512 B静态scratch；接收循环遵循`W5500 RX -> 最多512 B scratch -> f_write -> CRC/state -> RX_RD/RECV`，因此失败数据不会先从socket确认消费。完成只留下未发布的`upload.<generation>.tmp`；candidate、active、旧runtime、规则、SignalCache和日志均不在该调用链中。真实100071 B路径和错误清理已实板验证；candidate二次读取/index/selection/manifest属于C，不能从B成功外推。
+
+C阶段在既有DbcTask中加入固定命令，不新增task或通用消息总线。静态backend持有parser、builder、4个FatFs FIL与512 B I/O scratch；message/signal共用一个分区spool，index和selection不常驻整份目录。I/O进度计数作为DbcTask长操作的IWDG替代heartbeat，每32次FatFs调用让出1 tick；任何FatFs调用仍逐次记录operation/result。`_FS_LOCK=3`覆盖source+spool/index与一个辅助读回文件。最终固定顺序是二读校验source、生成并读回temp、rename三件套、正式三件套读回、写同步并验证current.tmp、current移previous、current.tmp移current、current再读回；RAM candidate snapshot仅在最后成功后更新。启动验证current/previous所有引用并从最大有效generation继续，active/runtime仍独立。
+
+D阶段沿用同一DbcTask和TF mutex。HTTP只快照token/query/page或selection mutation，再由DbcTask顺序读取index/selection；响应正文使用3072 B静态scratch先完整生成，再以不超过512 B片段和固定Content-Length发送。选择写入生成新的不可变candidate generation，只复用原`.dbc/.idx`内容并重写`.sel`，按temp、formal、manifest readback顺序提交。网页仍由TF `/www/index.html`提供；固件默认页helper不会覆盖已有页面，因此网页版本部署仍采用下电取卡、主机逐字节校验、插回上电的既有运维边界。

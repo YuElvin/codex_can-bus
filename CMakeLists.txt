@@ -9,11 +9,24 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(CAN_BUS_BUILD_TESTS "Build host-side unit tests" ON)
 option(CAN_BUS_BUILD_STM32H750_FIRMWARE "Build STM32H750 firmware image" OFF)
 option(CAN_BUS_P0_FAULT_INJECTION "Build the lab-only P0 watchdog fault injection hook" OFF)
+set(LARGE_DBC_REAL_FIXTURE "" CACHE FILEPATH "Optional real large DBC fixture for host acceptance")
+if(LARGE_DBC_REAL_FIXTURE AND NOT EXISTS "${LARGE_DBC_REAL_FIXTURE}")
+  message(FATAL_ERROR "LARGE_DBC_REAL_FIXTURE does not exist: ${LARGE_DBC_REAL_FIXTURE}")
+endif()
 
 add_library(can_bus_core
   src/core/can_tx_control.c
+  src/core/dbc_candidate_catalog.c
+  src/core/dbc_candidate_commit.c
+  src/core/dbc_candidate_format.c
+  src/core/dbc_candidate_http.c
   src/core/dbc_decoder.c
+  src/core/dbc_catalog_index.c
   src/core/dbc_parser.c
+  src/core/dbc_selected_runtime.c
+  src/core/dbc_stream_index.c
+  src/core/dbc_stream_parser.c
+  src/core/dbc_upload.c
   src/core/dbc_signal_catalog.c
   src/core/manual_relay.c
   src/core/rule_engine.c
@@ -94,9 +107,17 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
     ${STM32_HAL_SOURCES}
+    src/core/dbc_candidate_catalog.c
+    src/core/dbc_candidate_commit.c
+    src/core/dbc_candidate_format.c
+    src/core/dbc_candidate_http.c
     src/core/dbc_decoder.c
+    src/core/dbc_catalog_index.c
     src/core/can_tx_control.c
     src/core/dbc_parser.c
+    src/core/dbc_stream_index.c
+    src/core/dbc_stream_parser.c
+    src/core/dbc_upload.c
     src/core/dbc_signal_catalog.c
     src/core/manual_relay.c
     src/core/rule_engine.c
@@ -113,6 +134,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/ports/tf_card_port.c
     src/ports/w5500_port.c
     src/platform/stm32h750/fdcan_port_stm32.c
+    src/platform/stm32h750/large_dbc_candidate_stm32.c
     src/platform/stm32h750/tf_card_fatfs_stm32.c
     src/platform/stm32h750/w5500_spi_stm32.c
     firmware/bringup/can_bringup.c
@@ -155,6 +177,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     -mfpu=fpv5-d16
     -mfloat-abi=hard
     -Os
+    -flto
     -ffunction-sections
     -fdata-sections
     -Wall
@@ -169,13 +192,13 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     -mthumb
     -mfpu=fpv5-d16
     -mfloat-abi=hard
+    -flto
     -T${STM32_LINKER_SCRIPT}
     -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/can_bus_gateway_stm32h750.map
     -Wl,--gc-sections
     -Wl,--print-memory-usage
     --specs=nosys.specs
     --specs=nano.specs
-    -Wl,-u,_printf_float
   )
 
   add_custom_command(TARGET can_bus_gateway_stm32h750 POST_BUILD
@@ -202,6 +225,65 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_dbc_parser tests/test_dbc_parser.c)
   target_link_libraries(test_dbc_parser PRIVATE can_bus_core)
   add_test(NAME dbc_parser COMMAND test_dbc_parser)
+
+  add_executable(test_dbc_stream_parser tests/test_dbc_stream_parser.c)
+  target_link_libraries(test_dbc_stream_parser PRIVATE can_bus_core)
+  add_test(NAME dbc_stream_parser COMMAND test_dbc_stream_parser)
+  if(LARGE_DBC_REAL_FIXTURE)
+    add_test(NAME dbc_stream_parser_real
+      COMMAND test_dbc_stream_parser "${LARGE_DBC_REAL_FIXTURE}")
+  endif()
+
+  add_executable(test_dbc_catalog_index_v1 tests/test_dbc_catalog_index_v1.c)
+  target_link_libraries(test_dbc_catalog_index_v1 PRIVATE can_bus_core)
+  add_test(NAME dbc_catalog_index_v1 COMMAND test_dbc_catalog_index_v1)
+  if(LARGE_DBC_REAL_FIXTURE)
+    add_test(NAME dbc_catalog_index_v1_real
+      COMMAND test_dbc_catalog_index_v1 "${LARGE_DBC_REAL_FIXTURE}")
+  endif()
+
+  add_executable(dbc_index_dump tools/dbc_index_dump.c)
+  target_link_libraries(dbc_index_dump PRIVATE can_bus_core)
+
+  add_executable(dbc_index_build tools/dbc_index_build.c)
+  target_link_libraries(dbc_index_build PRIVATE can_bus_core)
+
+  add_executable(test_dbc_stream_index tests/test_dbc_stream_index.c)
+  target_link_libraries(test_dbc_stream_index PRIVATE can_bus_core)
+  if(LARGE_DBC_REAL_FIXTURE)
+    add_test(NAME dbc_stream_index_real
+      COMMAND test_dbc_stream_index
+        "${LARGE_DBC_REAL_FIXTURE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/deploy/tf/dbc/active.dbc")
+  endif()
+
+  add_executable(test_dbc_upload tests/test_dbc_upload.c)
+  target_link_libraries(test_dbc_upload PRIVATE can_bus_core)
+  add_test(NAME dbc_upload COMMAND test_dbc_upload)
+
+  add_executable(test_dbc_candidate_commit tests/test_dbc_candidate_commit.c)
+  target_link_libraries(test_dbc_candidate_commit PRIVATE can_bus_core)
+  add_test(NAME dbc_candidate_commit COMMAND test_dbc_candidate_commit)
+
+  add_executable(test_dbc_candidate_format tests/test_dbc_candidate_format.c)
+  target_link_libraries(test_dbc_candidate_format PRIVATE can_bus_core)
+  add_test(NAME dbc_candidate_format COMMAND test_dbc_candidate_format)
+
+  add_executable(test_dbc_candidate_catalog tests/test_dbc_candidate_catalog.c)
+  target_link_libraries(test_dbc_candidate_catalog PRIVATE can_bus_core)
+  add_test(NAME dbc_candidate_catalog COMMAND test_dbc_candidate_catalog)
+
+  add_executable(test_dbc_candidate_http tests/test_dbc_candidate_http.c)
+  target_link_libraries(test_dbc_candidate_http PRIVATE can_bus_core)
+  add_test(NAME dbc_candidate_http COMMAND test_dbc_candidate_http)
+
+  add_executable(test_dbc_selected_runtime tests/test_dbc_selected_runtime.c)
+  target_link_libraries(test_dbc_selected_runtime PRIVATE can_bus_core)
+  add_test(NAME dbc_selected_runtime COMMAND test_dbc_selected_runtime)
+
+  add_executable(test_large_dbc_contract tests/test_large_dbc_contract.c)
+  target_include_directories(test_large_dbc_contract PRIVATE include)
+  add_test(NAME large_dbc_contract COMMAND test_large_dbc_contract)
 
   add_executable(test_tf_deploy_assets tests/test_tf_deploy_assets.c)
   target_link_libraries(test_tf_deploy_assets PRIVATE can_bus_core)

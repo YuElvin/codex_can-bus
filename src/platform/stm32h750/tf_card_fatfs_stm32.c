@@ -1,6 +1,8 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "platform/stm32h750_bringup.h"
+#include "dbc_upload.h"
+#include "large_dbc_contract.h"
 
 #include "bsp_driver_sd.h"
 #include "FreeRTOS.h"
@@ -67,6 +69,18 @@ volatile uint32_t g_tf_www_index_len;
 volatile uint32_t g_tf_append_stage;
 
 static SemaphoreHandle_t g_tf_fs_mutex;
+static FIL g_large_dbc_upload_file;
+static char g_large_dbc_upload_path[40];
+static uint32_t g_large_dbc_upload_expected_size;
+static uint8_t g_large_dbc_upload_open;
+
+volatile uint32_t g_large_dbc_upload_open_result = 0xffffffffu;
+volatile uint32_t g_large_dbc_upload_write_result = 0xffffffffu;
+volatile uint32_t g_large_dbc_upload_sync_result = 0xffffffffu;
+volatile uint32_t g_large_dbc_upload_close_result = 0xffffffffu;
+volatile uint32_t g_large_dbc_upload_unlink_result = 0xffffffffu;
+volatile uint32_t g_large_dbc_upload_write_count;
+volatile uint32_t g_large_dbc_upload_written_bytes;
 
 static int tf_fs_lock(void) {
   if (g_tf_fs_mutex == NULL) {
@@ -85,6 +99,14 @@ static void tf_fs_unlock(void) {
   if (g_tf_fs_mutex != NULL) {
     (void)xSemaphoreGive(g_tf_fs_mutex);
   }
+}
+
+int stm32h750_tf_fs_lock(void) {
+  return tf_fs_lock();
+}
+
+void stm32h750_tf_fs_unlock(void) {
+  tf_fs_unlock();
 }
 
 int stm32h750_fs_mutex_init(void) {
@@ -455,6 +477,112 @@ int stm32h750_tf_append_file_locked(const char *path,
     g_tf_append_stage = failure_stage;
   }
   return 1;
+}
+
+int stm32h750_tf_large_dbc_upload_begin(uint64_t generation,
+                                        uint32_t expected_size) {
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+  if (generation == 0u || expected_size == 0u ||
+      !dbc_upload_format_tmp_path(g_large_dbc_upload_path,
+                                  sizeof(g_large_dbc_upload_path),
+                                  generation) ||
+      build_fatfs_path(&ctx,
+                       g_large_dbc_upload_path,
+                       full_path,
+                       sizeof(full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+  if (g_large_dbc_upload_open != 0u) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_large_dbc_upload_expected_size = expected_size;
+  g_large_dbc_upload_write_count = 0u;
+  g_large_dbc_upload_written_bytes = 0u;
+  g_large_dbc_upload_write_result = 0xffffffffu;
+  g_large_dbc_upload_sync_result = 0xffffffffu;
+  g_large_dbc_upload_close_result = 0xffffffffu;
+  g_large_dbc_upload_unlink_result = 0xffffffffu;
+  g_large_dbc_upload_open_result =
+    f_open(&g_large_dbc_upload_file, full_path, FA_CREATE_ALWAYS | FA_WRITE);
+  if (g_large_dbc_upload_open_result == FR_OK) {
+    g_large_dbc_upload_open = 1u;
+  }
+  tf_fs_unlock();
+  return g_large_dbc_upload_open != 0u ? 0 : 1;
+}
+
+int stm32h750_tf_large_dbc_upload_write(const uint8_t *data, size_t len) {
+  UINT written = 0u;
+  if (data == NULL || len == 0u || len > LARGE_DBC_UPLOAD_CHUNK_BYTES ||
+      g_large_dbc_upload_open == 0u ||
+      g_large_dbc_upload_written_bytes > g_large_dbc_upload_expected_size ||
+      (uint32_t)len >
+        g_large_dbc_upload_expected_size - g_large_dbc_upload_written_bytes ||
+      tf_fs_lock() != 0) {
+    return 1;
+  }
+  if ((uint32_t)f_tell(&g_large_dbc_upload_file) !=
+      g_large_dbc_upload_written_bytes) {
+    tf_fs_unlock();
+    return 1;
+  }
+  g_large_dbc_upload_write_result =
+    f_write(&g_large_dbc_upload_file, data, (UINT)len, &written);
+  if (g_large_dbc_upload_write_result == FR_OK && written == len) {
+    ++g_large_dbc_upload_write_count;
+    g_large_dbc_upload_written_bytes += written;
+  }
+  tf_fs_unlock();
+  return g_large_dbc_upload_write_result == FR_OK && written == len ? 0 : 1;
+}
+
+int stm32h750_tf_large_dbc_upload_finalize(void) {
+  if (g_large_dbc_upload_open == 0u || tf_fs_lock() != 0) {
+    return 1;
+  }
+  if ((uint32_t)f_size(&g_large_dbc_upload_file) !=
+      g_large_dbc_upload_expected_size) {
+    g_large_dbc_upload_sync_result = FR_INT_ERR;
+  } else {
+    g_large_dbc_upload_sync_result = f_sync(&g_large_dbc_upload_file);
+  }
+  g_large_dbc_upload_close_result = f_close(&g_large_dbc_upload_file);
+  g_large_dbc_upload_open = 0u;
+  tf_fs_unlock();
+  return g_large_dbc_upload_sync_result == FR_OK &&
+         g_large_dbc_upload_close_result == FR_OK ? 0 : 1;
+}
+
+void stm32h750_tf_large_dbc_upload_abort(void) {
+  char full_path[64];
+  const Stm32TfCardContext ctx = {
+    .fs = NULL,
+    .logical_drive = SDPath,
+  };
+  if (g_large_dbc_upload_path[0] == '\0' ||
+      build_fatfs_path(&ctx,
+                       g_large_dbc_upload_path,
+                       full_path,
+                       sizeof(full_path)) != TF_CARD_OK ||
+      tf_fs_lock() != 0) {
+    return;
+  }
+  if (g_large_dbc_upload_open != 0u) {
+    g_large_dbc_upload_close_result = f_close(&g_large_dbc_upload_file);
+    g_large_dbc_upload_open = 0u;
+  }
+  g_large_dbc_upload_unlink_result = f_unlink(full_path);
+  tf_fs_unlock();
+}
+
+const char *stm32h750_tf_large_dbc_upload_path(void) {
+  return g_large_dbc_upload_path;
 }
 
 static int tf_replace_file_locked(const char *tmp_path,

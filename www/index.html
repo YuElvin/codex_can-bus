@@ -14,6 +14,7 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}.notice{color:#94c9ff}.error{color:#ff9e9e}.ok{color:#98e6b0}
 .can-controller{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#0c1117;padding:10px;margin:8px 0}.status-lamp{width:13px;height:13px;border-radius:50%;background:#66717c;box-shadow:0 0 7px currentColor;display:inline-block}.status-lamp.ok{background:#4ed878;color:#4ed878}.status-lamp.error{background:#f05252;color:#f05252}.can-count{font:600 1.05rem ui-monospace,SFMono-Regular,Menlo,monospace}.can-toolbar{margin-bottom:8px}.can-form{display:flex;align-items:end;gap:5px;flex-wrap:wrap}.can-form label{display:flex;flex-direction:column;font-size:.86rem}.can-form input[type="text"]{width:12rem}.can-form input[type="number"]{width:5.5rem}.canoe-table{width:100%;border-collapse:collapse;background:#0c1117;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem}.canoe-table th,.canoe-table td{padding:7px;border:1px solid #2d3a48;text-align:left;vertical-align:top}.canoe-table th{background:#243447;color:#dcecff}.canoe-table .tx-row td:first-child{border-left:4px solid #55a8ff}.canoe-table .rx-row td:first-child{border-left:4px solid #74d68a}.table-wrap{overflow:auto}details{margin-top:9px}summary{cursor:pointer;color:#bcd4eb}
 .relay-controls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0}.switch-control{display:inline-flex;align-items:center;gap:7px;cursor:pointer}.switch-control input{position:absolute;opacity:0;pointer-events:none}.switch-track{width:42px;height:23px;border-radius:999px;background:#4b6073;box-shadow:inset 0 0 0 1px #71869a;position:relative;transition:.18s}.switch-track::after{content:'';position:absolute;width:17px;height:17px;top:3px;left:3px;border-radius:50%;background:#dbe7f2;transition:.18s}.switch-control input:checked + .switch-track{background:#1677d2;box-shadow:inset 0 0 0 1px #63b4ff}.switch-control input:checked + .switch-track::after{transform:translateX(19px)}.switch-control input:focus-visible + .switch-track{outline:2px solid #9bd0ff;outline-offset:2px}.relay-actual{display:flex;gap:12px;flex-wrap:wrap;background:#0c1117;padding:10px}.relay-state{display:inline-flex;align-items:center;gap:6px}.relay-lamp{width:12px;height:12px;border-radius:50%;display:inline-block;box-shadow:0 0 7px currentColor}.relay-lamp.closed{background:#f05252;color:#f05252}.relay-lamp.open{background:#4ed878;color:#4ed878}.control-form{display:flex;align-items:end;gap:7px;flex-wrap:wrap}.control-form label{display:flex;flex-direction:column;font-size:.86rem}
+.candidate-toolbar{display:flex;align-items:end;gap:7px;flex-wrap:wrap;margin-top:14px}.candidate-toolbar label{display:flex;flex-direction:column;font-size:.86rem}.candidate-toolbar input[type="search"]{width:min(26rem,75vw)}.candidate-table-wrap{height:310px;overflow:auto;margin-top:8px;border:1px solid #2d3a48;background:#0c1117}.candidate-table-wrap .canoe-table th{position:sticky;top:0;z-index:1}.candidate-summary{min-height:1.5em;margin:8px 0}.candidate-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -91,9 +92,25 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 
 <section>
   <h2>DBC</h2>
-  <label>DBC 文本文件（最多 1024 B） <input id="dbc-file" type="file" accept=".dbc,text/plain"></label>
+  <label>DBC 文本文件（最多 256 KiB） <input id="dbc-file" type="file" accept=".dbc,text/plain"></label>
   <button id="dbc-upload">上传候选</button><button id="dbc-activate">激活候选</button>
   <pre id="dbc-result">尚未操作</pre>
+
+  <h3>候选信号选择</h3>
+  <div class="candidate-toolbar">
+    <label>搜索（最多 63 字节） <input id="candidate-query" type="search" maxlength="63" autocomplete="off" spellcheck="false"></label>
+    <label>选择状态 <select id="candidate-filter"><option value="all">全部</option><option value="true">已选择</option><option value="false">未选择</option></select></label>
+    <button id="candidate-refresh" type="button">读取</button>
+  </div>
+  <div id="candidate-summary" class="candidate-summary">尚未读取候选信号</div>
+  <div class="candidate-table-wrap">
+    <table class="canoe-table"><thead><tr><th>选择</th><th>Ordinal</th><th>信号 key</th></tr></thead><tbody id="candidate-body"><tr><td colspan="3">当前页没有数据</td></tr></tbody></table>
+  </div>
+  <div class="candidate-actions">
+    <button id="candidate-prev" type="button" disabled>上一页</button><button id="candidate-next" type="button" disabled>下一页</button>
+    <button id="candidate-save" type="button" disabled>提交当前页变更</button>
+    <span id="candidate-write-state" class="notice"></span>
+  </div>
 </section>
 
 <script>
@@ -110,6 +127,18 @@ let canTxFormDirty = false;
 let ruleSlots = [];
 let signalCatalog = null;
 let signalCatalogReason = '尚未读取活动 DBC 信号目录';
+let candidateToken = '';
+let candidatePage = 0;
+let candidateMatched = 0;
+let candidatePageSize = 8;
+let candidateItems = [];
+let candidateBaseline = new Map();
+let candidateSet = new Set();
+let candidateClear = new Set();
+let candidateQueryTimer = 0;
+let candidateRequestSeq = 0;
+let logControlEnabled = false;
+let logControlKnown = false;
 
 function show(message, kind = 'notice') { const node = $('notice'); node.className = kind; node.textContent = message; }
 function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
@@ -169,7 +198,61 @@ function renderManual(data) {
   renderRelayOutput('relay1-lamp','relay1-state',data.relay1Output ?? data.relay1); renderRelayOutput('relay2-lamp','relay2-state',data.relay2Output ?? data.relay2);
 }
 function renderLogControl(data) {
-  showJson('log-state', data); $('log-enabled').checked=readFlag(data.enabled); if (data.samplePeriodMs !== undefined) $('log-period').value=String(data.samplePeriodMs);
+  showJson('log-state', data); logControlKnown=true; logControlEnabled=readFlag(data.enabled); $('log-enabled').checked=logControlEnabled; if (data.samplePeriodMs !== undefined) $('log-period').value=String(data.samplePeriodMs); updateCandidateWriteState();
+}
+function candidateLoggingBlocked() { return !logControlKnown || logControlEnabled || $('log-enabled').checked; }
+function updateCandidateWriteState() {
+  const blocked=candidateLoggingBlocked(); const changed=candidateSet.size+candidateClear.size;
+  for (const checkbox of document.querySelectorAll('#candidate-body input[type="checkbox"]')) checkbox.disabled=blocked;
+  $('candidate-save').disabled=blocked || !candidateToken || changed===0;
+  $('candidate-write-state').textContent=!logControlKnown ? '请先读取日志状态' : (blocked ? '日志已启用：禁止修改 selection' : (changed ? '当前页待提交 '+changed+' 项' : '当前页无待提交变更'));
+  $('candidate-write-state').className=blocked?'error':'notice';
+}
+function clearCandidateEdits() { candidateBaseline=new Map(); candidateSet.clear(); candidateClear.clear(); }
+function renderCandidatePage(data) {
+  const nextToken=String(data.candidateToken ?? '');
+  if (candidateToken!==nextToken) { candidateToken=nextToken; clearCandidateEdits(); }
+  candidatePage=Number(data.page); candidatePageSize=Number(data.pageSize) || 8; candidateMatched=Number(data.matched) || 0;
+  candidateItems=Array.isArray(data.items)?data.items.slice(0,8):[];
+  candidateBaseline=new Map(candidateItems.map(item=>[Number(item.ordinal),readFlag(item.selected)])); candidateSet.clear(); candidateClear.clear();
+  const rows=candidateItems.map(item=>{
+    const ordinal=Number(item.ordinal); const row=document.createElement('tr'); const selectCell=document.createElement('td'); const checkbox=document.createElement('input');
+    checkbox.type='checkbox'; checkbox.checked=readFlag(item.selected); checkbox.dataset.ordinal=String(ordinal);
+    checkbox.onchange=()=>{
+      const initial=candidateBaseline.get(ordinal); candidateSet.delete(ordinal); candidateClear.delete(ordinal);
+      if (checkbox.checked!==initial) (checkbox.checked?candidateSet:candidateClear).add(ordinal);
+      updateCandidateWriteState();
+    };
+    selectCell.append(checkbox); row.append(selectCell); addCell(row,String(ordinal)); addCell(row,String(item.key ?? '')); return row;
+  });
+  if (!rows.length) { const row=document.createElement('tr'); const cell=document.createElement('td'); cell.colSpan=3; cell.textContent='当前页没有匹配信号'; row.append(cell); rows.push(row); }
+  $('candidate-body').replaceChildren(...rows);
+  const first=candidateMatched===0?0:candidatePage*candidatePageSize+1; const last=Math.min(candidateMatched,(candidatePage+1)*candidatePageSize);
+  $('candidate-summary').textContent='页 '+candidatePage+'；匹配 '+candidateMatched+'；显示 '+first+'–'+last+'；已选 '+String(data.selectedCount ?? '—')+' / 128';
+  $('candidate-prev').disabled=candidatePage<=0; $('candidate-next').disabled=(candidatePage+1)*candidatePageSize>=candidateMatched;
+  updateCandidateWriteState();
+}
+async function loadCandidatePage(page=candidatePage) {
+  const requestSeq=++candidateRequestSeq; const q=$('candidate-query').value; const selected=$('candidate-filter').value;
+  try {
+    if (new TextEncoder().encode(q).length>63) throw new Error('搜索内容的 UTF-8 长度超过 63 B');
+    const path='/api/dbc/candidate/signals?page='+encodeURIComponent(String(Math.max(0,page)))+'&q='+encodeURIComponent(q)+'&selected='+encodeURIComponent(selected);
+    const data=await exclusive('读取候选信号',()=>api(path));
+    if (requestSeq!==candidateRequestSeq) return;
+    renderCandidatePage(data); show('已读取候选信号当前页', 'ok');
+  } catch (error) { if (requestSeq===candidateRequestSeq) show(error.message, 'error'); }
+}
+async function saveCandidateSelection() {
+  try {
+    if (!logControlKnown) throw new Error('请先读取日志状态');
+    if (candidateLoggingBlocked()) throw new Error('日志已启用，不能修改 selection');
+    if (!candidateToken) throw new Error('请先读取 candidate');
+    if (!candidateSet.size && !candidateClear.size) throw new Error('当前页没有变更');
+    const body=new URLSearchParams({candidateToken,set:Array.from(candidateSet).sort((a,b)=>a-b).join(','),clear:Array.from(candidateClear).sort((a,b)=>a-b).join(',')}).toString();
+    const data=await exclusive('提交 candidate selection',()=>api('/api/dbc/selection',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    if (data && data.candidateToken && String(data.candidateToken)!==candidateToken) { candidateToken=String(data.candidateToken); clearCandidateEdits(); }
+    showJson('dbc-result',data); await loadCandidatePage(candidatePage); show('selection 已提交并回读', 'ok');
+  } catch (error) { show(error.message, 'error'); }
 }
 function canTxFormData() {
   const idText=$('can-tx-id').value.trim(); const id=/^0x[0-9a-f]+$/i.test(idText)?parseInt(idText,16):(/^[0-9]+$/.test(idText)?Number(idText):NaN);
@@ -356,7 +439,7 @@ async function canCycle() {
 }
 function startCan() { if (canAuto) return; canAuto=true; show('自动 CAN 刷新已启动', 'ok'); scheduleCanCycle(); }
 async function uploadDbc() {
-  try { const file=$('dbc-file').files[0]; if (!file) throw new Error('请选择 DBC 文件'); if (file.size>1024) throw new Error('DBC 文件超过 1024 B'); const text=await file.text(); const data=await exclusive('上传 DBC',()=>api('/api/dbc/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:text})); showJson('dbc-result',data); show('DBC 候选已上传，请确认后激活', 'ok'); }
+  try { const file=$('dbc-file').files[0]; if (!file) throw new Error('请选择 DBC 文件'); if (file.size>256*1024) throw new Error('DBC 文件超过 256 KiB'); const data=await exclusive('上传 DBC',()=>api('/api/dbc/upload',{method:'POST',headers:{'Content-Type':'text/plain'},body:file})); showJson('dbc-result',data); show('DBC 上传已受理，候选生成结果以后端状态为准', 'ok'); }
   catch (error) { show(error.message, 'error'); }
 }
 async function activateDbc() {
@@ -369,7 +452,11 @@ for (const id of ['can-tx-enabled','can-tx-id','can-tx-dlc','can-tx-data','can-t
 $('can-tx-enabled').addEventListener('change',()=>{ canTxFormDirty=true; });
 $('manual-read').onclick=refreshManual; $('manual-save').onclick=saveManual; $('rules-refresh').onclick=()=>refreshRules().catch(error=>show(error.message,'error'));
 $('log-read').onclick=readLogControl; $('log-save').onclick=saveLogControl; $('time-sync').onclick=syncSystemTime;
+$('log-enabled').addEventListener('change',updateCandidateWriteState);
 $('dbc-upload').onclick=uploadDbc; $('dbc-activate').onclick=activateDbc;
+$('candidate-refresh').onclick=()=>loadCandidatePage(0); $('candidate-prev').onclick=()=>loadCandidatePage(candidatePage-1); $('candidate-next').onclick=()=>loadCandidatePage(candidatePage+1); $('candidate-save').onclick=saveCandidateSelection;
+$('candidate-filter').onchange=()=>loadCandidatePage(0);
+$('candidate-query').oninput=()=>{ clearTimeout(candidateQueryTimer); candidateQueryTimer=setTimeout(()=>loadCandidatePage(0),300); };
 document.addEventListener('visibilitychange',()=>{ if (document.hidden) pauseCanForHidden(); else if (canResumeOnVisible) { canResumeOnVisible=false; startCan(); } });
 if (document.hidden) canResumeOnVisible=true; else canInitialTimer=setTimeout(()=>{ canInitialTimer=0; startCan(); },300);
 </script>

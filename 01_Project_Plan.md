@@ -34,6 +34,7 @@
 | 14 | 网页手动 TX 与两槽 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录新网页后，自动刷新 TX/RX=`55/364→576/5540`，两次编辑 TX 分别在`1800/1300 ms`后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX解析 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时 manual `relay1Output=0`与高优先级 off 一致；warn/error为空。此前构建、反汇编和烧录证据已实际完成。 |
 | 15 | 安全审查 P0 可靠性整改 | [已验证] | IWDG任务卡死复位、Crash Dump保持、DBC边界、SignalCache stale、FDCAN外部高负载和TF持续写入物理断电均完成源码与现场验收。TF首次断电失败后最小修复`CTRL_SYNC`及scratch写路径的卡ready等待；最终CTest=`20/20`、固件构建/反汇编/烧录通过。干净FAT32介质复测中断电后CSV为399223 B/4159行、无撕裂尾行，`fsck_msdos -n`退出0；重新上电后TF/DBC/网络/CAN恢复，新日志文件与write/flush继续增长且failure/drop=0。结论不扩大为FAT32任意掉电时刻的原子保证。 |
 | 16 | HTTP零数据连接回收 | [客观已验证] | 原始TCP连接不发数据可稳定复现唯一socket永久`ESTABLISHED`；只增加100 ms空连接计时并复用既有graceful `DISCON`，不改ACK/recovery/API或业务语义。CTest=`20/20`、最终ELF text/data/bss=`112828/768/243948`、定向反汇编、ST-Link烧录通过；10轮空连接在`110.4..146.3 ms`被回收且后续HTTP均成功，浏览器5次新页面、4次manual提交、最终9 API和ping均通过。 |
+| 17 | 大 DBC selected-only 闭环（A0-H） | [阻断：TF已重建，等待插卡上电] | 真实输入固定为`100071 B/112 BO_/896 SG_`标准Classic CAN/DLC8。TF的MBR/FAT32、权威资产、只读哈希/`cmp`和`fsck_msdos -n=0`已通过并eject；连续三个目标轮次开发板离线且Mac无TF卷。用户插卡上电后必须重新上传100KB输入、生成candidate/selection并完成D浏览器验收，之后才能进入E。旧generation7不作为新卷当前证据，CAN-FD实板路径为`[未验证]`。 |
 
 ## 阶段 C 当前状态
 

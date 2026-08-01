@@ -255,3 +255,45 @@ IWDG启动额外显式等待LSI ready，并按`0xCCCC -> 0x5555 -> PR/RLR -> 等
 本 ADR 的最终候选已完成CTest=`20/20`、STM32H750 ELF链接/关键反汇编、烧录、IWDG任务卡死复位、受控HardFault处理链路、外部CAN高负载和TF物理断电复测。HardFault受控跳转证明记录复制、D-Cache回写、复位及RAM_D3保持，不等价于真实硬件异常的堆栈根因采集。首次TF断电复核失败且存在测试前介质污染混杂；底层同步补丁修复后在测试前`fsck=0`的干净FAT32介质上复测，断电后目标CSV为399223 B/4159行、所有数据行可解析、无撕裂尾行，`fsck_msdos -n`退出0。重新上电后TF、网页、active DBC、网络、外部CAN均恢复，新日志file/write/flush继续增长且failure/drop=0。最终ELF/HEX SHA-256=`5f98bfa3e3af180219e0429734ff99d4c13a65645733356b387387eb17df7987`/`6f3e92ab95c91e79133a57710873c0dc9c20b3b8621bcab9f87aa4c4692144f8`。LAN写授权与TX白名单因缺少生产允许报文合同和授权来源，明确不在本ADR中擅自假定。
 
 高负载暂停式GDB首测会在内核暂停期人为填满FIFO，故不能以该读数评估运行态。完整`32 x CanFrame`RX队列确因FreeRTOS heap耗尽导致rule任务创建失败，故不采用该方案。保持任务、队列和DecodeTask边界不变，RX队列改为`32 x Can2RxQueueFrame`（`id/IDE/DLC/8字节数据`，反汇编为`xQueueGenericCreate(32, 16)`），DecodeTask再重建既有`CanFrame`。在用户持续外部输入下，OpenOCD telnet `mdw`非停机C→D→E两个20秒窗口中FIFO full/lost和RX queue drop均无增长，而RX与DBC匹配持续增长；该候选的FDCAN高负载P0通过。
+
+### ADR-032：大 DBC v1 使用 generation manifest 与 selected-only 合同
+
+2026-07-31以`/Users/elvin/Desktop/project/data/BNE_CLASSIC_CAN_TEST_100KB.dbc`为真实输入启动阶段17 A0-H。实测输入为`100071 B/112 messages/896 signals`，标准ID`256..367`且全部DLC8；最长key为52 B，672个key超过旧47 B有效上限。旧计划中的23消息/922信号扩展CAN-FD样例和16项分页不再作为本轮验收基线。
+
+A0合同以`docs/LARGE_DBC_P0_CONTRACT.md`和`include/large_dbc_contract.h`为权威来源。candidate和active均使用不可变generation文件组加64 B `current/previous` manifest，`current`为唯一提交点；统一称为“事务式、断电可恢复提交”，不得声称FAT32跨文件rename原子。candidate只有在upload二次读取、index、默认selection和三文件交叉验证全部成功后才提交manifest。active只有在规则`key + definition_hash`检查、非活动runtime构造/验证和active generation写入读回全部成功后，才提交磁盘manifest并在短临界区发布RAM manifest/runtime generation；任一失败保持旧active/runtime、规则、SignalValueState、继电器和日志。
+
+目录上限与运行态上限分离：TF index最多2048消息/2048信号，允许当前112消息输入完整索引；RAM仅保留最多64个selected message和128个selected signal。selection是2048 bit单一正向位图，未选信号不得进入runtime、CAN decode、SignalValueState、`/api/signals`、新CSV或新规则候选。candidate token固定为`generation + source_size + source_crc32`，不是授权凭证。
+
+格式v1全部按固定字段宽度、小端显式序列化并带size/CRC，禁止写packed struct。index header/message/signal record为`80/16/160 B`，selection为`64 B header + 256 B bitmap`，manifest为64 B；精确offset、CRC与FNV-1a-64 definition hash canonical stream见公共合同。parser支持LF/CRLF/无尾换行、标准/Vector扩展ID、Intel/Motorola、signed/unsigned、1..63 bit、科学计数法和DLC0..64；拒绝multiplex、`SG_MUL_VAL_`、重复消息/key、NaN/Inf/溢出和影响解码的未知语法。message/signal/key/unit有效内容上限为`31/31/63/31 B`。
+
+Classic/FD合同为declared length `0..8 => CLASSIC_OR_FD`、`9..64 => FD_REQUIRED`，动态长度采用严格相等语义。当前硬件优先验收标准Classic CAN/DLC8；扩展CAN-FD模型保留但实板`[未验证]`，不得以源码、upload/index或TX self-test代替外部64 B RX证据。
+
+API每页最多8项；最坏8项会超过2 KiB，因此JSON scratch为3072 B且最大正文3071 B，先完整有界序列化，再按最多512 B以固定Content-Length分段发送；这不是HTTP chunked transfer。容量或转义失败不得返回HTTP200截断body。日志准入固定为`selected_count * 1000 <= 20 * sample_period_ms`，会话锁定active generation与selection CRC并写同名`.meta`；20 rows/s的新路径硬件能力仍为`[未验证]`。最终固件至少保留4096 B FLASH；新selected runtime/value/static scratch总预算65536 B，不新增任务或常驻FreeRTOS heap分配，minimum-ever-free heap至少4096 B、受影响任务stack margin至少256 B。
+
+授权边界冻结为隔离实验LAN和现场操作者显式写操作，仅供本轮lab验收；生产构建在统一生产写授权完成前必须fail closed。candidate token、测试帧和硬编码默认token均不得作为生产授权。A0通过前不修改HTTP、TF、FDCAN、网页或runtime业务，不烧录。
+
+A0最终定向host合同测试`1/1`通过，统一`./scripts/verify.sh`为CTest=`21/21`；STM32目标`ninja: no work to do`，ELF `text/data/bss=112828/768/243948`，ELF/HEX SHA-256保持`742dbe264a5f6ea7282123fd151ff67aac30cd410ec5a41a0acb331092b2b92f`/`0e6396e22dfb8d85627e626314aa6d9fca61abf40efeab2fd01d8baf41c01025`。本阶段没有固件业务改动，因此未执行新反汇编或烧录；A0门禁通过，下一步仅解锁A1 pure core parser/index与host dump/verify。
+
+A1已完成且不改变上述合同：parser仅持有512 B行scratch并按任意chunk消费，index builder使用TF/host可替换的random-access I/O与双spool，不把目录常驻RAM。真实输入用`1/137/512 B`三种chunk得到逐字节相同的`145232 B` index；header/message/signal区分别为`80/1792/143360 B`，source CRC32=`4B88D9CE`、record CRC32=`54431B55/90868936`。旧`151 B` active DBC得到`416 B/1 message/2 signals` index。index verifier独立检查CRC、offset/count、ordinal/parent、重复identity/key、definition hash、ASCII `message.signal` key、UTF-8 unit及control/padding；dump以binary64固定hex bits为权威输出，避免locale改变格式。
+
+A1严格警告、ASan/UBSan、host build/verify/dump和统一`./scripts/verify.sh`均通过，统一CTest=`26/26`。新增源码虽参与STM32编译，但尚未被固件业务入口引用，最终ELF符号中不存在`dbc_stream*`/`dbc_catalog*`且map显示其section被GC；因此最终`text/data/bss=112828/768/243948`及ELF/HEX SHA-256仍为`742dbe264a5f6ea7282123fd151ff67aac30cd410ec5a41a0acb331092b2b92f`/`0e6396e22dfb8d85627e626314aa6d9fca61abf40efeab2fd01d8baf41c01025`。本阶段未改HTTP、TF、FDCAN、网页或runtime，未烧录；B阶段才允许接入流式upload tmp。
+
+B阶段只发布暂存对象，不升级candidate语义：W5500 socket0顺序解析固定`POST /api/dbc/upload HTTP/1.1`，要求唯一Content-Length与`text/plain`，拒绝Transfer-Encoding、multipart、零长度和超过256 KiB；每次最多512 B，TF `f_write`成功后才更新W5500 `RX_RD`。状态机以增量IEEE CRC32记录source，5 s idle或120 s total、对端提前关闭、长度越界及任一TF错误都关闭并unlink当前tmp；成功仅校验size并`f_sync + f_close`，文件名固定为`/dbc/upload.<16位大写generation>.tmp`，不得提前替换candidate。
+
+B门禁由host与实板共同关闭：portable测试覆盖1 B/256 KiB、任意分块、CRC golden、短/超写、sink失败、取消、tick wrap、5 s/120 s和HTTP拒绝矩阵；统一CTest=`27/27`。真实100071 B文件实板上传返回size=`100071`、CRC32=`4B88D9CE`和`/dbc/upload.0000000000000001.tmp`，板端为196次写、`f_write/f_sync/f_close=FR_OK`，active runtime前后完全一致；413/415/408和idle tmp unlink通过。nano printf不支持`%llX`曾实际破坏响应和路径，已改为两个固定32-bit字段并加入path host测试。C阶段必须把RAM-only upload序号纳入持久generation/manifest恢复，B结果本身不等于candidate有效。
+
+C补充冻结：candidate与active各自维护独立单调generation；默认selection的`selection_generation == candidate_generation`，selection更新生成新candidate时两者再次相等。C工作文件固定为`candidate.<GEN16>.spool.tmp/.idx.tmp/.sel.tmp`和`candidate.current.tmp`，均不是提交点；正式三件套和current manifest仍按P0既定顺序发布。
+
+C门禁已关闭：固件用DbcTask同步backend对upload二读并在TF上构造combined spool、index和默认selection，temp/formal/manifest引用均完整读回后才发布current。manifest发布后若最终读回失败会显式回滚本次current及本次rename的generation文件，旧candidate留在previous；next generation只在成功发布后推进。启动独立验证current和previous并选择current优先，candidate恢复不触碰active/runtime。真实输入最终发布generation2，复位后恢复generation2且旧active runtime仍为generation1。目录孤儿的全扫描清理未在C实现，保留H故障恢复范围，不影响current/previous有效性结论。
+
+D阶段保持单socket和单请求串行。`GET /api/dbc/candidate/signals`只接受固定page、最多63 B解码搜索词和`selected=all|true|false`，每页固定8项；`POST /api/dbc/selection`要求完整candidate token，单请求set/clear各不超过32项且禁止交集。JSON先两遍计算和完整序列化，最大3071 B，容量不足、转义失败或索引错误均不得以200返回截断正文。selection修改复制旧generation的`.dbc/.idx`并创建新`.sel`，temp/formal/current manifest全部验证后才发布新candidate generation；不触碰active/runtime、规则、SignalCache或日志。
+
+D后端与事务实板已通过：candidate由generation2/selected0逐批推进到generation7/selected128/messages16；第129项返回422、stale token返回409、非法参数返回400，日志进行中selection写入返回409；重启恢复generation7/128且旧active runtime仍为generation1。长TF查询期间HttpTask持W5500 mutex，故W5500Task loop可能停转；IWDG健康合同修正为W5500 loop或candidate progress任一增长，避免把同一受控长操作误判为死锁，最终查询19.67 s且`unhealthy=0`。这不提供并发HTTP能力。
+
+D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防抖、selected筛选和set/clear；但板端TF仍是旧28989 B页面，仓库页面哈希尚未在板端出现。既有`stm32h750_tf_ensure_default_www()`只在文件不存在时创建极简页，固件没有更新已有网页的接口。按既有硬件边界，必须下电更新TF `/www/index.html`、插回上电后再做浏览器与console验收；完成前D不得关闭、E不得启动。
+
+2026-08-01用户确认已覆盖新网页并插回上电，但板端事实未满足部署门禁：网络正常，TF状态为2，首页和candidate均404，active runtime也未加载。ST-Link读回`g_tf_mount_result=0x0D (FR_NO_FILESYSTEM)`，SD初始化和扇区读取本身无HAL错误或读失败；一次`reset run`后状态完全一致。因此本ADR不把人工文件复制确认升级为网页部署通过，也不把此前generation7恢复证据外推到当前不可挂载介质。处理顺序固定为下电、主机只读检查分区/FAT32、保留或恢复可审计数据、重新插卡冷启动，再核对网页哈希、candidate manifest和旧active；未经只读证据不得直接格式化或重建。
+
+主机只读检查已把故障定位到卷引导区：`/dev/disk4`仍枚举为15.6 GB MBR，`disk4s1`类型为DOS_FAT_32且偏移2048扇区；但`diskutil verifyVolume`调用的`fsck_msdos -n`报告`Invalid BS_jmpBoot in boot block: 555342`并退出201，只读mount失败。当前设备保持unmounted，未执行repair或格式化。由于卡内可能含日志和此前candidate generations，是否尝试镜像/数据恢复属于用户数据保留决策；只有用户确认这些数据可丢弃时，才允许重建MBR/FAT32并从仓库网页、旧active资产和真实100KB DBC重新生成candidate/selection。无论选择哪条路径，旧generation7实板证据可保留为历史，但当前介质恢复后必须重新取得当前generation/selection和网页哈希，不能直接复用为新卡运行态。
+
+用户随后明确授权格式化并要求加载全部TF必需文件。重建范围严格采用`deploy/tf/README.md`：`MBR + FAT32`卷、五个必需目录、新版`/www/index.html`、151 B `/dbc/active.dbc`及相同`/dbc/candidate.dbc`。日志、事务tmp、prev、large-DBC generation/manifest和V4规则均不是可猜测静态资产，不予伪造。格式化删除了旧卡数据且本轮未创建镜像。部署后网页与两DBC分别通过SHA-256和`cmp`；AppleDouble旁车清零，卸载后的FatFs三阶段只读检查exit0，随后只读复挂载再次核对文件并安全eject。该结果只证明主机部署介质有效；必须插回板端冷启动后再证明TF mount、页面服务、active load和新的candidate generation。

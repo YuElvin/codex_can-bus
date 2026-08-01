@@ -1,5 +1,6 @@
 #include "rule_file.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -261,6 +262,119 @@ static int test_valid_v4_decimal_round_trip(void) {
   return 0;
 }
 
+static size_t reference_format_decimal(double value, char *text,
+                                       size_t capacity) {
+  if (text == NULL || capacity == 0u || !isfinite(value)) {
+    return 0u;
+  }
+  const int written = snprintf(text, capacity, "%.9f", value);
+  if (written < 0 || (size_t)written >= capacity) {
+    return 0u;
+  }
+  size_t used = (size_t)written;
+  while (used > 0u && text[used - 1u] == '0') {
+    --used;
+  }
+  if (used > 0u && text[used - 1u] == '.') {
+    --used;
+  }
+  if (used == 0u || (used == 1u && text[0] == '-')) {
+    text[0] = '0';
+    used = 1u;
+  }
+  text[used] = '\0';
+  return used;
+}
+
+static int test_decimal_formatter_matches_fixed_nine_contract(void) {
+  static const double values[] = {
+    0.0,
+    -0.0,
+    1234.5,
+    -1.25,
+    0.0009765625,
+    0.0029296875,
+    0.0000000004,
+    -0.0000000004,
+    1.9999999996,
+    9999999999.999999999,
+    100000000000000000000.0,
+    -10000000000000000000.0,
+    0x1p-1074,
+    DBL_MAX,
+    -DBL_MAX,
+  };
+  for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i) {
+    char expected[384];
+    char actual[384];
+    const size_t expected_len =
+      reference_format_decimal(values[i], expected, sizeof(expected));
+    const size_t actual_len =
+      rule_file_format_decimal(values[i], actual, sizeof(actual));
+    ASSERT_TRUE(actual_len == expected_len);
+    ASSERT_TRUE(actual_len == 0u || strcmp(actual, expected) == 0);
+  }
+  uint64_t state = UINT64_C(0x4d595df4d0f33173);
+  for (size_t i = 0u; i < 2048u; ++i) {
+    char expected[384];
+    char actual[384];
+    double value;
+    state = state * UINT64_C(6364136223846793005) + UINT64_C(1442695040888963407);
+    if (((state >> 52u) & UINT64_C(0x7ff)) == UINT64_C(0x7ff)) {
+      state ^= UINT64_C(0x0010000000000000);
+    }
+    memcpy(&value, &state, sizeof(value));
+    const size_t expected_len =
+      reference_format_decimal(value, expected, sizeof(expected));
+    const size_t actual_len =
+      rule_file_format_decimal(value, actual, sizeof(actual));
+    ASSERT_TRUE(actual_len == expected_len);
+    ASSERT_TRUE(actual_len == 0u || strcmp(actual, expected) == 0);
+  }
+  return 0;
+}
+
+static int test_decimal_formatter_capacity_and_invalid_values(void) {
+  char text[32];
+  ASSERT_TRUE(rule_file_format_decimal(1234.5, text, 14u) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(1234.5, text, 15u) == 6u);
+  ASSERT_TRUE(strcmp(text, "1234.5") == 0);
+  ASSERT_TRUE(rule_file_format_decimal(100000000000000000000.0,
+                                       text, sizeof(text)) == 21u);
+  ASSERT_TRUE(strcmp(text, "100000000000000000000") == 0);
+  ASSERT_TRUE(rule_file_format_decimal(1000000000000000000000.0,
+                                       text, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(-100000000000000000000.0,
+                                       text, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(NAN, text, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(INFINITY, text, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(-INFINITY, text, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(1.0, NULL, sizeof(text)) == 0u);
+  ASSERT_TRUE(rule_file_format_decimal(1.0, text, 0u) == 0u);
+  return 0;
+}
+
+static int test_decimal_formatter_round_trip_is_stable(void) {
+  static const double values[] = {
+    -0.0, -1234.567890123, -0.0009765625, 0.0,
+    0.000000001, 1.234567891, 1234.5, 9999999999.25,
+  };
+  for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i) {
+    char first[32];
+    char second[32];
+    double parsed;
+    const size_t first_len =
+      rule_file_format_decimal(values[i], first, sizeof(first));
+    ASSERT_TRUE(first_len > 0u);
+    ASSERT_TRUE(rule_file_parse_decimal(first, first_len, &parsed));
+    const size_t second_len =
+      rule_file_format_decimal(parsed, second, sizeof(second));
+    ASSERT_TRUE(second_len == first_len);
+    ASSERT_TRUE(strcmp(first, second) == 0);
+  }
+  return 0;
+}
+
 static int test_invalid_v4_does_not_change_candidate(void) {
   static const char invalid[] =
     "version=4\nruleCount=2\nrule0.enabled=1\nrule0.relay=0\n"
@@ -287,6 +401,9 @@ int main(void) {
   ASSERT_TRUE(test_valid_v3_and_enabled_engine() == 0);
   ASSERT_TRUE(test_invalid_v3_does_not_change_candidate() == 0);
   ASSERT_TRUE(test_valid_v4_decimal_round_trip() == 0);
+  ASSERT_TRUE(test_decimal_formatter_matches_fixed_nine_contract() == 0);
+  ASSERT_TRUE(test_decimal_formatter_capacity_and_invalid_values() == 0);
+  ASSERT_TRUE(test_decimal_formatter_round_trip_is_stable() == 0);
   ASSERT_TRUE(test_invalid_v4_does_not_change_candidate() == 0);
   return 0;
 }

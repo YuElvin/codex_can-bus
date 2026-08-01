@@ -1,8 +1,12 @@
 #if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "main.h"
+#include "dbc_candidate_catalog.h"
+#include "dbc_candidate_http.h"
 #include "dbc_parser.h"
 #include "dbc_signal_catalog.h"
+#include "dbc_upload.h"
+#include "platform/large_dbc_candidate_stm32.h"
 #include "platform/stm32h750_bringup.h"
 #include "rule_file.h"
 #include "signal_api.h"
@@ -111,6 +115,35 @@ volatile uint32_t g_w5500_http_dbc_upload_messages = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_signals = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_skipped = 0u;
 volatile uint32_t g_w5500_http_dbc_upload_errors = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_phase = DBC_UPLOAD_STATE_IDLE;
+volatile uint32_t g_w5500_http_dbc_upload_expected_bytes = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_crc32 = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_generation_hi = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_generation_lo = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_idle_timeout_count = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_total_timeout_count = 0u;
+volatile uint32_t g_w5500_http_dbc_upload_abort_count = 0u;
+volatile uint32_t g_w5500_http_candidate_available = 0u;
+volatile uint32_t g_w5500_http_candidate_pending = 0u;
+volatile uint32_t g_w5500_http_candidate_active = 0u;
+volatile uint32_t g_w5500_http_candidate_complete = 0u;
+volatile uint32_t g_w5500_http_candidate_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_candidate_progress_count = 0u;
+volatile uint32_t g_w5500_http_candidate_progress_bytes = 0u;
+volatile uint32_t g_w5500_http_candidate_last_io_operation = 0xffffffffu;
+volatile uint32_t g_w5500_http_candidate_last_io_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_candidate_generation_hi = 0u;
+volatile uint32_t g_w5500_http_candidate_generation_lo = 0u;
+volatile uint32_t g_w5500_http_candidate_source_size = 0u;
+volatile uint32_t g_w5500_http_candidate_source_crc32 = 0u;
+volatile uint32_t g_w5500_http_candidate_index_size = 0u;
+volatile uint32_t g_w5500_http_candidate_index_crc32 = 0u;
+volatile uint32_t g_w5500_http_candidate_selection_crc32 = 0u;
+volatile uint32_t g_w5500_http_candidate_catalog_messages = 0u;
+volatile uint32_t g_w5500_http_candidate_catalog_signals = 0u;
+volatile uint32_t g_w5500_http_candidate_selected_count = 0u;
+volatile uint32_t g_w5500_http_candidate_selected_messages = 0u;
+volatile uint32_t g_w5500_http_candidate_recovery_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_dbc_candidate_load_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_dbc_candidate_read_len = 0u;
 volatile uint32_t g_w5500_http_dbc_candidate_valid = 0u;
@@ -239,6 +272,8 @@ extern SignalLogControl g_signal_log_control;
 #define W5500_HTTP_PATH_CAN_TX_SIGNALS 12u
 #define W5500_HTTP_PATH_LOG_CONTROL 14u
 #define W5500_HTTP_PATH_TIME_SYNC 15u
+#define W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS 16u
+#define W5500_HTTP_PATH_DBC_SELECTION 17u
 #define W5500_HTTP_STATIC_CHUNK_SIZE 512u
 #define W5500_HTTP_REQUEST_BUFFER_SIZE 1536u
 #define W5500_HTTP_UPLOAD_BODY_MAX 1024u
@@ -247,10 +282,8 @@ extern SignalLogControl g_signal_log_control;
 #define W5500_HTTP_CAN_TX_BODY_MAX 96u
 #define W5500_HTTP_LOG_CONTROL_BODY_MAX 96u
 #define W5500_HTTP_TIME_SYNC_BODY_MAX 64u
-#define W5500_HTTP_DBC_UPLOAD_TMP_PATH "/dbc/upload.write.tmp"
 #define W5500_HTTP_DBC_ACTIVE_TMP_PATH "/dbc/active.write.tmp"
 #define W5500_HTTP_DBC_CANDIDATE_PATH "/dbc/candidate.dbc"
-#define W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH "/dbc/candidate.prev.dbc"
 #define W5500_HTTP_DBC_ACTIVE_PATH "/dbc/active.dbc"
 #define W5500_HTTP_DBC_ACTIVE_BACKUP_PATH "/dbc/active.prev.dbc"
 #define W5500_HTTP_STATIC_OK 0
@@ -277,13 +310,38 @@ static uint8_t g_w5500_bound;
 static SemaphoreHandle_t g_w5500_dbc_mutex;
 static QueueHandle_t g_w5500_dbc_reload_queue;
 static char g_http_request_buffer[W5500_HTTP_REQUEST_BUFFER_SIZE];
-static char g_http_response_body[1280];
+static char g_http_response_body[LARGE_DBC_HTTP_JSON_BODY_BYTES];
 static uint8_t g_http_static_chunk[W5500_HTTP_STATIC_CHUNK_SIZE];
 static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
 static DbcDatabase g_http_dbc_runtime_db[2];
 static const DbcDatabase *g_http_dbc_runtime_active_db;
 static DbcSignalCatalogEntry g_http_dbc_signal_page[DBC_SIGNAL_CATALOG_PAGE_SIZE];
+static DbcUploadState g_http_dbc_upload;
+static DbcUploadResult g_http_dbc_upload_completed;
+static uint64_t g_http_dbc_upload_next_generation = 1u;
+static DbcCandidateUpload g_http_candidate_request;
+static DbcCandidateDescriptor g_http_candidate_snapshot;
+static volatile uint32_t g_http_candidate_mutation_busy;
+static DbcCandidateCatalogQuery g_http_candidate_query_request;
+static char g_http_candidate_query_text[LARGE_DBC_QUERY_MAX_BYTES + 1u];
+static DbcCandidateCatalogPage g_http_candidate_query_page;
+static DbcCandidateDescriptor g_http_candidate_query_snapshot;
+static char g_http_candidate_query_token[LARGE_DBC_CANDIDATE_TOKEN_BUFFER_BYTES];
+static LargeDbcCandidateCatalogResult g_http_candidate_query_backend_result;
+static volatile uint32_t g_http_candidate_query_pending;
+static volatile uint32_t g_http_candidate_query_active;
+static volatile uint32_t g_http_candidate_query_complete;
+static volatile uint32_t g_http_candidate_query_result = 0xffffffffu;
+static DbcCandidateSelectionMutation g_http_candidate_selection_request;
+static char g_http_candidate_selection_token[LARGE_DBC_CANDIDATE_TOKEN_BUFFER_BYTES];
+static uint16_t g_http_candidate_selection_set[LARGE_DBC_SELECTION_UPDATE_MAX_ORDINALS];
+static uint16_t g_http_candidate_selection_clear[LARGE_DBC_SELECTION_UPDATE_MAX_ORDINALS];
+static DbcCandidateDescriptor g_http_candidate_selection_snapshot;
+static LargeDbcCandidateSnapshot g_http_candidate_selection_backend_result;
+static volatile uint32_t g_http_candidate_selection_pending;
+static volatile uint32_t g_http_candidate_selection_complete;
+static volatile uint32_t g_http_candidate_selection_result = 0xffffffffu;
 static uint8_t g_w5500_http_disconnect_pending;
 static uint32_t g_w5500_http_disconnect_pending_start_tick;
 static uint32_t g_w5500_http_ack_wait_start_tick;
@@ -299,6 +357,11 @@ static uint32_t g_w5500_http_connection_last_ir_result = 0xffffffffu;
 static uint32_t g_w5500_http_connection_last_ir = 0xffffffffu;
 static uint32_t g_w5500_http_connection_last_rx_rsr_result = 0xffffffffu;
 static uint32_t g_w5500_http_connection_last_rx_rsr = 0xffffffffu;
+
+static int http_upload_error_response(uint16_t code,
+                                      const char *error_code,
+                                      const char *message);
+static void candidate_mutation_end(void);
 static uint32_t g_w5500_http_connection_last_poll_gap_ms;
 static uint8_t g_w5500_http_connection_trace_started;
 static uint8_t g_w5500_http_no_trace_frozen;
@@ -540,6 +603,59 @@ static W5500Result socket_buffer_write(uint8_t block, uint16_t ptr, const uint8_
   return W5500_OK;
 }
 
+static bool http_upload_sink_begin(void *context,
+                                   uint64_t generation,
+                                   uint32_t content_length) {
+  (void)context;
+  return stm32h750_tf_large_dbc_upload_begin(generation, content_length) == 0;
+}
+
+static bool http_upload_sink_write(void *context,
+                                   const uint8_t *data,
+                                   uint32_t size) {
+  (void)context;
+  return stm32h750_tf_large_dbc_upload_write(data, size) == 0;
+}
+
+static bool http_upload_sink_finalize(void *context) {
+  (void)context;
+  return stm32h750_tf_large_dbc_upload_finalize() == 0;
+}
+
+static void http_upload_sink_abort(void *context) {
+  (void)context;
+  stm32h750_tf_large_dbc_upload_abort();
+}
+
+static void http_upload_update_diagnostics(void) {
+  g_w5500_http_dbc_upload_phase = (uint32_t)g_http_dbc_upload.phase;
+  g_w5500_http_dbc_upload_result = (uint32_t)g_http_dbc_upload.status;
+  g_w5500_http_dbc_upload_expected_bytes = g_http_dbc_upload.expected_size;
+  g_w5500_http_dbc_upload_bytes = g_http_dbc_upload.received_size;
+  g_w5500_http_dbc_upload_generation_hi =
+    (uint32_t)(g_http_dbc_upload.generation >> 32u);
+  g_w5500_http_dbc_upload_generation_lo =
+    (uint32_t)g_http_dbc_upload.generation;
+}
+
+static int http_upload_reset_state(void) {
+  if (g_http_dbc_upload.phase == DBC_UPLOAD_STATE_RECEIVING) {
+    (void)dbc_upload_cancel(&g_http_dbc_upload);
+    ++g_w5500_http_dbc_upload_abort_count;
+    candidate_mutation_end();
+  }
+  const DbcUploadSink sink = {
+    .context = NULL,
+    .begin = http_upload_sink_begin,
+    .write = http_upload_sink_write,
+    .finalize = http_upload_sink_finalize,
+    .abort = http_upload_sink_abort
+  };
+  const DbcUploadStatus status = dbc_upload_init(&g_http_dbc_upload, &sink);
+  http_upload_update_diagnostics();
+  return status == DBC_UPLOAD_STATUS_OK ? 0 : 1;
+}
+
 static int http_close_socket(uint32_t source) {
   uint8_t sr = 0u;
   if (s0_read_u8(W5500_S0_SR, &sr) != W5500_OK) {
@@ -552,6 +668,7 @@ static int http_close_socket(uint32_t source) {
   g_w5500_http_ack_wait_pending = 0u;
   g_w5500_http_ack_wait_start_tick = 0u;
   http_idle_connection_reset();
+  (void)http_upload_reset_state();
   const W5500Result close_result = s0_command(W5500_S0_CR_CLOSE);
   (void)s0_write_u8(W5500_S0_IR, 0x1fu);
   if (close_result != W5500_OK) {
@@ -686,18 +803,32 @@ static const char *http_status_text(uint16_t code) {
       return "OK";
     case 201u:
       return "Created";
+    case 202u:
+      return "Accepted";
     case 400u:
       return "Bad Request";
+    case 408u:
+      return "Request Timeout";
     case 404u:
       return "Not Found";
     case 405u:
       return "Method Not Allowed";
     case 409u:
       return "Conflict";
+    case 411u:
+      return "Length Required";
     case 413u:
       return "Payload Too Large";
+    case 415u:
+      return "Unsupported Media Type";
+    case 422u:
+      return "Unprocessable Content";
     case 500u:
       return "Internal Server Error";
+    case 504u:
+      return "Gateway Timeout";
+    case 507u:
+      return "Insufficient Storage";
     default:
       return "Error";
   }
@@ -823,27 +954,6 @@ static size_t build_error_body(char *body, size_t len, const char *code, const c
                           "{\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
                           code,
                           message);
-}
-
-static size_t build_dbc_upload_body(char *body, size_t len, const DbcUploadReport *report) {
-  return (size_t)snprintf(body,
-                          len,
-                          "{\"ok\":true,\"data\":{\"candidate\":\"%s\",\"candidateBackup\":\"%s\","
-                          "\"active\":\"%s\",\"activeBackup\":\"%s\",\"maxBytes\":%lu,\"bytes\":%lu,"
-                          "\"lines\":%lu,\"messages\":%lu,\"signals\":%lu,"
-                          "\"skipped\":%lu,\"errors\":%lu,\"valid\":%s}}",
-                          W5500_HTTP_DBC_CANDIDATE_PATH,
-                          W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH,
-                          W5500_HTTP_DBC_ACTIVE_PATH,
-                          W5500_HTTP_DBC_ACTIVE_BACKUP_PATH,
-                          (unsigned long)W5500_HTTP_UPLOAD_BODY_MAX,
-                          (unsigned long)report->bytes,
-                          (unsigned long)report->lines,
-                          (unsigned long)report->messages,
-                          (unsigned long)report->signals,
-                          (unsigned long)report->skipped,
-                          (unsigned long)report->errors,
-                          report->errors == 0u ? "true" : "false");
 }
 
 static size_t build_dbc_active_body(char *body, size_t len, const DbcUploadReport *report) {
@@ -1039,11 +1149,16 @@ static bool parse_decimal_size(const char *text, const char *end, size_t *value)
   bool has_digit = false;
   text = skip_http_space(text);
   while (text < end && *text >= '0' && *text <= '9') {
-    result = (result * 10u) + (size_t)(*text - '0');
+    const size_t digit = (size_t)(*text - '0');
+    if (result > (SIZE_MAX - digit) / 10u) {
+      return false;
+    }
+    result = (result * 10u) + digit;
     has_digit = true;
     ++text;
   }
-  if (!has_digit) {
+  text = skip_http_space(text);
+  if (!has_digit || text != end) {
     return false;
   }
   *value = result;
@@ -1068,6 +1183,51 @@ static bool http_parse_content_length(const char *request, const char *header_en
     line = line_end + 2u;
   }
   return false;
+}
+
+static bool http_span_equals_case(const char *text, size_t text_len,
+                                  const char *expected) {
+  const size_t expected_len = strlen(expected);
+  if (text_len != expected_len) {
+    return false;
+  }
+  for (size_t i = 0u; i < text_len; ++i) {
+    uint8_t left = (uint8_t)text[i];
+    uint8_t right = (uint8_t)expected[i];
+    if (left >= (uint8_t)'A' && left <= (uint8_t)'Z') left += 32u;
+    if (right >= (uint8_t)'A' && right <= (uint8_t)'Z') right += 32u;
+    if (left != right) return false;
+  }
+  return true;
+}
+
+static bool http_content_type_is_selection_form(const char *request,
+                                                const char *header_end) {
+  const char *line = strstr(request, "\r\n");
+  bool found = false;
+  if (line == NULL || line >= header_end) return false;
+  line += 2u;
+  while (line < header_end) {
+    const char *line_end = strstr(line, "\r\n");
+    if (line_end == NULL || line_end > header_end) line_end = header_end;
+    const char *colon = memchr(line, ':', (size_t)(line_end - line));
+    if (colon != NULL &&
+        http_span_equals_case(line, (size_t)(colon - line), "Content-Type")) {
+      if (found) return false;
+      const char *value = skip_http_space(colon + 1u);
+      const char *value_end = line_end;
+      while (value_end > value &&
+             (value_end[-1] == ' ' || value_end[-1] == '\t')) --value_end;
+      if (!http_span_equals_case(value, (size_t)(value_end - value),
+                                 "application/x-www-form-urlencoded")) {
+        return false;
+      }
+      found = true;
+    }
+    if (line_end == header_end) break;
+    line = line_end + 2u;
+  }
+  return found;
 }
 
 static int dbc_load_candidate_report(DbcUploadReport *report) {
@@ -1192,8 +1352,124 @@ int w5500_http_load_active_dbc(void) {
   return result;
 }
 
+#define DBC_WORK_COMMAND_RELOAD 1u
+#define DBC_WORK_COMMAND_CANDIDATE 2u
+#define DBC_WORK_COMMAND_CANDIDATE_QUERY 3u
+#define DBC_WORK_COMMAND_CANDIDATE_SELECTION 4u
+
+static void candidate_record_snapshot_unlocked(
+  const DbcCandidateDescriptor *candidate) {
+  if (candidate == NULL) {
+    return;
+  }
+  g_w5500_http_candidate_generation_hi =
+    (uint32_t)(candidate->generation >> 32u);
+  g_w5500_http_candidate_generation_lo = (uint32_t)candidate->generation;
+  g_w5500_http_candidate_source_size = candidate->source_size;
+  g_w5500_http_candidate_source_crc32 = candidate->source_crc32;
+  g_w5500_http_candidate_index_size = candidate->index_size;
+  g_w5500_http_candidate_index_crc32 = candidate->index_crc32;
+  g_w5500_http_candidate_selection_crc32 = candidate->selection_crc32;
+  g_w5500_http_candidate_catalog_messages = candidate->catalog_message_count;
+  g_w5500_http_candidate_catalog_signals = candidate->catalog_signal_count;
+  g_w5500_http_candidate_selected_count = candidate->selected_count;
+  g_w5500_http_candidate_selected_messages = candidate->selected_message_count;
+}
+
+static void candidate_publish_snapshot(const DbcCandidateDescriptor *candidate,
+                                       bool available) {
+  taskENTER_CRITICAL();
+  if (candidate != NULL && available) {
+    g_http_candidate_snapshot = *candidate;
+    candidate_record_snapshot_unlocked(candidate);
+  } else {
+    memset(&g_http_candidate_snapshot, 0, sizeof(g_http_candidate_snapshot));
+  }
+  g_w5500_http_candidate_available = available ? 1u : 0u;
+  taskEXIT_CRITICAL();
+}
+
+static bool candidate_read_snapshot(DbcCandidateDescriptor *candidate) {
+  bool available;
+  taskENTER_CRITICAL();
+  available = g_w5500_http_candidate_available != 0u;
+  if (available && candidate != NULL) {
+    *candidate = g_http_candidate_snapshot;
+  }
+  taskEXIT_CRITICAL();
+  return available;
+}
+
+typedef enum {
+  HTTP_CANDIDATE_MUTATION_OK = 0,
+  HTTP_CANDIDATE_MUTATION_LOGGING,
+  HTTP_CANDIDATE_MUTATION_BUSY
+} HttpCandidateMutationGate;
+
+static HttpCandidateMutationGate candidate_mutation_begin(void) {
+  HttpCandidateMutationGate result = HTTP_CANDIDATE_MUTATION_OK;
+  taskENTER_CRITICAL();
+  if (g_signal_log_control.enabled) {
+    result = HTTP_CANDIDATE_MUTATION_LOGGING;
+  } else if (g_http_candidate_mutation_busy != 0u ||
+             g_http_candidate_query_pending != 0u ||
+             g_http_candidate_query_active != 0u) {
+    result = HTTP_CANDIDATE_MUTATION_BUSY;
+  } else {
+    g_http_candidate_mutation_busy = 1u;
+  }
+  taskEXIT_CRITICAL();
+  return result;
+}
+
+static void candidate_mutation_end(void) {
+  taskENTER_CRITICAL();
+  g_http_candidate_mutation_busy = 0u;
+  taskEXIT_CRITICAL();
+}
+
+static void candidate_progress(void *context,
+                               LargeDbcCandidateIoOperation operation,
+                               uint32_t transferred_bytes,
+                               int io_result) {
+  (void)context;
+  ++g_w5500_http_candidate_progress_count;
+  g_w5500_http_candidate_progress_bytes += transferred_bytes;
+  g_w5500_http_candidate_last_io_operation = (uint32_t)operation;
+  g_w5500_http_candidate_last_io_result = (uint32_t)io_result;
+  if ((g_w5500_http_candidate_progress_count & 31u) == 0u) {
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+}
+
+int w5500_http_recover_large_dbc_candidate(void) {
+  bool available = false;
+  uint64_t next_generation = 0u;
+  DbcCandidateDescriptor recovered;
+  memset(&recovered, 0, sizeof(recovered));
+  const LargeDbcCandidateStm32Status status =
+    stm32h750_large_dbc_candidate_recover(candidate_progress,
+                                           NULL,
+                                           &available,
+                                           &recovered,
+                                           &next_generation);
+  g_w5500_http_candidate_recovery_result = (uint32_t)status;
+  if (status != LARGE_DBC_CANDIDATE_STM32_OK || next_generation == 0u) {
+    taskENTER_CRITICAL();
+    g_http_dbc_upload_next_generation = 0u;
+    taskEXIT_CRITICAL();
+    candidate_publish_snapshot(NULL, false);
+    return 1;
+  }
+  taskENTER_CRITICAL();
+  g_http_dbc_upload_next_generation = next_generation;
+  taskEXIT_CRITICAL();
+  candidate_publish_snapshot(available ? &recovered : NULL, available);
+  return 0;
+}
+
 void w5500_http_request_dbc_reload(void) {
-  const uint8_t command = 1u;
+  const uint8_t command = DBC_WORK_COMMAND_RELOAD;
 
   g_w5500_http_dbc_reload_result = 0xffffffffu;
   g_w5500_http_dbc_reload_complete = 0u;
@@ -1206,6 +1482,118 @@ void w5500_http_request_dbc_reload(void) {
   ++g_w5500_http_dbc_reload_enqueue_count;
 }
 
+static int w5500_http_request_candidate_build(const DbcUploadResult *upload) {
+  const uint8_t command = DBC_WORK_COMMAND_CANDIDATE;
+  uint64_t next_generation;
+  taskENTER_CRITICAL();
+  next_generation = g_http_dbc_upload_next_generation;
+  taskEXIT_CRITICAL();
+  if (upload == NULL || g_w5500_dbc_reload_queue == NULL ||
+      g_w5500_http_candidate_pending != 0u ||
+      g_w5500_http_candidate_active != 0u ||
+      upload->generation != next_generation) {
+    return 1;
+  }
+  g_http_candidate_request.generation = upload->generation;
+  g_http_candidate_request.source_size = upload->source_size;
+  g_http_candidate_request.source_crc32 = upload->source_crc32;
+  g_w5500_http_candidate_complete = 0u;
+  g_w5500_http_candidate_result = 0xffffffffu;
+  g_w5500_http_candidate_pending = 1u;
+  if (xQueueSend(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
+    g_w5500_http_candidate_pending = 0u;
+    ++g_w5500_http_dbc_reload_queue_drop_count;
+    return 1;
+  }
+  ++g_w5500_http_dbc_reload_enqueue_count;
+  return 0;
+}
+
+static int w5500_http_request_candidate_query(
+  const DbcCandidateCatalogQuery *query) {
+  const uint8_t command = DBC_WORK_COMMAND_CANDIDATE_QUERY;
+  if (query == NULL || query->query_length > LARGE_DBC_QUERY_MAX_BYTES ||
+      (query->query_length != 0u && query->query == NULL) ||
+      g_w5500_dbc_reload_queue == NULL) {
+    return 1;
+  }
+  taskENTER_CRITICAL();
+  if (g_http_candidate_mutation_busy != 0u ||
+      g_http_candidate_query_pending != 0u ||
+      g_http_candidate_query_active != 0u) {
+    taskEXIT_CRITICAL();
+    return 1;
+  }
+  if (query->query_length != 0u) {
+    memcpy(g_http_candidate_query_text, query->query, query->query_length);
+  }
+  g_http_candidate_query_text[query->query_length] = '\0';
+  g_http_candidate_query_request = *query;
+  g_http_candidate_query_request.query = g_http_candidate_query_text;
+  g_http_candidate_query_complete = 0u;
+  g_http_candidate_query_result = 0xffffffffu;
+  g_http_candidate_query_pending = 1u;
+  taskEXIT_CRITICAL();
+  if (xQueueSend(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
+    taskENTER_CRITICAL();
+    g_http_candidate_query_pending = 0u;
+    taskEXIT_CRITICAL();
+    ++g_w5500_http_dbc_reload_queue_drop_count;
+    return 1;
+  }
+  ++g_w5500_http_dbc_reload_enqueue_count;
+  return 0;
+}
+
+static int w5500_http_request_candidate_selection(
+  const DbcCandidateSelectionMutation *mutation) {
+  const uint8_t command = DBC_WORK_COMMAND_CANDIDATE_SELECTION;
+  if (mutation == NULL || mutation->candidate_token == NULL ||
+      mutation->set_count + mutation->clear_count == 0u ||
+      mutation->set_count + mutation->clear_count >
+        LARGE_DBC_SELECTION_UPDATE_MAX_ORDINALS ||
+      g_w5500_dbc_reload_queue == NULL) {
+    return 1;
+  }
+  taskENTER_CRITICAL();
+  if (g_http_candidate_mutation_busy == 0u ||
+      g_http_candidate_selection_pending != 0u) {
+    taskEXIT_CRITICAL();
+    return 1;
+  }
+  memcpy(g_http_candidate_selection_token, mutation->candidate_token,
+         sizeof(g_http_candidate_selection_token));
+  if (mutation->set_count != 0u) {
+    memcpy(g_http_candidate_selection_set, mutation->set_ordinals,
+           mutation->set_count * sizeof(g_http_candidate_selection_set[0]));
+  }
+  if (mutation->clear_count != 0u) {
+    memcpy(g_http_candidate_selection_clear, mutation->clear_ordinals,
+           mutation->clear_count * sizeof(g_http_candidate_selection_clear[0]));
+  }
+  g_http_candidate_selection_request = *mutation;
+  g_http_candidate_selection_request.candidate_token =
+    g_http_candidate_selection_token;
+  g_http_candidate_selection_request.set_ordinals =
+    g_http_candidate_selection_set;
+  g_http_candidate_selection_request.clear_ordinals =
+    g_http_candidate_selection_clear;
+  g_http_candidate_selection_request.writes_blocked = false;
+  g_http_candidate_selection_complete = 0u;
+  g_http_candidate_selection_result = 0xffffffffu;
+  g_http_candidate_selection_pending = 1u;
+  taskEXIT_CRITICAL();
+  if (xQueueSend(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
+    taskENTER_CRITICAL();
+    g_http_candidate_selection_pending = 0u;
+    taskEXIT_CRITICAL();
+    ++g_w5500_http_dbc_reload_queue_drop_count;
+    return 1;
+  }
+  ++g_w5500_http_dbc_reload_enqueue_count;
+  return 0;
+}
+
 int w5500_http_dbc_reload_requested(void) {
   return g_w5500_dbc_reload_queue != NULL &&
                  uxQueueMessagesWaiting(g_w5500_dbc_reload_queue) != 0u
@@ -1215,16 +1603,111 @@ int w5500_http_dbc_reload_requested(void) {
 
 int w5500_http_process_dbc_reload(void) {
   uint8_t command = 0u;
-  int result;
   if (g_w5500_dbc_reload_queue == NULL ||
-      xQueueReceive(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS ||
-      command != 1u) {
+      xQueueReceive(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
     return 1;
   }
-  result = w5500_http_load_active_dbc();
-  g_w5500_http_dbc_reload_result = (uint32_t)result;
-  g_w5500_http_dbc_reload_complete = 1u;
-  return result;
+  if (command == DBC_WORK_COMMAND_RELOAD) {
+    const int result = w5500_http_load_active_dbc();
+    g_w5500_http_dbc_reload_result = (uint32_t)result;
+    g_w5500_http_dbc_reload_complete = 1u;
+    return result;
+  }
+  if (command == DBC_WORK_COMMAND_CANDIDATE) {
+    DbcCandidateDescriptor published;
+    g_w5500_http_candidate_pending = 0u;
+    g_w5500_http_candidate_active = 1u;
+    const LargeDbcCandidateStm32Status status =
+      stm32h750_large_dbc_candidate_commit(&g_http_candidate_request,
+                                            candidate_progress,
+                                            NULL,
+                                            &published);
+    g_w5500_http_candidate_active = 0u;
+    g_w5500_http_candidate_result = (uint32_t)status;
+    g_w5500_http_candidate_complete = 1u;
+    if (status != LARGE_DBC_CANDIDATE_STM32_OK) {
+      candidate_mutation_end();
+      return 2;
+    }
+    candidate_publish_snapshot(&published, true);
+    taskENTER_CRITICAL();
+    if (published.generation == UINT64_MAX) {
+      g_http_dbc_upload_next_generation = 0u;
+    } else {
+      g_http_dbc_upload_next_generation = published.generation + 1u;
+    }
+    taskEXIT_CRITICAL();
+    candidate_mutation_end();
+    return 0;
+  }
+  if (command == DBC_WORK_COMMAND_CANDIDATE_QUERY) {
+    taskENTER_CRITICAL();
+    g_http_candidate_query_pending = 0u;
+    g_http_candidate_query_active = 1u;
+    taskEXIT_CRITICAL();
+    const LargeDbcCandidateStm32Status status =
+      stm32h750_large_dbc_candidate_query(&g_http_candidate_query_request,
+                                           candidate_progress,
+                                           NULL,
+                                           &g_http_candidate_query_backend_result);
+    taskENTER_CRITICAL();
+    g_http_candidate_query_result = (uint32_t)status;
+    if (status == LARGE_DBC_CANDIDATE_STM32_OK) {
+      g_http_candidate_query_page = g_http_candidate_query_backend_result.page;
+      g_http_candidate_query_snapshot =
+        g_http_candidate_query_backend_result.snapshot.candidate;
+      memcpy(g_http_candidate_query_token,
+             g_http_candidate_query_backend_result.snapshot.candidate_token,
+             sizeof(g_http_candidate_query_token));
+    }
+    taskEXIT_CRITICAL();
+    if (status == LARGE_DBC_CANDIDATE_STM32_OK) {
+      candidate_publish_snapshot(
+        &g_http_candidate_query_backend_result.snapshot.candidate, true);
+    }
+    taskENTER_CRITICAL();
+    g_http_candidate_query_active = 0u;
+    g_http_candidate_query_complete = 1u;
+    taskEXIT_CRITICAL();
+    return status == LARGE_DBC_CANDIDATE_STM32_OK ? 0 : 3;
+  }
+  if (command == DBC_WORK_COMMAND_CANDIDATE_SELECTION) {
+    taskENTER_CRITICAL();
+    g_http_candidate_selection_pending = 0u;
+    taskEXIT_CRITICAL();
+    const LargeDbcCandidateStm32Status status =
+      stm32h750_large_dbc_candidate_update_selection(
+        &g_http_candidate_selection_request,
+        candidate_progress,
+        NULL,
+        &g_http_candidate_selection_backend_result);
+    taskENTER_CRITICAL();
+    g_http_candidate_selection_result = (uint32_t)status;
+    if (status == LARGE_DBC_CANDIDATE_STM32_OK) {
+      g_http_candidate_selection_snapshot =
+        g_http_candidate_selection_backend_result.candidate;
+    }
+    taskEXIT_CRITICAL();
+    if (status == LARGE_DBC_CANDIDATE_STM32_OK) {
+      candidate_publish_snapshot(
+        &g_http_candidate_selection_backend_result.candidate, true);
+      taskENTER_CRITICAL();
+      if (g_http_candidate_selection_backend_result.candidate.generation ==
+          UINT64_MAX) {
+        g_http_dbc_upload_next_generation = 0u;
+      } else {
+        g_http_dbc_upload_next_generation =
+          g_http_candidate_selection_backend_result.candidate.generation + 1u;
+      }
+      taskEXIT_CRITICAL();
+    }
+    candidate_mutation_end();
+    taskENTER_CRITICAL();
+    g_http_candidate_selection_complete = 1u;
+    taskEXIT_CRITICAL();
+    return status == LARGE_DBC_CANDIDATE_STM32_OK ? 0 : 4;
+  }
+  return 1;
 }
 
 int w5500_http_dbc_reload_queue_init(void) {
@@ -1338,14 +1821,21 @@ static int http_send_header(uint16_t code, const char *content_type, size_t body
 }
 
 static int http_send_response(uint16_t code, const char *content_type, const char *body, size_t body_len) {
+  size_t offset = 0u;
   g_w5500_http_last_tx_size = 0u;
   if (http_send_header(code, content_type, body_len) != 0) {
     return 1;
   }
-  if (body_len == 0u) {
-    return 0;
+  while (offset < body_len) {
+    const size_t remaining = body_len - offset;
+    const size_t chunk = remaining < LARGE_DBC_HTTP_RESPONSE_SEGMENT_BYTES ?
+      remaining : LARGE_DBC_HTTP_RESPONSE_SEGMENT_BYTES;
+    if (http_send_bytes((const uint8_t *)&body[offset], chunk) != 0) {
+      return 1;
+    }
+    offset += chunk;
   }
-  return http_send_bytes((const uint8_t *)body, body_len);
+  return 0;
 }
 
 static int http_send_static_index(void) {
@@ -1413,6 +1903,226 @@ static int http_send_json_error(uint16_t code, const char *error_code, const cha
 }
 
 static void http_record_request(uint32_t path_code, uint16_t code);
+
+static int http_candidate_error(uint32_t path_code, uint16_t code,
+                                const char *error_code,
+                                const char *message) {
+  (void)message;
+  http_record_request(path_code, code);
+  return http_send_json_error(code, error_code, error_code);
+}
+
+static bool http_wait_candidate_flag(volatile uint32_t *flag,
+                                     uint32_t timeout_ms) {
+  for (uint32_t waited = 0u; waited < timeout_ms; ++waited) {
+    bool complete;
+    taskENTER_CRITICAL();
+    complete = *flag != 0u;
+    taskEXIT_CRITICAL();
+    if (complete) return true;
+    vTaskDelay(pdMS_TO_TICKS(1u));
+  }
+  return false;
+}
+
+static int http_handle_candidate_query(const char *request) {
+  const char *target = request + sizeof("GET ") - 1u;
+  const char *target_end = strchr(target, ' ');
+  DbcCandidateCatalogQuery query;
+  char query_storage[DBC_CANDIDATE_HTTP_QUERY_STORAGE_BYTES];
+  DbcCandidateDescriptor available_candidate;
+  if (target_end == NULL ||
+      dbc_candidate_http_parse_get_target(
+        target, (size_t)(target_end - target), &query, query_storage) !=
+        DBC_CANDIDATE_HTTP_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                400u, "invalid_candidate_query",
+                                "invalid candidate query");
+  }
+  if (!candidate_read_snapshot(&available_candidate)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                404u, "candidate_unavailable",
+                                "candidate unavailable");
+  }
+  if (w5500_http_request_candidate_query(&query) != 0) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                409u, "candidate_busy",
+                                "candidate operation in progress");
+  }
+  if (!http_wait_candidate_flag(&g_http_candidate_query_complete, 30000u)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                504u, "candidate_query_timeout",
+                                "candidate query completion not observed");
+  }
+  LargeDbcCandidateStm32Status status;
+  taskENTER_CRITICAL();
+  status = (LargeDbcCandidateStm32Status)g_http_candidate_query_result;
+  taskEXIT_CRITICAL();
+  if (status == LARGE_DBC_CANDIDATE_STM32_NOT_FOUND) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                404u, "candidate_unavailable",
+                                "candidate unavailable");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_INVALID_ARGUMENT) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                400u, "invalid_candidate_query",
+                                "candidate query rejected");
+  }
+  if (status != LARGE_DBC_CANDIDATE_STM32_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                500u, "candidate_query_failed",
+                                "candidate query or verification failed");
+  }
+  size_t response_len = 0u;
+  if (dbc_candidate_http_serialize_catalog_json(
+        g_http_candidate_query_token, &g_http_candidate_query_snapshot,
+        &g_http_candidate_query_page, g_http_response_body,
+        sizeof(g_http_response_body), &response_len) !=
+      DBC_CANDIDATE_HTTP_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS,
+                                500u, "candidate_response_too_large",
+                                "candidate response serialization failed");
+  }
+  http_record_request(W5500_HTTP_PATH_DBC_CANDIDATE_SIGNALS, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body,
+                            response_len);
+}
+
+static bool http_candidate_token_matches(
+  const char *token, const DbcCandidateDescriptor *candidate) {
+  uint64_t generation = 0u;
+  uint32_t source_size = 0u;
+  uint32_t source_crc32 = 0u;
+  return dbc_candidate_token_parse(token, &generation, &source_size,
+                                   &source_crc32) ==
+           DBC_CANDIDATE_FORMAT_OK &&
+         generation == candidate->generation &&
+         source_size == candidate->source_size &&
+         source_crc32 == candidate->source_crc32;
+}
+
+static int http_handle_candidate_selection(const char *body,
+                                           size_t body_len) {
+  DbcCandidateHttpSelectionForm form;
+  DbcCandidateDescriptor candidate;
+  const DbcCandidateHttpStatus parse_status =
+    dbc_candidate_http_parse_selection_form(body, body_len, &form);
+  if (parse_status != DBC_CANDIDATE_HTTP_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                "invalid_selection",
+                                "invalid selection form");
+  }
+  if (!candidate_read_snapshot(&candidate)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 404u,
+                                "candidate_unavailable",
+                                "candidate unavailable");
+  }
+  if (!http_candidate_token_matches(form.candidate_token, &candidate)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 409u,
+                                "stale_candidate_token",
+                                "candidate token changed");
+  }
+  for (uint8_t i = 0u; i < form.set_count; ++i) {
+    if (form.set_ordinals[i] >= candidate.catalog_signal_count) {
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                  "ordinal_out_of_range",
+                                  "selection ordinal out of range");
+    }
+  }
+  for (uint8_t i = 0u; i < form.clear_count; ++i) {
+    if (form.clear_ordinals[i] >= candidate.catalog_signal_count) {
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                  "ordinal_out_of_range",
+                                  "selection ordinal out of range");
+    }
+  }
+  const HttpCandidateMutationGate gate = candidate_mutation_begin();
+  if (gate != HTTP_CANDIDATE_MUTATION_OK) {
+    return http_candidate_error(
+      W5500_HTTP_PATH_DBC_SELECTION, 409u,
+      gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+        "logging_active" : "candidate_busy",
+      gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+        "selection rejected while logging" :
+        "candidate mutation in progress");
+  }
+  const DbcCandidateSelectionMutation mutation = {
+    .candidate_token = form.candidate_token,
+    .set_ordinals = form.set_ordinals,
+    .set_count = form.set_count,
+    .clear_ordinals = form.clear_ordinals,
+    .clear_count = form.clear_count,
+    .writes_blocked = false
+  };
+  if (w5500_http_request_candidate_selection(&mutation) != 0) {
+    candidate_mutation_end();
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 409u,
+                                "candidate_busy",
+                                "candidate selection queue unavailable");
+  }
+  if (!http_wait_candidate_flag(&g_http_candidate_selection_complete,
+                                120000u)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 504u,
+                                "selection_completion_timeout",
+                                "selection completion not observed; query candidate state");
+  }
+  LargeDbcCandidateStm32Status status;
+  taskENTER_CRITICAL();
+  status = (LargeDbcCandidateStm32Status)g_http_candidate_selection_result;
+  candidate = g_http_candidate_selection_snapshot;
+  taskEXIT_CRITICAL();
+  if (status == LARGE_DBC_CANDIDATE_STM32_TOKEN_MISMATCH) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 409u,
+                                "stale_candidate_token",
+                                "candidate token changed");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_WRITE_BLOCKED) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 409u,
+                                "logging_active",
+                                "selection rejected while logging");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_GENERATION_EXHAUSTED) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 409u,
+                                "generation_exhausted",
+                                "candidate generation exhausted");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_NOT_FOUND) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 404u,
+                                "candidate_unavailable",
+                                "candidate unavailable");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_SELECTION_FAILED) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 422u,
+                                "selection_limit",
+                                "selection exceeds signal or message limit");
+  }
+  if (status == LARGE_DBC_CANDIDATE_STM32_INVALID_ARGUMENT) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                "invalid_selection",
+                                "selection rejected");
+  }
+  if (status != LARGE_DBC_CANDIDATE_STM32_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 507u,
+                                "selection_persist_failed",
+                                "selection transaction failed");
+  }
+  char candidate_token[LARGE_DBC_CANDIDATE_TOKEN_BUFFER_BYTES];
+  size_t response_len = 0u;
+  if (dbc_candidate_token_format(candidate.generation, candidate.source_size,
+                                 candidate.source_crc32, candidate_token) !=
+        DBC_CANDIDATE_FORMAT_OK ||
+      dbc_candidate_http_serialize_selection_json(
+        candidate_token, &candidate, g_http_response_body,
+        sizeof(g_http_response_body), &response_len) !=
+        DBC_CANDIDATE_HTTP_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 500u,
+                                "selection_response_failed",
+                                "selection committed but response serialization failed");
+  }
+  http_record_request(W5500_HTTP_PATH_DBC_SELECTION, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body,
+                            response_len);
+}
 
 static bool http_parse_rule_value(const char *body, const char *key, uint32_t *value) {
   const char *entry = strstr(body, key);
@@ -1742,6 +2452,12 @@ static int http_handle_log_control(const char *body, size_t body_len) {
   }
   taskENTER_CRITICAL();
   control = g_signal_log_control;
+  if (enabled && g_http_candidate_mutation_busy != 0u) {
+    taskEXIT_CRITICAL();
+    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 409u);
+    return http_send_json_error(409u, "candidate_busy",
+                                "candidate mutation in progress");
+  }
   if (enabled && !has_unix_ms && !control.time_synced) {
     taskEXIT_CRITICAL();
     http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
@@ -2068,39 +2784,260 @@ static void http_record_request(uint32_t path_code, uint16_t code) {
   g_w5500_http_last_code = code;
 }
 
-static int http_handle_dbc_upload(const uint8_t *body_start, size_t content_length) {
-  DbcUploadReport report;
-
-  g_w5500_http_dbc_upload_result =
-    (uint32_t)stm32h750_tf_replace_file_with_backup_locked(W5500_HTTP_DBC_UPLOAD_TMP_PATH,
-                                                           W5500_HTTP_DBC_CANDIDATE_PATH,
-                                                           W5500_HTTP_DBC_CANDIDATE_BACKUP_PATH,
-                                                           body_start,
-                                                           content_length);
-  if (g_w5500_http_dbc_upload_result != 0u) {
-    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
-    return http_send_json_error(500u, "save_failed", "dbc tmp save failed");
+static int http_handle_dbc_upload_complete(const DbcUploadResult *result) {
+  if (w5500_http_request_candidate_build(result) != 0) {
+    candidate_mutation_end();
+    return http_upload_error_response(409u,
+                                      "candidate_busy",
+                                      "candidate build unavailable");
   }
-
-  if (dbc_load_candidate_report(&report) != 0) {
-    http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 500u);
-    return http_send_json_error(500u, "candidate_load_failed", "dbc candidate load failed");
-  }
-
-  g_w5500_http_dbc_upload_bytes = (uint32_t)report.bytes;
-  g_w5500_http_dbc_upload_lines = (uint32_t)report.lines;
-  g_w5500_http_dbc_upload_messages = (uint32_t)report.messages;
-  g_w5500_http_dbc_upload_signals = (uint32_t)report.signals;
-  g_w5500_http_dbc_upload_skipped = (uint32_t)report.skipped;
-  g_w5500_http_dbc_upload_errors = (uint32_t)report.errors;
-
-  const size_t response_len = build_dbc_upload_body(g_http_response_body, sizeof(g_http_response_body), &report);
-  if (response_len >= sizeof(g_http_response_body)) {
+  const int response_len = snprintf(
+    g_http_response_body,
+    sizeof(g_http_response_body),
+    "{\"ok\":true,\"data\":{\"stagedOnly\":true,\"candidateQueued\":true,\"generation\":\"%08lX%08lX\",\"sourceSize\":%lu,\"sourceCrc32\":\"%08lX\",\"tmpPath\":\"%s\"}}",
+    (unsigned long)(result->generation >> 32u),
+    (unsigned long)(uint32_t)result->generation,
+    (unsigned long)result->source_size,
+    (unsigned long)result->source_crc32,
+    stm32h750_tf_large_dbc_upload_path());
+  if (response_len <= 0 || (size_t)response_len >= sizeof(g_http_response_body)) {
     return 1;
   }
-  g_w5500_http_dbc_upload_count++;
-  http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 200u);
-  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+  g_w5500_http_dbc_upload_crc32 = result->source_crc32;
+  g_w5500_http_dbc_upload_lines = 0u;
+  g_w5500_http_dbc_upload_messages = 0u;
+  g_w5500_http_dbc_upload_signals = 0u;
+  g_w5500_http_dbc_upload_skipped = 0u;
+  g_w5500_http_dbc_upload_errors = 0u;
+  ++g_w5500_http_dbc_upload_count;
+  http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 202u);
+  return http_send_response(202u,
+                            "application/json",
+                            g_http_response_body,
+                            (size_t)response_len);
+}
+
+static int http_upload_error_response(uint16_t code,
+                                      const char *error_code,
+                                      const char *message) {
+  http_upload_update_diagnostics();
+  http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, code);
+  return http_send_json_error(code, error_code, message) == 0 ?
+    W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+}
+
+static int http_upload_finish_if_complete(uint32_t now_ms) {
+  if (g_http_dbc_upload.received_size != g_http_dbc_upload.expected_size) {
+    http_upload_update_diagnostics();
+    return W5500_HTTP_HANDLE_WAIT;
+  }
+  const DbcUploadStatus status =
+    dbc_upload_finish(&g_http_dbc_upload, now_ms, &g_http_dbc_upload_completed);
+  http_upload_update_diagnostics();
+  if (status != DBC_UPLOAD_STATUS_OK) {
+    candidate_mutation_end();
+    return http_upload_error_response(507u,
+                                      "upload_finalize_failed",
+                                      "dbc upload sync or close failed");
+  }
+  return http_handle_dbc_upload_complete(&g_http_dbc_upload_completed) == 0 ?
+    W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+}
+
+static int http_upload_start_request(const uint8_t *request,
+                                     size_t read_len,
+                                     uint16_t rx_rd,
+                                     uint16_t rx_size) {
+  DbcUploadHttpHeader header;
+  uint64_t next_generation;
+  const DbcUploadHttpStatus header_status =
+    dbc_upload_http_parse_header(request, read_len, &header);
+  if (header_status == DBC_UPLOAD_HTTP_INCOMPLETE &&
+      read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+    return W5500_HTTP_HANDLE_WAIT;
+  }
+  if (header_status != DBC_UPLOAD_HTTP_OK) {
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    if (header_status == DBC_UPLOAD_HTTP_CONTENT_LENGTH_LIMIT) {
+      return http_upload_error_response(413u,
+                                        "payload_too_large",
+                                        "dbc upload exceeds 262144 bytes");
+    }
+    if (header_status == DBC_UPLOAD_HTTP_CONTENT_LENGTH_MISSING) {
+      return http_upload_error_response(411u,
+                                        "length_required",
+                                        "Content-Length required");
+    }
+    if (header_status == DBC_UPLOAD_HTTP_CONTENT_TYPE_MISSING ||
+        header_status == DBC_UPLOAD_HTTP_CONTENT_TYPE_REJECTED ||
+        header_status == DBC_UPLOAD_HTTP_TRANSFER_ENCODING_REJECTED) {
+      return http_upload_error_response(415u,
+                                        "unsupported_upload_encoding",
+                                        "text/plain with Content-Length required");
+    }
+    return http_upload_error_response(400u,
+                                      dbc_upload_http_status_string(header_status),
+                                      "invalid dbc upload request");
+  }
+  if ((size_t)rx_size > header.header_bytes + header.content_length) {
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    return http_upload_error_response(400u,
+                                      "body_overrun",
+                                      "request exceeds Content-Length");
+  }
+  if (g_w5500_http_candidate_pending != 0u ||
+      g_w5500_http_candidate_active != 0u) {
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    return http_upload_error_response(409u,
+                                      "candidate_busy",
+                                      "candidate build in progress");
+  }
+  taskENTER_CRITICAL();
+  next_generation = g_http_dbc_upload_next_generation;
+  taskEXIT_CRITICAL();
+  if (next_generation == 0u) {
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    return http_upload_error_response(409u,
+                                      "generation_exhausted",
+                                      "upload generation exhausted");
+  }
+  const HttpCandidateMutationGate mutation_gate = candidate_mutation_begin();
+  if (mutation_gate != HTTP_CANDIDATE_MUTATION_OK) {
+    if (http_consume_rx(rx_rd, rx_size) != 0) {
+      return W5500_HTTP_HANDLE_ERROR;
+    }
+    return http_upload_error_response(
+      409u,
+      mutation_gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+        "logging_active" : "candidate_busy",
+      mutation_gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+        "dbc upload rejected while logging" :
+        "candidate mutation in progress");
+  }
+  if (http_upload_reset_state() != 0) {
+    candidate_mutation_end();
+    return http_upload_error_response(500u,
+                                      "upload_state_failed",
+                                      "upload state unavailable");
+  }
+  DbcUploadStatus status = dbc_upload_start(&g_http_dbc_upload,
+                                            next_generation,
+                                            header.content_length,
+                                            HAL_GetTick());
+  http_upload_update_diagnostics();
+  if (status != DBC_UPLOAD_STATUS_OK) {
+    candidate_mutation_end();
+    return http_upload_error_response(507u,
+                                      "upload_open_failed",
+                                      "dbc upload tmp open failed");
+  }
+  size_t first_body = header.body_bytes;
+  if (first_body > LARGE_DBC_UPLOAD_CHUNK_BYTES) {
+    first_body = LARGE_DBC_UPLOAD_CHUNK_BYTES;
+  }
+  if (first_body != 0u) {
+    status = dbc_upload_feed(&g_http_dbc_upload,
+                             request + header.header_bytes,
+                             first_body,
+                             HAL_GetTick());
+    http_upload_update_diagnostics();
+    if (status != DBC_UPLOAD_STATUS_OK) {
+      candidate_mutation_end();
+      return http_upload_error_response(507u,
+                                        "upload_write_failed",
+                                        "dbc upload tmp write failed");
+    }
+  }
+  const size_t consumed = header.header_bytes + first_body;
+  if (consumed > UINT16_MAX ||
+      http_consume_rx(rx_rd, (uint16_t)consumed) != 0) {
+    (void)dbc_upload_cancel(&g_http_dbc_upload);
+    ++g_w5500_http_dbc_upload_abort_count;
+    http_upload_update_diagnostics();
+    candidate_mutation_end();
+    return W5500_HTTP_HANDLE_ERROR;
+  }
+  return http_upload_finish_if_complete(HAL_GetTick());
+}
+
+static int http_upload_process_body(uint16_t rx_size) {
+  const uint32_t now_ms = HAL_GetTick();
+  if (g_http_dbc_upload.phase != DBC_UPLOAD_STATE_RECEIVING) {
+    return W5500_HTTP_HANDLE_ERROR;
+  }
+  if (rx_size == 0u) {
+    const DbcUploadStatus timeout =
+      dbc_upload_check_timeout(&g_http_dbc_upload, now_ms);
+    if (timeout == DBC_UPLOAD_STATUS_OK) {
+      http_upload_update_diagnostics();
+      return W5500_HTTP_HANDLE_WAIT;
+    }
+    if (timeout == DBC_UPLOAD_STATUS_IDLE_TIMEOUT) {
+      ++g_w5500_http_dbc_upload_idle_timeout_count;
+    } else if (timeout == DBC_UPLOAD_STATUS_TOTAL_TIMEOUT) {
+      ++g_w5500_http_dbc_upload_total_timeout_count;
+    }
+    ++g_w5500_http_dbc_upload_abort_count;
+    candidate_mutation_end();
+    return http_upload_error_response(408u,
+                                      "upload_timeout",
+                                      "dbc upload timed out");
+  }
+  const uint32_t remaining =
+    g_http_dbc_upload.expected_size - g_http_dbc_upload.received_size;
+  if ((uint32_t)rx_size > remaining) {
+    (void)dbc_upload_cancel(&g_http_dbc_upload);
+    ++g_w5500_http_dbc_upload_abort_count;
+    candidate_mutation_end();
+    return http_upload_error_response(400u,
+                                      "body_overrun",
+                                      "request exceeds Content-Length");
+  }
+  uint16_t amount = rx_size;
+  if (amount > LARGE_DBC_UPLOAD_CHUNK_BYTES) {
+    amount = LARGE_DBC_UPLOAD_CHUNK_BYTES;
+  }
+  uint16_t rx_rd = 0u;
+  if (s0_read_u16(W5500_S0_RX_RD, &rx_rd) != W5500_OK ||
+      socket_buffer_read(W5500_S0_RX_BLOCK,
+                         rx_rd,
+                         g_http_static_chunk,
+                         amount) != W5500_OK) {
+    (void)dbc_upload_cancel(&g_http_dbc_upload);
+    ++g_w5500_http_dbc_upload_abort_count;
+    http_upload_update_diagnostics();
+    candidate_mutation_end();
+    return W5500_HTTP_HANDLE_ERROR;
+  }
+  const DbcUploadStatus status =
+    dbc_upload_feed(&g_http_dbc_upload,
+                    g_http_static_chunk,
+                    amount,
+                    now_ms);
+  http_upload_update_diagnostics();
+  if (status != DBC_UPLOAD_STATUS_OK) {
+    ++g_w5500_http_dbc_upload_abort_count;
+    candidate_mutation_end();
+    return http_upload_error_response(507u,
+                                      "upload_write_failed",
+                                      "dbc upload tmp write failed");
+  }
+  if (http_consume_rx(rx_rd, amount) != 0) {
+    (void)dbc_upload_cancel(&g_http_dbc_upload);
+    ++g_w5500_http_dbc_upload_abort_count;
+    http_upload_update_diagnostics();
+    candidate_mutation_end();
+    return W5500_HTTP_HANDLE_ERROR;
+  }
+  return http_upload_finish_if_complete(HAL_GetTick());
 }
 
 static void dbc_record_active_report(const DbcUploadReport *report, uint32_t valid) {
@@ -2113,7 +3050,7 @@ static void dbc_record_active_report(const DbcUploadReport *report, uint32_t val
   g_w5500_http_dbc_active_valid = valid;
 }
 
-static int http_handle_dbc_active(void) {
+static __attribute__((unused)) int http_handle_dbc_active(void) {
   DbcUploadReport report;
   if (dbc_load_candidate_report(&report) != 0) {
     g_w5500_http_dbc_active_result = 1u;
@@ -2387,7 +3324,9 @@ static int http_handle_request(uint16_t rx_size) {
              ? W5500_HTTP_HANDLE_OK
              : W5500_HTTP_HANDLE_ERROR;
   }
-  if (request_path_is(request, "POST", "/api/dbc/upload")) {
+  if (request_path_is(request, "POST", "/api/dbc/selection")) {
+    size_t content_length = 0u;
+    size_t body_offset;
     if (header_end == NULL) {
       if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
         return W5500_HTTP_HANDLE_WAIT;
@@ -2395,43 +3334,67 @@ static int http_handle_request(uint16_t rx_size) {
       if (http_consume_rx(rx_rd, rx_size) != 0) {
         return W5500_HTTP_HANDLE_ERROR;
       }
-      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 400u);
-      return http_send_json_error(400u, "bad_request", "header too large");
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                  "bad_request", "selection header too large") == 0 ?
+        W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
     }
-    const size_t body_offset = (size_t)((header_end + 4u) - request);
-    if (body_offset > read_len) {
-      return W5500_HTTP_HANDLE_WAIT;
-    }
-    size_t content_length = 0u;
-    if (!http_parse_content_length(request, header_end, &content_length) || content_length == 0u) {
+    body_offset = (size_t)((header_end + 4u) - request);
+    if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    if (!http_parse_content_length(request, header_end, &content_length)) {
       if (http_consume_rx(rx_rd, rx_size) != 0) {
         return W5500_HTTP_HANDLE_ERROR;
       }
-      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 400u);
-      return http_send_json_error(400u, "bad_request", "missing content length");
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 411u,
+                                  "length_required",
+                                  "selection Content-Length required") == 0 ?
+        W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
     }
-    if (content_length > W5500_HTTP_UPLOAD_BODY_MAX) {
+    if (content_length > LARGE_DBC_SELECTION_REQUEST_BODY_BYTES) {
       if (http_consume_rx(rx_rd, rx_size) != 0) {
         return W5500_HTTP_HANDLE_ERROR;
       }
-      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 413u);
-      return http_send_json_error(413u, "payload_too_large", "dbc upload too large");
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 413u,
+                                  "payload_too_large",
+                                  "selection body exceeds 512 bytes") == 0 ?
+        W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+    }
+    if (!http_content_type_is_selection_form(request, header_end)) {
+      if (http_consume_rx(rx_rd, rx_size) != 0) {
+        return W5500_HTTP_HANDLE_ERROR;
+      }
+      return http_candidate_error(
+        W5500_HTTP_PATH_DBC_SELECTION, 415u, "unsupported_content_type",
+        "application/x-www-form-urlencoded required") == 0 ?
+          W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
     }
     if ((size_t)rx_size < body_offset + content_length) {
-      return W5500_HTTP_HANDLE_WAIT;
+      if (read_len + 1u < W5500_HTTP_REQUEST_BUFFER_SIZE) {
+        return W5500_HTTP_HANDLE_WAIT;
+      }
     }
-    if (body_offset + content_length > read_len) {
+    if (content_length == 0u || body_offset + content_length > read_len ||
+        (size_t)rx_size != body_offset + content_length) {
       if (http_consume_rx(rx_rd, rx_size) != 0) {
         return W5500_HTTP_HANDLE_ERROR;
       }
-      http_record_request(W5500_HTTP_PATH_DBC_UPLOAD, 413u);
-      return http_send_json_error(413u, "payload_too_large", "dbc request too large");
+      return http_candidate_error(W5500_HTTP_PATH_DBC_SELECTION, 400u,
+                                  "bad_request",
+                                  "invalid selection body framing") == 0 ?
+        W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
     }
     if (http_consume_rx(rx_rd, rx_size) != 0) {
       return W5500_HTTP_HANDLE_ERROR;
     }
-    const int upload_result = http_handle_dbc_upload((const uint8_t *)&request[body_offset], content_length);
-    return upload_result == 0 ? W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+    request[body_offset + content_length] = '\0';
+    return http_handle_candidate_selection(&request[body_offset],
+                                           content_length) == 0 ?
+      W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+  }
+  if (request_path_is(request, "POST", "/api/dbc/upload")) {
+    return http_upload_start_request((const uint8_t *)request,
+                                     read_len,
+                                     rx_rd,
+                                     rx_size);
   }
 
   if (request_path_is(request, "POST", "/api/dbc/active")) {
@@ -2466,8 +3429,10 @@ static int http_handle_request(uint16_t rx_size) {
     if (http_consume_rx(rx_rd, rx_size) != 0) {
       return W5500_HTTP_HANDLE_ERROR;
     }
-    const int active_result = http_handle_dbc_active();
-    return active_result == 0 ? W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "active_stage_pending",
+                                "active_stage_pending") == 0 ?
+      W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
   }
 
   if (rx_size > read_len || http_consume_rx(rx_rd, rx_size) != 0) {
@@ -2503,6 +3468,10 @@ static int http_handle_request(uint16_t rx_size) {
     code = 200u;
     path_code = W5500_HTTP_PATH_DBC_RUNTIME;
     body_len = build_dbc_runtime_body(body, sizeof(g_http_response_body));
+  } else if (request_path_is(request, "GET",
+                             "/api/dbc/candidate/signals")) {
+    return http_handle_candidate_query(request) == 0 ?
+      W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
   } else if (request_dbc_signals_page(request, &dbc_signals_page)) {
     code = 200u;
     path_code = W5500_HTTP_PATH_DBC_SIGNALS;
@@ -2775,6 +3744,58 @@ int w5500_http_status_poll(void) {
       return 1;
     }
     const uint32_t rx_rsr_read_end_tick = HAL_GetTick();
+    if (g_http_dbc_upload.phase == DBC_UPLOAD_STATE_RECEIVING) {
+      if (sr == W5500_S0_SR_CLOSE_WAIT && rx_size == 0u) {
+        (void)dbc_upload_cancel(&g_http_dbc_upload);
+        ++g_w5500_http_dbc_upload_abort_count;
+        http_upload_update_diagnostics();
+        candidate_mutation_end();
+        if (http_begin_graceful_disconnect() != 0) {
+          g_w5500_http_status = 5u;
+          ++g_w5500_http_error_count;
+          (void)http_close_socket(2u);
+          return 1;
+        }
+        return 0;
+      }
+      g_w5500_http_trace_handle_enter_tick = HAL_GetTick();
+      const int upload_result = http_upload_process_body(rx_size);
+      g_w5500_http_trace_handler_return_tick = HAL_GetTick();
+      g_w5500_http_trace_handler_result = (uint32_t)upload_result;
+      if (upload_result == W5500_HTTP_HANDLE_WAIT) {
+        ++g_w5500_http_trace_handle_wait_count;
+        if (g_w5500_http_trace_handle_wait_first_tick == 0u) {
+          g_w5500_http_trace_handle_wait_first_tick = HAL_GetTick();
+        }
+        g_w5500_http_trace_handle_wait_last_rx_size = rx_size;
+        if (sr == W5500_S0_SR_CLOSE_WAIT) {
+          (void)dbc_upload_cancel(&g_http_dbc_upload);
+          ++g_w5500_http_dbc_upload_abort_count;
+          http_upload_update_diagnostics();
+          candidate_mutation_end();
+          if (http_begin_graceful_disconnect() != 0) {
+            g_w5500_http_status = 5u;
+            ++g_w5500_http_error_count;
+            (void)http_close_socket(2u);
+            return 1;
+          }
+        }
+        return 0;
+      }
+      if (upload_result != W5500_HTTP_HANDLE_OK) {
+        g_w5500_http_status = 5u;
+        ++g_w5500_http_error_count;
+        (void)http_close_socket(2u);
+        return 1;
+      }
+      if (http_finish_response_send() != 0) {
+        g_w5500_http_status = 5u;
+        ++g_w5500_http_error_count;
+        (void)http_close_socket(2u);
+        return 1;
+      }
+      return 0;
+    }
     if (rx_size > 0u) {
       http_idle_connection_reset();
       if (g_w5500_http_trace_active == 0u) {
@@ -2799,6 +3820,14 @@ int w5500_http_status_poll(void) {
           g_w5500_http_trace_handle_wait_first_tick = HAL_GetTick();
         }
         g_w5500_http_trace_handle_wait_last_rx_size = rx_size;
+        if (sr == W5500_S0_SR_CLOSE_WAIT) {
+          if (http_begin_graceful_disconnect() != 0) {
+            g_w5500_http_status = 5u;
+            ++g_w5500_http_error_count;
+            (void)http_close_socket(2u);
+            return 1;
+          }
+        }
         return 0;
       }
       if (request_result != W5500_HTTP_HANDLE_OK) {

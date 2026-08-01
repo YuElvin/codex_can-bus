@@ -34,6 +34,8 @@ typedef struct {
 void stm32h750_fdcan_bind(CanPort *port, Stm32FdcanContext *ctx, FDCAN_HandleTypeDef *hfdcan);
 void stm32h750_tf_card_bind(TfCardPort *port, Stm32TfCardContext *ctx, FATFS *fs, const char *logical_drive);
 int stm32h750_fs_mutex_init(void);
+int stm32h750_tf_fs_lock(void);
+void stm32h750_tf_fs_unlock(void);
 int stm32h750_tf_read_file_locked(const char *path, uint8_t *data, size_t len, size_t *read_len);
 int stm32h750_tf_file_size_locked(const char *path, size_t *file_size);
 int stm32h750_tf_read_file_chunk_locked(const char *path,
@@ -45,6 +47,12 @@ int stm32h750_tf_append_file_locked(const char *path,
                                     const uint8_t *data,
                                     size_t len,
                                     size_t *file_size);
+int stm32h750_tf_large_dbc_upload_begin(uint64_t generation,
+                                        uint32_t expected_size);
+int stm32h750_tf_large_dbc_upload_write(const uint8_t *data, size_t len);
+int stm32h750_tf_large_dbc_upload_finalize(void);
+void stm32h750_tf_large_dbc_upload_abort(void);
+const char *stm32h750_tf_large_dbc_upload_path(void);
 int stm32h750_tf_replace_file_locked(const char *tmp_path,
                                      const char *final_path,
                                      const uint8_t *data,
@@ -102,6 +110,7 @@ int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
 int w5500_http_dbc_lock(void);
 void w5500_http_dbc_unlock(void);
+int w5500_http_recover_large_dbc_candidate(void);
 int w5500_http_load_active_dbc(void);
 void w5500_http_request_dbc_reload(void);
 int w5500_http_dbc_reload_queue_init(void);

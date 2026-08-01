@@ -578,27 +578,189 @@ bool rule_file_parse_decimal(const char *text, size_t len, double *value) {
   return true;
 }
 
-size_t rule_file_format_decimal(double value, char *out_text, size_t out_capacity) {
-  int written;
-  size_t used;
+#define RULE_FILE_DECIMAL_BASE 1000000000u
+#define RULE_FILE_DECIMAL_LIMBS 36u
 
-  if (out_text == NULL || out_capacity == 0u || !isfinite(value)) {
+typedef struct {
+  uint32_t limb[RULE_FILE_DECIMAL_LIMBS];
+} RuleFileDecimalInteger;
+
+static bool rule_file_decimal_multiply_two(RuleFileDecimalInteger *number) {
+  uint32_t carry = 0u;
+  for (size_t i = 0u; i < RULE_FILE_DECIMAL_LIMBS; ++i) {
+    const uint64_t product = (uint64_t)number->limb[i] * 2u + carry;
+    number->limb[i] = (uint32_t)(product % RULE_FILE_DECIMAL_BASE);
+    carry = (uint32_t)(product / RULE_FILE_DECIMAL_BASE);
+  }
+  return carry == 0u;
+}
+
+static bool rule_file_decimal_add_one(RuleFileDecimalInteger *number) {
+  for (size_t i = 0u; i < RULE_FILE_DECIMAL_LIMBS; ++i) {
+    if (++number->limb[i] < RULE_FILE_DECIMAL_BASE) {
+      return true;
+    }
+    number->limb[i] = 0u;
+  }
+  return false;
+}
+
+static bool rule_file_decimal_feed_bit(RuleFileDecimalInteger *number,
+                                       uint32_t bit) {
+  return rule_file_decimal_multiply_two(number) &&
+         (bit == 0u || rule_file_decimal_add_one(number));
+}
+
+static uint32_t rule_file_word_bit(const uint32_t words[3], uint32_t bit) {
+  return bit < 96u ? (words[bit / 32u] >> (bit % 32u)) & 1u : 0u;
+}
+
+static bool rule_file_lower_bits_nonzero(const uint32_t words[3],
+                                         uint32_t bit_count) {
+  const uint32_t full_words = bit_count / 32u;
+  const uint32_t partial_bits = bit_count % 32u;
+  for (uint32_t i = 0u; i < full_words && i < 3u; ++i) {
+    if (words[i] != 0u) {
+      return true;
+    }
+  }
+  return full_words < 3u && partial_bits != 0u &&
+         (words[full_words] & ((1u << partial_bits) - 1u)) != 0u;
+}
+
+static bool rule_file_decimal_scaled(double value,
+                                     RuleFileDecimalInteger *scaled,
+                                     bool *negative) {
+  uint64_t bits;
+  memcpy(&bits, &value, sizeof(bits));
+  *negative = (bits >> 63u) != 0u;
+  bits &= UINT64_C(0x7fffffffffffffff);
+  const uint32_t raw_exponent = (uint32_t)(bits >> 52u);
+  const uint64_t fraction = bits & UINT64_C(0x000fffffffffffff);
+  if (raw_exponent == 0x7ffu) {
+    return false;
+  }
+  memset(scaled, 0, sizeof(*scaled));
+  if (raw_exponent == 0u && fraction == 0u) {
+    return true;
+  }
+
+  const uint64_t mantissa = raw_exponent == 0u ? fraction :
+    fraction | UINT64_C(0x0010000000000000);
+  const int32_t exponent = raw_exponent == 0u ? -1074 :
+    (int32_t)raw_exponent - 1023 - 52;
+  if (exponent >= 0) {
+    for (int32_t bit = 52; bit >= 0; --bit) {
+      if (!rule_file_decimal_feed_bit(
+            scaled, (uint32_t)((mantissa >> (uint32_t)bit) & 1u))) {
+        return false;
+      }
+    }
+    for (int32_t shift = 0; shift < exponent; ++shift) {
+      if (!rule_file_decimal_multiply_two(scaled)) {
+        return false;
+      }
+    }
+    if (scaled->limb[RULE_FILE_DECIMAL_LIMBS - 1u] != 0u) {
+      return false;
+    }
+    for (size_t i = RULE_FILE_DECIMAL_LIMBS - 1u; i > 0u; --i) {
+      scaled->limb[i] = scaled->limb[i - 1u];
+    }
+    scaled->limb[0] = 0u;
+    return true;
+  }
+
+  const uint64_t low_product =
+    (mantissa & UINT64_C(0xffffffff)) * RULE_FILE_DECIMAL_BASE;
+  const uint64_t high_product =
+    (mantissa >> 32u) * RULE_FILE_DECIMAL_BASE;
+  const uint64_t middle = (low_product >> 32u) +
+                          (uint32_t)high_product;
+  const uint32_t numerator[3] = {
+    (uint32_t)low_product,
+    (uint32_t)middle,
+    (uint32_t)((high_product >> 32u) + (middle >> 32u))
+  };
+  const uint32_t shift = (uint32_t)(-exponent);
+  if (shift < 96u) {
+    for (int32_t bit = 95; bit >= (int32_t)shift; --bit) {
+      if (!rule_file_decimal_feed_bit(
+            scaled, rule_file_word_bit(numerator, (uint32_t)bit))) {
+        return false;
+      }
+    }
+  }
+  const bool half_bit = shift > 0u && shift <= 96u &&
+                        rule_file_word_bit(numerator, shift - 1u) != 0u;
+  const bool lower_nonzero = shift > 1u &&
+    rule_file_lower_bits_nonzero(numerator, shift - 1u);
+  const bool quotient_odd = shift < 96u &&
+                            rule_file_word_bit(numerator, shift) != 0u;
+  return !half_bit || (!lower_nonzero && !quotient_odd) ||
+         rule_file_decimal_add_one(scaled);
+}
+
+static size_t rule_file_u32_digits(uint32_t value) {
+  size_t digits = 1u;
+  while (value >= 10u) {
+    value /= 10u;
+    ++digits;
+  }
+  return digits;
+}
+
+static size_t rule_file_write_u32(char *output, uint32_t value,
+                                  size_t width) {
+  size_t digits = rule_file_u32_digits(value);
+  const size_t written = width == 0u ? digits : width;
+  for (size_t i = 0u; i < written; ++i) {
+    output[written - i - 1u] = (char)('0' + (value % 10u));
+    value /= 10u;
+  }
+  return written;
+}
+
+size_t rule_file_format_decimal(double value, char *out_text, size_t out_capacity) {
+  RuleFileDecimalInteger scaled;
+  bool negative;
+  if (out_text == NULL || out_capacity == 0u ||
+      !rule_file_decimal_scaled(value, &scaled, &negative)) {
     return 0u;
   }
-  written = snprintf(out_text, out_capacity, "%.9f", value);
-  if (written < 0 || (size_t)written >= out_capacity) {
+
+  size_t highest_integer_limb = RULE_FILE_DECIMAL_LIMBS;
+  while (highest_integer_limb > 1u &&
+         scaled.limb[highest_integer_limb - 1u] == 0u) {
+    --highest_integer_limb;
+  }
+  const size_t integer_digits = highest_integer_limb == 1u ? 1u :
+    rule_file_u32_digits(scaled.limb[highest_integer_limb - 1u]) +
+      9u * (highest_integer_limb - 2u);
+  const size_t fixed_length = (negative ? 1u : 0u) + integer_digits + 10u;
+  if (fixed_length >= out_capacity) {
     return 0u;
   }
-  used = (size_t)written;
-  while (used > 0u && out_text[used - 1u] == '0') {
-    --used;
+
+  size_t used = 0u;
+  if (negative) {
+    out_text[used++] = '-';
   }
-  if (used > 0u && out_text[used - 1u] == '.') {
-    --used;
+  if (highest_integer_limb == 1u) {
+    out_text[used++] = '0';
+  } else {
+    used += rule_file_write_u32(out_text + used,
+                                scaled.limb[highest_integer_limb - 1u], 0u);
+    for (size_t i = highest_integer_limb - 1u; i > 1u; --i) {
+      used += rule_file_write_u32(out_text + used, scaled.limb[i - 1u], 9u);
+    }
   }
-  if (used == 0u || (used == 1u && out_text[0] == '-')) {
-    out_text[0] = '0';
-    used = 1u;
+  if (scaled.limb[0] != 0u) {
+    out_text[used++] = '.';
+    used += rule_file_write_u32(out_text + used, scaled.limb[0], 9u);
+    while (out_text[used - 1u] == '0') {
+      --used;
+    }
   }
   out_text[used] = '\0';
   return used;

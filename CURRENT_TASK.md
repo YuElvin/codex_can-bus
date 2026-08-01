@@ -1,12 +1,14 @@
 # 当前任务
 
-更新时间：2026-07-27
+更新时间：2026-08-01
 
 ## 项目目标
 
 交付基于 STM32H750VBTx、W5500、MCP2562FD、TF、W25Q128 和 FreeRTOS 的 CAN/CAN-FD 数据采集网关；各功能必须以构建、反汇编、烧录和现场证据验收，不能以源码存在或单次 HTTP 200 代替。
 
 ## 当前阶段
+
+- 2026-08-01阶段17“大 DBC selected-only闭环”A0/A1/B/C门禁客观通过，D后端与selection实板路径通过，TF已获授权重建且主机验证通过；当前因尚未插回开发板上电而正式`[阻断]`。卡已安全eject，Mac无外接TF卷；连续三个目标轮次复查`192.168.1.88`均离线且无OpenOCD/GDB监听。阻断解除条件唯一为用户把TF插回断电开发板并上电。解除后必须重新验证TF/网页/151 B active，再上传真实100KB DBC生成新的candidate/selection并完成D浏览器门禁；不能复用已格式化删除的旧generation7。E-H仍`[未验证]`。
 
 - 2026-07-27已确认并修复最新网页回归中的确定性状态机缺口：原固件在socket0为`ESTABLISHED`、`RX_RSR=0`且无ACK/disconnect pending时会永久直接返回，原始TCP客户端连接但不发数据可稳定占满唯一socket并拒绝后续HTTP。最小补丁只为该零数据连接增加100 ms有界等待，超时复用既有graceful `DISCON`；正常请求收到任意字节即退出计时，响应ACK和disconnect recovery仍保持500 ms。最终`./scripts/verify.sh`为CTest=`20/20`，ELF text/data/bss=`112828/768/243948`，ELF/HEX SHA-256=`742dbe264a5f6ea7282123fd151ff67aac30cd410ec5a41a0acb331092b2b92f`/`0e6396e22dfb8d85627e626314aa6d9fca61abf40efeab2fd01d8baf41c01025`；反汇编、ST-Link Programming/Verified/Reset和实板复验均通过。10轮空连接全部在`110.4..146.3 ms`收到EOF且每轮后续HTTP成功，timeout count=`10`、recovery count=`0`、socket最终LISTEN。浏览器5次新页面均成功，manual自动刷新4次最终均应用且无`Failed to fetch`；最终9个API全部HTTP200、ping 3/3、任务循环增长。浏览器一次约27秒长尾的同步诊断中socket已LISTEN且idle count未增长，因此不归因于本补丁；单socket短连接排队仍是已知能力边界，不扩大为并发HTTP改造。
 - 安全审查P0整改已完成源码、CTest=`19/19`、最终ELF反汇编、ST-Link烧录、IWDG受控任务卡死复位、Crash Dump保持链路及外部CAN高负载验证。当前板上为紧凑队列候选ELF/HEX SHA-256=`a32adce3c188bf859adaf36bd8c7326ed7b76c0aee0403cf4e0f6ba9fbe14fef`/`4bb09f44080ad7bf8db1ddca8b6f358bd9da484b229388feb986cbfc8165f5ad`：FIFO0=`16`，RX队列为`32 x 16 B Can2RxQueueFrame`。完整32项`CanFrame`候选已因FreeRTOS heap不足导致rule任务创建失败而撤回。烧录实际得到`Programming Finished`、`Verified OK`、`Resetting Target`；外部500 kbit/s负载的两个连续非停机20秒窗口中FIFO `full/lost=2/2->2/2->2/2`、RX queue drop=`0->0->0`，RX入队=`117033->140962->167987`、DBC匹配=`614->653->696`，故当前候选的运行态无丢帧通过。前一生产快照IWDG=`PR=6/RLR=1000/SR=0`、refresh=`32->35`、CAN loop=`1086->1182`、unhealthy=`0`。Crash record在`0x38000100`，写入后Clean D-Cache，受控HardFault handler复位前后校验和一致；这不替代真实硬件异常的根因栈证据。

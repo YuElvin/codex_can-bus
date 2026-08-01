@@ -68,6 +68,7 @@ typedef struct {
   uint32_t w5500_task;
   uint32_t http_task;
   uint32_t dbc_task;
+  uint32_t dbc_candidate_progress;
   uint32_t config_task;
   uint32_t log_task;
   uint32_t rule_task;
@@ -141,6 +142,7 @@ volatile uint32_t g_watchdog_reset_flags;
 extern volatile uint32_t g_w5500_http_dbc_reload_queue_ready;
 extern volatile uint32_t g_w5500_http_dbc_reload_enqueue_count;
 extern volatile uint32_t g_w5500_http_dbc_reload_queue_drop_count;
+extern volatile uint32_t g_w5500_http_candidate_progress_count;
 volatile uint32_t g_monitor_task_started;
 volatile uint32_t g_monitor_task_loop_count;
 volatile uint32_t g_config_task_started;
@@ -1322,6 +1324,7 @@ static void watchdog_service(void)
     .w5500_task = g_w5500_task_loop_count,
     .http_task = g_http_task_loop_count,
     .dbc_task = g_dbc_task_loop_count,
+    .dbc_candidate_progress = g_w5500_http_candidate_progress_count,
     .config_task = g_config_task_loop_count,
     .log_task = g_log_task_loop_count,
     .rule_task = g_rule_task_loop_count,
@@ -1339,9 +1342,21 @@ static void watchdog_service(void)
 
   if (current.can_task == g_watchdog_snapshot.can_task) unhealthy |= 1u << 0;
   if (current.decode_task == g_watchdog_snapshot.decode_task) unhealthy |= 1u << 1;
-  if (current.w5500_task == g_watchdog_snapshot.w5500_task) unhealthy |= 1u << 2;
-  if (current.http_task == g_watchdog_snapshot.http_task) unhealthy |= 1u << 3;
-  if (current.dbc_task == g_watchdog_snapshot.dbc_task) unhealthy |= 1u << 4;
+  if (current.w5500_task == g_watchdog_snapshot.w5500_task &&
+      current.dbc_candidate_progress ==
+        g_watchdog_snapshot.dbc_candidate_progress) {
+    unhealthy |= 1u << 2;
+  }
+  if (current.http_task == g_watchdog_snapshot.http_task &&
+      current.dbc_candidate_progress ==
+        g_watchdog_snapshot.dbc_candidate_progress) {
+    unhealthy |= 1u << 3;
+  }
+  if (current.dbc_task == g_watchdog_snapshot.dbc_task &&
+      current.dbc_candidate_progress ==
+        g_watchdog_snapshot.dbc_candidate_progress) {
+    unhealthy |= 1u << 4;
+  }
   if (current.config_task == g_watchdog_snapshot.config_task) unhealthy |= 1u << 5;
   if (current.log_task == g_watchdog_snapshot.log_task) unhealthy |= 1u << 6;
   if (current.rule_task == g_watchdog_snapshot.rule_task) unhealthy |= 1u << 7;
@@ -1515,6 +1530,7 @@ static void bringup_default_task(void *argument)
     g_tf_card_bringup_status = -1;
     Error_Handler();
   }
+  (void)w5500_http_recover_large_dbc_candidate();
   (void)w5500_http_load_active_dbc();
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;
