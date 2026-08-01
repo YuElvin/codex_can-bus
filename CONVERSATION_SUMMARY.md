@@ -3977,3 +3977,10 @@
 
 - 用户恢复发送`0x100`和`0x110`后，预日志`/api/signals?page=0` 8项均为`GOOD`；以`samplePeriodMs=1000`启动日志，HTTP200返回`STARTING`后回读`ACTIVE`，路径`/log/20260801_191151000_signal-v3.csv`，锁定active generation=`0000000000000001`、selection CRC=`E5CB6C8F`、selectedCount=`8`。
 - 日志ACTIVE期间`POST /api/dbc/active`实际返回HTTP409 `logging_active`，随后停止请求HTTP200 `STOPPING`，轮询回读`STOPPED`且身份未变。该结果关闭G控制面准入/锁定/正常停止；实体CSV/.meta、clean footer和TF一致性仍待用户下电取卡后只读核验，不能用HTTP状态替代。
+
+## 2026-08-01 G实体CSV/meta与TF只读核验通过
+
+- 用户确认TF已插入电脑。唯一外置`/dev/disk4`、FAT32 `/dev/disk4s1`卸载后两次`fsck_msdos -n`均exit=`0`；只读挂载读取完成后再次卸载、校验并`diskutil eject`成功，未修复、格式化或写卡。
+- CSV `/log/20260801_191151000_signal-v3.csv`为32850 B、289行含header/288数据行；标准CSV解析确认唯一key恰为8个selected ordinal0..7、每key36行、无额外key、8列正确，quality=`GOOD 253/STALE 35`；SHA-256=`c947eac1f1af9a485393dbaf7fb97ccd334635e41c1b7e07f7ca8d068fb8da05`。
+- meta为1034 B、最终`cleanClose=true`、rowsWritten=`288`、rowsDropped/lateSamples/writeFailures=`0/0/0`、flushCount=`49`；身份active/candidate=`1/2`、sourceSize=`100071`、sourceCrc32=`4B88D9CE`、selectionCrc32=`E5CB6C8F`、selectedCount=`8`；SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`。
+- host `dbc_index_dump verify`对candidate generation1/2和active generation1均返回messages=`112`、signals=`896`、total=`145232`；Python只读交叉检查manifest/index/selection固定尺寸、CRC、popcount、generation/source引用全部通过。G实体介质门禁关闭；H的当前映像TF写失败、物理掉电/active reload失败和CAN-FD实板继续`[未验证]`。

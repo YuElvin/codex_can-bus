@@ -132,3 +132,11 @@
 - 恢复双ID后，`/api/signals?page=0` 8项回到`GOOD`且raw/value保持实测值；以`samplePeriodMs=1000`启动v3日志，HTTP200后状态进入`ACTIVE`，路径为`/log/20260801_191151000_signal-v3.csv`，锁定active generation=`0000000000000001`、selection CRC=`E5CB6C8F`、selectedCount=`8`。
 - 日志ACTIVE期间尝试`POST /api/dbc/active`得到HTTP409 `logging_active`，日志身份未改变；停止请求经历`STOPPING`并回读`STOPPED`，锁已释放。该证据关闭日志准入、会话锁和正常停止控制面，不替代TF上CSV/.meta实体、clean footer或selected-only介质集合核验。
 - 下一步需要用户下电取卡到电脑；主会话只读检查同名`.csv/.meta`、行列/quality/identity、文件大小和`fsck_msdos -n`，不得在证据读取前修复或格式化。
+
+## 2026-08-01 G实体CSV/meta与TF只读核验通过
+
+- 用户下电取卡后，唯一外置介质为`/dev/disk4`、FAT32 `/dev/disk4s1`。先卸载再执行两次`diskutil verifyVolume`，底层`fsck_msdos -n /dev/rdisk4s1`均 exit=`0`；只读挂载成功，读完后再次卸载并`diskutil eject`成功，期间未修复、格式化或写卡。
+- `/log/20260801_191151000_signal-v3.csv`为32850 B、289行（含header）/288数据行；标准CSV解析确认8个唯一key严格等于meta中ordinal0..7的selected集合，每个key 36行、无额外key、8列结构正确，`GOOD=253`、`STALE=35`。CSV SHA-256=`c947eac1f1af9a485393dbaf7fb97ccd334635e41c1b7e07f7ca8d068fb8da05`。
+- 同名`.meta`为1034 B、SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`；最终字段`cleanClose=true`、`rowsWritten=288`、`rowsDropped=0`、`lateSamples=0`、`writeFailures=0`、`flushCount=49`，身份为active generation1/candidate generation2/sourceSize100071/sourceCrc32=`4B88D9CE`/selectionCrc32=`E5CB6C8F`/selectedCount8。
+- TF上的candidate current/previous与active current manifest CRC均有效；`dbc_index_dump verify`对三个index均返回`ok source_size=100071 source_crc32=4B88D9CE messages=112 signals=896 total=145232`；selection header/bitmap CRC、popcount=8及manifest引用交叉验证通过。G实体CSV/meta、FAT一致性和selected-only介质集合已关闭。
+- H剩余：TF写失败注入、当前大DBC映像的物理掉电/active reload失败路径仍`[未验证]`；CAN-FD实板仍`[未验证]`。不得把既有旧路径或正常STOPPED会话替代这些异常证据。

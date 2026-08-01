@@ -132,3 +132,9 @@
 
 - 双ID恢复后以1 s周期启动选择性v3日志，实际`ACTIVE`并锁定generation1、selection CRC=`E5CB6C8F`、selectedCount8；日志期间active写请求HTTP409 `logging_active`，停止后`STOPPED`并释放锁。
 - 控制面和吞吐准入已通过；G最终剩余为取卡只读核验CSV/.meta是否仅含8个selected key、身份/clean footer/FAT链是否一致。TF写失败注入、物理掉电恢复和CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 G实体介质门禁已通过
+
+- 下电取卡后，`fsck_msdos -n`两次 exit=`0`，只读挂载读取并安全弹出；CSV 288行数据严格只有8个selected key（每key36行），meta `cleanClose=true`、rowsWritten=`288`、drop/late/writeFailure=`0/0/0`，身份 generation=`1/2`、CRC=`4B88D9CE/E5CB6C8F`一致。
+- 通过host `dbc_index_dump verify`的candidate1/candidate2/active1 index以及Python交叉解析的manifest/selection CRC、size、count、source fingerprint，证明实体TF链与HTTP/runtime身份一致。G完成标准（API freshness、日志锁、选择性CSV/meta、FAT只读一致性）已关闭。
+- H仍需单独证据：当前大DBC映像的TF写失败注入、物理掉电期间的恢复和active reload失败不破坏旧runtime；CAN-FD实板仍`[未验证]`。不复用旧v2日志路径或正常会话替代这些异常路径。

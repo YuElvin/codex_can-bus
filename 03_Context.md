@@ -292,3 +292,10 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 
 - 用户恢复双ID后，8个selected项回到`GOOD`。以`samplePeriodMs=1000`启动日志实际进入`ACTIVE`，路径`/log/20260801_191151000_signal-v3.csv`，会话锁定active generation=`1`、selection CRC=`E5CB6C8F`、selectedCount=`8`；周期满足`8*1000 <= 20*1000`。
 - 日志期间active写请求返回HTTP409 `logging_active`且身份不变；停止经历`STOPPING`后回读`STOPPED`。当前控制面证据已具备，但卡上实体CSV/.meta、clean footer、选中列集合和FAT一致性尚未读取。
+
+## 2026-08-01 G实体日志与TF只读介质核验通过
+
+- `/dev/disk4s1`在卸载状态下两次`fsck_msdos -n`均 exit=`0`，只读挂载后成功读取日志，随后卸载、再次只读校验并安全弹出；未执行repair/format/写入。
+- CSV解析结果：8列header，288数据行，唯一key恰为selected ordinal0..7，每key36行，无非selected key；quality计数`GOOD=253/STALE=35`，CSV 32850 B，SHA-256=`c947eac1f1af9a485393dbaf7fb97ccd334635e41c1b7e07f7ca8d068fb8da05`。
+- meta最终`cleanClose=true`、rowsWritten/dropped/late/writeFailures=`288/0/0/0`、flushCount=`49`，active/candidate generation=`1/2`、source size/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、selectedCount=`8`；meta SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`。
+- 三个大DBC index由host `dbc_index_dump verify`通过，manifest/index/selection源指纹、CRC、计数与当前链路交叉验证通过。G实体门禁关闭；H异常介质/掉电/active reload失败仍未验证。

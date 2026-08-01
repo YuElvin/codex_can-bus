@@ -365,3 +365,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 双ID恢复后以1000 ms周期启动日志，`selectedCount=8`满足20 rows/s合同，实际状态`ACTIVE`，会话锁定active generation=`0000000000000001`与selection CRC=`E5CB6C8F`；active写请求被HTTP409 `logging_active`拒绝。
 - 停止经历`STOPPING→STOPPED`且身份未变。该ADR只接受控制面证据；CSV/.meta实体内容、clean footer、FAT一致性和断电恢复必须由下电取卡后的只读检查另行关闭。
+
+### ADR-040：v3选择性日志实体与TF只读一致性（2026-08-01）
+
+- 本次会话`/log/20260801_191151000_signal-v3.csv`实体为288行、8个selected key且每key36行；meta最终`cleanClose=true`、rowsWritten=`288`、rowsDropped/lateSamples/writeFailures=`0/0/0`，active/candidate=`1/2`、source CRC=`4B88D9CE`、selection CRC=`E5CB6C8F`。CSV中包含GOOD与STALE状态，但没有未选key。
+- TF卸载后的两次`fsck_msdos -n`均exit0，只读挂载/读取/卸载/弹出完成；candidate/active manifest、index、selection的固定尺寸和CRC引用均交叉通过。该ADR关闭正常v3实体持久化，不承诺FAT32任意掉电时刻原子性；写失败注入和当前映像物理掉电仍`[未验证]`。
