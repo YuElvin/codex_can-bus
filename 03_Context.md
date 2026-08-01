@@ -276,3 +276,9 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 真实100071 B源经流式上传、候选构造、ordinal0–7 selection及active提交后，当前持久身份为active generation=`1`、candidate=`2`、selection CRC=`E5CB6C8F`、selected-only=`8 signals/1 message`。candidate搜索/分页每页8项，page1为ordinal8–15未选择项。
 - 一次正常软件复位后的最早runtime读取为空，后续candidate恢复查询和GDB确认runtime有效，再次HTTP runtime稳定为`loaded=true`、100071 B、1消息/8信号。这关闭正常active reload，不覆盖TF写失败、断电或强制reload失败路径。
 - HTTP响应收口已改为最终`SEND_OK`后直接graceful DISCON，修复长selection响应后的单socket残留ESTABLISHED；实际连续status/page1/active请求均恢复。最终烧录ELF=`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`，外部CAN/CSV与故障路径仍待验。
+
+## 2026-08-01 新映像外部Classic CAN RX正向复验
+
+- 用户确认双ID外部输入已发送。连续HTTP快照中`/api/can/status`的RX由`665`增至`770`，错误、Bus-Off、TEC、REC均为0；`/api/signals?page=0`的8个selected项均为`GOOD`，raw/value与`0x100`的`E0 2E 06 FF E4 0C A5 69`一致，page1 ordinal8..15未选项未暴露。
+- 两次受控GDB/OpenOCD读数后均显式恢复目标再关闭调试服务。最终读数`g_can2_rx_count=3967`、DBC RX=`3967`、matched=`1927`、updates=`15416`、cache=`8`、last matched ID=`0x100`、decode errors=`0`、stale marks=`0`；通用RX寄存器快照为`ID=0x110`、`DLC=8`、首字节`0x01`。F正向外部Classic RX与selected-only decode已具备证据。
+- 反向隔离尚待人工切换：停止`0x100`、保持`0x110`后验证selected值保持且quality进入`STALE`；CSV/meta实体读取和TF异常路径仍未验证。

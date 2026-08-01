@@ -3956,3 +3956,9 @@
 
 - 不暂停目标的连续HTTP只读快照显示`/api/can/status`为`tx=317/rx=0/errors=0/busOff=0/tec=0/rec=0`；`/api/dbc/runtime`仍为active generation1、candidate2、100071 B、1 message/8 signals、selection CRC=`E5CB6C8F`。
 - `/api/signals?page=0`严格只返回8个selected项，value/raw均为`null`、quality均为`MISSING`。因此当前新映像尚未取得外部CAN RX证据；不把TX计数、自检或MISSING页写成F/G通过。下一解除条件仍是外部设备发送指定标准Classic CAN `0x100`与未选`0x110`并回复“已发送”。
+
+## 2026-08-01 F外部Classic CAN正向门禁通过
+
+- 用户确认外部设备已发送标准Classic `0x100`与`0x110`。连续HTTP样本中`/api/can/status` RX=`665→770`，errors/Bus-Off/TEC/REC均为0；`/api/signals?page=0`的8个selected项全为`GOOD`，raw/value=`12000/1200`、`-250/-25`、`3300/3.3`、`80/0`、`2/2`、`3/3`、`10/10`、`1/1`，与`0x100` payload=`E0 2E 06 FF E4 0C A5 69`一致，page1未选项未暴露。
+- 受控OpenOCD/GDB读取后均执行`monitor resume`、`detach`并关闭服务。读数：`g_can2_rx_count=3967`、DBC RX=`3967`、matched=`1927`、updates=`15416`、cache=`8`、last matched ID=`0x100`、decode errors=`0`、stale marks=`0`；通用RX硬件快照为`ID=0x110`、`DLC=8`、首字节`0x01`。这证明外部Classic RX和selected-only decode，不把TX self-test当作外部RX。
+- 当前下一步必须由用户停止`0x100`并仅保留`0x110`，再完成STALE隔离；选择性CSV/meta实体文件、TF写失败/掉电恢复和CAN-FD实板仍未验证。

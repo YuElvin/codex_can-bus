@@ -115,3 +115,9 @@
 - 真实100071 B DBC上传获202（generation1、CRC32=`4B88D9CE`），板端构造candidate token=`0000000000000001-000186E7-4B88D9CE`、112消息/896信号；selection将ordinal0–7提交为generation2、8信号/1消息。active提交为generation1，candidate2，selection CRC=`E5CB6C8F`，selected-only runtime slot0精确8信号。
 - 长selection响应曾完整到达但socket0残留`ESTABLISHED`。最小修正为`SEND_OK`后直接graceful `DISCON`，无接口或并发改动；重烧录后candidate恢复查询、紧随status/page1及active长请求均连续HTTP200。受控复位的早期runtime空态是恢复窗口；其后candidate和runtime均回读generation1/2、100071 B/1消息/8信号，正常active reload通过。
 - 当前最终候选`verify.sh` CTest=`34/34`，FLASH=`121836 B`、RAM_D1=`196672 B`、text/data/bss=`121384/444/196292`，ELF/HEX SHA-256=`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`。外部Classic RX、GOOD/STALE、实体v3 CSV/meta及TF写失败/掉电路径仍`[待确认]`。
+
+## 2026-08-01 F外部Classic CAN正向证据
+
+- 用户确认外部设备正在发送标准Classic CAN `0x100`与`0x110`。不暂停目标的HTTP样本显示`rx=665→770`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`；8个selected信号全部`GOOD`，raw/value为`12000/1200`、`-250/-25`、`3300/3.3`、`80/0`、`2/2`、`3/3`、`10/10`、`1/1`，与`0x100` payload=`E0 2E 06 FF E4 0C A5 69`一致；page1 ordinal8..15仍未选且未进入API。
+- 受控ST-Link/OpenOCD读取后均执行`monitor resume`、`detach`并关闭调试服务。读数为`g_can2_rx_count=3967`、`g_can2_dbc_rx_frame_count=3967`、`g_can2_dbc_matched_frame_count=1927`、`g_can2_dbc_signal_update_count=15416`、`g_can2_dbc_cache_count=8`、`g_can2_dbc_last_message_id=0x100`、`g_can2_dbc_decode_error_count=0`、`g_can2_dbc_stale_mark_count=0`；最近硬件RX快照为`ID=0x110`、`DLC=8`、首字节=`0x01`。这证明外部Classic RX、selected-only decode和无错误计数，不把TX self-test当作RX证据。
+- 当前隔离动作尚未完成：需用户停止`0x100`、保留`0x110`后再判定STALE；实体v3 CSV/meta、TF写失败与物理掉电恢复仍`[待确认]`，CAN-FD实板仍`[未验证]`。

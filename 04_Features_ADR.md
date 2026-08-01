@@ -350,3 +350,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 - 观察到长selection响应已完整HTTP200但后续socket0停在`ESTABLISHED`，原TX_FSR refill等待未保留有效ack/disconnect pending。决策：最终chunk收到W5500 `SEND_OK`后立即发起既有graceful `DISCON`；不增加socket、并发、连接复用或应用层重试。
 - 依据：W5500的`SEND_OK`是本项目发送完成边界；直接按TCP graceful close收口可避免响应已交付后单socket永久占用。失败仍走既有close/recovery路径。
 - 证据：修正后实板冷启动candidate恢复、连续`status→page1`、active长请求及复位后的runtime恢复均已完成。网络断链/恶意半包等扩展场景不因本ADR自动通过。
+
+### ADR-037：F外部Classic CAN证据边界（2026-08-01）
+
+- 当前实板合同是Classic CAN、标准11-bit ID、DLC=8；双ID外部输入期间，RX计数、selected runtime更新和`/api/signals`的8项`GOOD`相互一致，硬件快照记录`ID=0x110`、`DLC=8`、首字节`0x01`，DBC matched last ID为`0x100`。
+- 决策：该证据只关闭外部Classic CAN正向RX与selected-only decode；TX self-test不计入RX证据。必须先取得“停止`0x100`、继续`0x110`”的人工确认，才能记录STALE/隔离；CAN-FD实板继续标记`[未验证]`。

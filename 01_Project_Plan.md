@@ -117,3 +117,8 @@
 - B/C/D：真实`BNE_CLASSIC_CAN_TEST_100KB.dbc`（100071 B、CRC32=`4B88D9CE`）在板端生成candidate，112消息/896信号；分页检索和selection将ordinal0–7持久化为candidate generation2、8信号/1消息。
 - E：active提交为generation1、candidate2、CRC=`E5CB6C8F`、slot0 selected-only runtime；一次软件复位后最终恢复同一runtime。长响应socket收口缺陷已以`SEND_OK→graceful DISCON`最小修正并实板连续请求复验。
 - F/G/H剩余：外部标准Classic CAN `0x100`正向GOOD、混合`0x100/0x110`反向隔离、停`0x100`后的STALE、含真实数据的v3 CSV/.meta和干净TF只读核验，以及TF写失败/掉电异常路径。CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 F正向外部RX门禁已通过
+
+- 双ID外部发送期间，板端RX和DBC计数持续增长且无错误：`g_can2_rx_count/dbc_rx=3967`、`matched=1927`、`signal_update=15416`、`cache=8`、`decode_error=0`；硬件最后帧快照为标准`ID=0x110`、`DLC=8`，API selected page0的8项全部`GOOD`并与`0x100` payload解码一致，未选page1保持未选。
+- 因此F的“外部标准Classic CAN RX→selected runtime→API”正向链路已关闭；不得据此扩写为反向隔离、STALE、CSV介质或掉电恢复。下一门禁是用户停止`0x100`仅保留`0x110`，再执行G日志实体核验。

@@ -115,3 +115,4 @@
 - L-106：长active请求的命令会话可能先返回session ID且暂时无stdout；必须继续poll到明确exit code和完整HTTP响应，不能把工具尚未交付输出误判为板端无响应。本轮定点trace最终证明path5/code200、header/body两次send和disconnect完成，IWDG unhealthy=0。
 - L-112：FAT32的`current→previous→new current`只能构造可恢复协议，不能假设多文件rename原子。若new current rename、读回或runtime publish在previous已存在后失败，必须同锁立即尝试previous回写current；若该尝试也失败，保留previous并把结论降为启动恢复待验。镜像FAT与FSINFO写的返回值也必须向上传播，否则`f_sync`可能表面成功而关键元数据写失败未被调用方看到。
 - L-113：单socket长业务请求的HTTP200只证明响应字节到达，不能证明socket已回到LISTEN。若`SEND_OK`后的TX_FSR等待没有保持一致的ack/disconnect状态，可能留下`ESTABLISHED`并拒绝所有后续请求。应将W5500 `SEND_OK`作为响应收口边界，立即走既有graceful DISCON，并用“长请求后两次独立请求”而非单次200验证。
+- L-114：外部Classic CAN正向RX必须同时保留三层证据：CAN状态RX/错误计数增长、受控GDB的ID/DLC与DBC matched/update/decode-error计数、selected-only API的GOOD raw/value；TX self-test或单次HTTP 200不能替代。反向隔离必须在用户明确停止某一ID后再做，不能从混合流量推断STALE。
