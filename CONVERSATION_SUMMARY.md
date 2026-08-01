@@ -3951,3 +3951,8 @@
 - 修正映像烧录后，candidate generation2恢复查询、紧随`status→candidate page1`连续HTTP200，page1精确为ordinal8–15未选项。`POST /api/dbc/active`实际200，active generation=`1`、candidate=`2`、selected=8/1 message、selection CRC=`E5CB6C8F`、runtime slot0；runtime回读`loaded=true`、100071 B、1 message/8 signals。软件复位后的最早runtime空态只记录为恢复窗口；后续candidate查询与GDB均确认runtime有效，再次HTTP回读同一active身份，正常active reload通过。
 - 尚未取得新映像外部Classic CAN、GOOD/STALE、实体v3 CSV/.meta、TF写失败或物理掉电证据；这些均保持`[待确认]`。CAN-FD实板仍`[未验证]`。
 - 已同步`ARCHITECTURE_DESIGN.md`：单socket响应收口现以最终`SEND_OK→graceful DISCON`为准，替换旧“等待TX_FSR重填”的过时描述；未改变单连接、非并发HTTP边界。
+
+## 2026-08-01 新映像外部Classic CAN门禁快照
+
+- 不暂停目标的连续HTTP只读快照显示`/api/can/status`为`tx=317/rx=0/errors=0/busOff=0/tec=0/rec=0`；`/api/dbc/runtime`仍为active generation1、candidate2、100071 B、1 message/8 signals、selection CRC=`E5CB6C8F`。
+- `/api/signals?page=0`严格只返回8个selected项，value/raw均为`null`、quality均为`MISSING`。因此当前新映像尚未取得外部CAN RX证据；不把TX计数、自检或MISSING页写成F/G通过。下一解除条件仍是外部设备发送指定标准Classic CAN `0x100`与未选`0x110`并回复“已发送”。
