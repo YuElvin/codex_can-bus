@@ -6,6 +6,7 @@
 #include "ports/can_port.h"
 #include "can_tx_control.h"
 #include "dbc_parser.h"
+#include "dbc_selected_runtime.h"
 #include "ports/tf_card_port.h"
 #include "ports/w5500_port.h"
 #include "signal_cache.h"
@@ -88,13 +89,6 @@ void can2_analyzer_set_rx_task_handle(void *task_handle);
 void can2_analyzer_rx_notify_from_isr(uint32_t events);
 int can2_tx_control_submit(const CanTxControlConfig *config, uint32_t *request_seq);
 void can2_tx_control_snapshot(CanTxControlState *state);
-size_t can2_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
-size_t can2_tx_signal_cache_copy(SignalCacheEntry *out_entries, size_t out_capacity);
-size_t can2_signal_cache_mark_stale(uint32_t now_ms, uint32_t stale_after_ms);
-size_t can2_signal_cache_export_rule_snapshots(SignalSnapshot *out_signals, size_t out_capacity);
-size_t can2_signal_cache_export_rule_snapshots_for_engine(const RuleEngine *engine,
-                                                          SignalSnapshot *out_signals,
-                                                          size_t out_capacity);
 int tf_card_bringup_run(void);
 int w25q128_bringup_run(void);
 int w25q128_diagnostic_run(void);
@@ -111,6 +105,7 @@ int w5500_bringup_poll(void);
 int w5500_http_dbc_lock(void);
 void w5500_http_dbc_unlock(void);
 int w5500_http_recover_large_dbc_candidate(void);
+int w5500_http_recover_large_dbc_active(void);
 int w5500_http_load_active_dbc(void);
 void w5500_http_request_dbc_reload(void);
 int w5500_http_dbc_reload_queue_init(void);
@@ -119,6 +114,21 @@ int w5500_http_process_dbc_reload(void);
 int w5500_http_dbc_reload_complete(void);
 int w5500_http_dbc_reload_result(void);
 const DbcDatabase *w5500_http_active_dbc_snapshot(void);
+int w5500_http_selected_runtime_available(void);
+size_t w5500_http_decode_selected_frame(const CanFrame *frame,
+                                        uint32_t now_ms);
+size_t w5500_http_selected_rule_snapshots(
+  const RuleEngine *engine,
+  SignalSnapshot *out_signals,
+  size_t out_capacity);
+int w5500_http_selected_signal_definition(const char *key,
+                                           uint64_t *definition_hash);
+int w5500_http_selected_log_signal(
+  uint64_t active_generation,
+  uint32_t selection_crc32,
+  uint16_t signal_index,
+  DbcSelectedRuntimeSignal *signal,
+  SignalValueSnapshot *value);
 int w5500_http_status_poll(void);
 void w5500_http_trace_mutex_wait(uint32_t start_tick, uint32_t end_tick);
 int rule_task_manual_override_submit(uint32_t enabled,

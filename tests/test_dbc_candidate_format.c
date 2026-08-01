@@ -529,6 +529,47 @@ static bool test_token_and_generation(void) {
   return true;
 }
 
+static bool test_active_set_allows_independent_generation(void) {
+  DbcSelectionV1 selection;
+  ASSERT_STATUS(dbc_selection_v1_init_default(&selection, 17u, 17u,
+                                              100071u,
+                                              UINT32_C(0x4B88D9CE), 2u),
+                DBC_CANDIDATE_FORMAT_OK);
+  uint8_t bytes[LARGE_DBC_SELECTION_TOTAL_SIZE];
+  ASSERT_STATUS(dbc_selection_v1_encode(&selection, bytes),
+                DBC_CANDIDATE_FORMAT_OK);
+  const DbcCandidateIndexFacts index = {
+    .source_size = 100071u, .source_crc32 = UINT32_C(0x4B88D9CE),
+    .index_size = catalog_index_size(1u, 2u),
+    .index_crc32 = UINT32_C(0x10203040),
+    .catalog_message_count = 1u, .catalog_signal_count = 2u
+  };
+  DbcManifestV1 manifest = {
+    .object_kind = LARGE_DBC_MANIFEST_OBJECT_ACTIVE,
+    .generation = 3u,
+    .source_size = index.source_size, .source_crc32 = index.source_crc32,
+    .index_size = index.index_size, .index_crc32 = index.index_crc32,
+    .selection_size = sizeof(bytes),
+    .selection_crc32 = dbc_candidate_crc32(bytes, sizeof(bytes)),
+    .selected_count = 2u, .selected_message_count = 1u,
+    .catalog_message_count = 1u, .catalog_signal_count = 2u
+  };
+  DbcSelectionV1 decoded;
+  ASSERT_STATUS(dbc_active_v1_verify_set(&manifest, &index, bytes,
+                                         sizeof(bytes), 1u, &decoded),
+                DBC_CANDIDATE_FORMAT_OK);
+  ASSERT_TRUE(decoded.candidate_generation == 17u &&
+              decoded.selection_generation == 17u);
+  ASSERT_STATUS(dbc_candidate_v1_verify_set(&manifest, &index, bytes,
+                                            sizeof(bytes), 1u, NULL),
+                DBC_CANDIDATE_FORMAT_INVALID_FORMAT);
+  manifest.object_kind = LARGE_DBC_MANIFEST_OBJECT_CANDIDATE;
+  ASSERT_STATUS(dbc_candidate_v1_verify_set(&manifest, &index, bytes,
+                                            sizeof(bytes), 1u, NULL),
+                DBC_CANDIDATE_FORMAT_REFERENCE_MISMATCH);
+  return true;
+}
+
 int main(void) {
   ASSERT_TRUE(test_crc_and_manifest_golden());
   ASSERT_TRUE(test_manifest_damage_and_limits());
@@ -537,6 +578,7 @@ int main(void) {
   ASSERT_TRUE(test_selection_golden_damage_activation());
   ASSERT_TRUE(test_candidate_set_cross_checks());
   ASSERT_TRUE(test_token_and_generation());
+  ASSERT_TRUE(test_active_set_allows_independent_generation());
   puts("DBC candidate manifest/selection v1 tests passed");
   return 0;
 }

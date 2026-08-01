@@ -124,6 +124,15 @@ DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
   uint16_t selected_message_count,
   DbcSelectionV1 *decoded_selection);
 
+/* Active generation is independent of the candidate/selection generation. */
+DbcCandidateFormatStatus dbc_active_v1_verify_set(
+  const DbcManifestV1 *manifest,
+  const DbcCandidateIndexFacts *index,
+  const uint8_t *selection_bytes,
+  size_t selection_size,
+  uint16_t selected_message_count,
+  DbcSelectionV1 *decoded_selection);
+
 DbcCandidateFormatStatus dbc_candidate_token_format(
   uint64_t generation,
   uint32_t source_size,

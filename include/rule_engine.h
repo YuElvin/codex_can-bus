@@ -7,7 +7,7 @@
 
 #define RULE_ENGINE_MAX_RULES 32u
 #define RULE_ENGINE_MAX_SIGNALS 64u
-#define RULE_SIGNAL_KEY_MAX 48u
+#define RULE_SIGNAL_KEY_MAX 64u
 #define RULE_RELAY_COUNT 2u
 
 typedef enum {

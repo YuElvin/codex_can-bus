@@ -429,12 +429,14 @@ DbcCandidateFormatStatus dbc_selection_v1_verify_activation(
   return DBC_CANDIDATE_FORMAT_OK;
 }
 
-DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
+static DbcCandidateFormatStatus verify_generation_set(
   const DbcManifestV1 *manifest,
   const DbcCandidateIndexFacts *index,
   const uint8_t *selection_bytes,
   size_t selection_size,
   uint16_t selected_message_count,
+  uint8_t expected_kind,
+  bool require_generation_match,
   DbcSelectionV1 *decoded_selection) {
   if (manifest == NULL || index == NULL || selection_bytes == NULL) {
     return DBC_CANDIDATE_FORMAT_INVALID_ARGUMENT;
@@ -443,7 +445,7 @@ DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
   if (status != DBC_CANDIDATE_FORMAT_OK) {
     return status;
   }
-  if (manifest->object_kind != LARGE_DBC_MANIFEST_OBJECT_CANDIDATE) {
+  if (manifest->object_kind != expected_kind) {
     return DBC_CANDIDATE_FORMAT_INVALID_FORMAT;
   }
   DbcSelectionV1 local_selection;
@@ -451,7 +453,8 @@ DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
   if (status != DBC_CANDIDATE_FORMAT_OK) {
     return status;
   }
-  if (manifest->generation != local_selection.candidate_generation ||
+  if ((require_generation_match &&
+       manifest->generation != local_selection.candidate_generation) ||
       manifest->source_size != index->source_size ||
       manifest->source_size != local_selection.source_size ||
       manifest->source_crc32 != index->source_crc32 ||
@@ -480,6 +483,32 @@ DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
     *decoded_selection = local_selection;
   }
   return DBC_CANDIDATE_FORMAT_OK;
+}
+
+DbcCandidateFormatStatus dbc_candidate_v1_verify_set(
+  const DbcManifestV1 *manifest,
+  const DbcCandidateIndexFacts *index,
+  const uint8_t *selection_bytes,
+  size_t selection_size,
+  uint16_t selected_message_count,
+  DbcSelectionV1 *decoded_selection) {
+  return verify_generation_set(manifest, index, selection_bytes,
+                               selection_size, selected_message_count,
+                               LARGE_DBC_MANIFEST_OBJECT_CANDIDATE, true,
+                               decoded_selection);
+}
+
+DbcCandidateFormatStatus dbc_active_v1_verify_set(
+  const DbcManifestV1 *manifest,
+  const DbcCandidateIndexFacts *index,
+  const uint8_t *selection_bytes,
+  size_t selection_size,
+  uint16_t selected_message_count,
+  DbcSelectionV1 *decoded_selection) {
+  return verify_generation_set(manifest, index, selection_bytes,
+                               selection_size, selected_message_count,
+                               LARGE_DBC_MANIFEST_OBJECT_ACTIVE, false,
+                               decoded_selection);
 }
 
 static int hex_value(char value) {

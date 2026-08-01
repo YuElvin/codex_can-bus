@@ -390,6 +390,136 @@ static int test_invalid_v4_does_not_change_candidate(void) {
   return 0;
 }
 
+static const char default_v5_text[] =
+  "version=5\nruleCount=2\n"
+  "rule0.enabled=1\nrule0.relay=0\nrule0.signalKey=EngineData.rpm\nrule0.threshold=1234.5\n"
+  "rule0.action=on\nrule0.delayMs=1000\nrule0.timeoutMs=1500\nrule0.safeState=off\nrule0.priority=10\n"
+  "rule0.definitionHash=0000000000000000\n"
+  "rule1.enabled=0\nrule1.relay=1\nrule1.signalKey=VehicleData.speed\nrule1.threshold=-1.25\n"
+  "rule1.action=off\nrule1.delayMs=0\nrule1.timeoutMs=1500\nrule1.safeState=off\nrule1.priority=20\n"
+  "rule1.definitionHash=FFFFFFFFFFFFFFFF\n";
+
+static int test_v5_round_trip_and_hash_boundaries(void) {
+  RuleFileV5 rules;
+  RuleFileV5 round_trip;
+  char text[RULE_FILE_V5_MAX_BYTES + 1u];
+
+  ASSERT_TRUE(rule_file_parse_v5((const uint8_t *)default_v5_text,
+                                 strlen(default_v5_text), &rules));
+  ASSERT_TRUE(rules.slots[0].definition_hash == UINT64_C(0));
+  ASSERT_TRUE(rules.slots[1].definition_hash == UINT64_MAX);
+  const size_t len = rule_file_format_v5(&rules, text, sizeof(text));
+  ASSERT_TRUE(len > 0u && len <= RULE_FILE_V5_MAX_BYTES);
+  ASSERT_TRUE(strstr(text, "rule0.definitionHash=0000000000000000\n") != NULL);
+  ASSERT_TRUE(strstr(text, "rule1.definitionHash=FFFFFFFFFFFFFFFF\n") != NULL);
+  ASSERT_TRUE(rule_file_parse_v5((const uint8_t *)text, len, &round_trip));
+  ASSERT_TRUE(memcmp(&round_trip, &rules, sizeof(rules)) == 0);
+  return 0;
+}
+
+static int assert_invalid_v5_does_not_change_candidate(const char *text) {
+  RuleFileV5 before;
+  RuleFileV5 candidate;
+
+  memset(&before, 0xA5, sizeof(before));
+  candidate = before;
+  ASSERT_TRUE(!rule_file_parse_v5((const uint8_t *)text, strlen(text),
+                                  &candidate));
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
+static int test_v5_strict_rejections(void) {
+  char duplicate[RULE_FILE_V5_MAX_BYTES + 1u];
+  char missing[sizeof(default_v5_text)];
+  char lowercase_hex[sizeof(default_v5_text)];
+  char non_hex[sizeof(default_v5_text)];
+  char short_hex[sizeof(default_v5_text)];
+  char wrong_version[sizeof(default_v5_text)];
+  const char missing_line[] = "rule0.definitionHash=0000000000000000\n";
+
+  const int duplicate_len = snprintf(
+    duplicate, sizeof(duplicate), "%srule0.definitionHash=0000000000000000\n",
+    default_v5_text);
+  ASSERT_TRUE(duplicate_len > 0 && (size_t)duplicate_len < sizeof(duplicate));
+
+  memcpy(missing, default_v5_text, sizeof(default_v5_text));
+  char *line = strstr(missing, missing_line);
+  ASSERT_TRUE(line != NULL);
+  memmove(line, line + strlen(missing_line),
+          strlen(line + strlen(missing_line)) + 1u);
+
+  memcpy(lowercase_hex, default_v5_text, sizeof(default_v5_text));
+  char *hash = strstr(lowercase_hex, "FFFFFFFFFFFFFFFF");
+  ASSERT_TRUE(hash != NULL);
+  hash[0] = 'f';
+
+  memcpy(non_hex, default_v5_text, sizeof(default_v5_text));
+  hash = strstr(non_hex, "FFFFFFFFFFFFFFFF");
+  ASSERT_TRUE(hash != NULL);
+  hash[0] = 'G';
+
+  memcpy(short_hex, default_v5_text, sizeof(default_v5_text));
+  hash = strstr(short_hex, "FFFFFFFFFFFFFFFF");
+  ASSERT_TRUE(hash != NULL);
+  memmove(hash, hash + 1u, strlen(hash));
+
+  memcpy(wrong_version, default_v5_text, sizeof(default_v5_text));
+  wrong_version[strlen("version=")] = '4';
+
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(duplicate) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(missing) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(lowercase_hex) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(non_hex) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(short_hex) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(wrong_version) == 0);
+  ASSERT_TRUE(assert_invalid_v5_does_not_change_candidate(default_v4_text) == 0);
+  return 0;
+}
+
+static int test_v4_enabled_migration_is_rejected(void) {
+  RuleFileV4 v4;
+  RuleFileV5 before;
+  RuleFileV5 candidate;
+
+  ASSERT_TRUE(rule_file_parse_v4((const uint8_t *)default_v4_text,
+                                 strlen(default_v4_text), &v4));
+  memset(&before, 0x5A, sizeof(before));
+  candidate = before;
+  ASSERT_TRUE(rule_file_v5_migrate_disabled_v4(&v4, &candidate) ==
+              RULE_FILE_V5_MIGRATION_ENABLED_RULE_REQUIRES_DEFINITION_HASH);
+  ASSERT_TRUE(memcmp(&candidate, &before, sizeof(candidate)) == 0);
+  return 0;
+}
+
+static int test_v4_all_disabled_explicit_migration(void) {
+  RuleFileV4 v4;
+  RuleFileV5 v5;
+  RuleFileV5 parsed;
+  char text[RULE_FILE_V5_MAX_BYTES + 1u];
+
+  ASSERT_TRUE(rule_file_parse_v4((const uint8_t *)default_v4_text,
+                                 strlen(default_v4_text), &v4));
+  v4.slots[0].enabled = false;
+  v4.slots[1].enabled = false;
+  ASSERT_TRUE(rule_file_v5_migrate_disabled_v4(&v4, &v5) ==
+              RULE_FILE_V5_MIGRATION_OK);
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    ASSERT_TRUE(!v5.slots[slot].enabled);
+    ASSERT_TRUE(v5.slots[slot].definition_hash == UINT64_C(0));
+    ASSERT_TRUE(v5.slots[slot].relay == v4.slots[slot].relay);
+    ASSERT_TRUE(strcmp(v5.slots[slot].signal_key,
+                       v4.slots[slot].signal_key) == 0);
+    ASSERT_TRUE(v5.slots[slot].threshold == v4.slots[slot].threshold);
+    ASSERT_TRUE(v5.slots[slot].priority == v4.slots[slot].priority);
+  }
+  const size_t len = rule_file_format_v5(&v5, text, sizeof(text));
+  ASSERT_TRUE(len > 0u);
+  ASSERT_TRUE(rule_file_parse_v5((const uint8_t *)text, len, &parsed));
+  ASSERT_TRUE(memcmp(&parsed, &v5, sizeof(v5)) == 0);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_valid_file() == 0);
   ASSERT_TRUE(test_missing_required_field_does_not_change_candidate() == 0);
@@ -405,5 +535,9 @@ int main(void) {
   ASSERT_TRUE(test_decimal_formatter_capacity_and_invalid_values() == 0);
   ASSERT_TRUE(test_decimal_formatter_round_trip_is_stable() == 0);
   ASSERT_TRUE(test_invalid_v4_does_not_change_candidate() == 0);
+  ASSERT_TRUE(test_v5_round_trip_and_hash_boundaries() == 0);
+  ASSERT_TRUE(test_v5_strict_rejections() == 0);
+  ASSERT_TRUE(test_v4_enabled_migration_is_rejected() == 0);
+  ASSERT_TRUE(test_v4_all_disabled_explicit_migration() == 0);
   return 0;
 }

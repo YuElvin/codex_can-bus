@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-08-01（大 DBC selected-only 阶段17 D后端通过，等待插卡上电阻断）
+更新时间：2026-08-01（大 DBC selected-only 阶段17 A0-F通过，G实体TF证据阻断）
 
 ## 当前仓库
 
@@ -10,7 +10,11 @@
 
 ## 已验证状态
 
-阶段17 A0、A1、B、C已客观通过，D后端/selection此前达到generation7/128；损坏卡已按用户授权重建，全部可追溯TF资产、只读哈希/`cmp`和`fsck_msdos -n=0`均通过并安全eject。随后连续三个目标轮次检查均为Mac无外接TF卷、开发板`192.168.1.88`离线，且无OpenOCD/GDB或3333/4444/6666监听；没有可执行的板端上传、恢复或浏览器动作。因此当前状态正式为`[阻断]`，解除条件是用户把TF插回断电开发板并上电。恢复后必须重新取得TF/页面/active基线并从真实100KB DBC重新走upload→candidate→selection；D未关闭，E-H及CAN-FD实板仍`[未验证]`。
+阶段17 A0-F已客观通过，current candidate generation9、active generation7为selected-only 128项/16消息。G已完成selected-only实时API、v3 CSV/meta、吞吐准入与会话锁的源码、CTest=`34/34`、最终固件构建/反汇编、烧录和部分实板验证；最终固件Flash=`121708 B`，低于A0上限5268 B。恢复外部`0x100+0x110`后，RX=`2826→3098`，matched=`1413→1549`且updates=`11304→12392=136×8`；page0八项为预期GOOD，page1保持MISSING，证明最终G映像只更新被选的`0x100`槽位。随后停`0x100`、保持`0x110`使RX=`13257→13357`增长而page0八项保留值/raw并全STALE，API门禁通过。可是取卡后的只读FAT校验退出`206`，current v3 CSV/meta的FAT链与文件长度相互矛盾且卷无法只读复挂载，故G的实体CSV/meta、clean footer与TF持久化为`[阻断]`，不能由可见文件名或hash替代。H与CAN-FD实板仍`[未验证]`。
+
+P0审计随后发现active manifest旋转的即时回滚缺口，故已在工作树修正但尚未烧录；新候选为CTest=`34/34`、FLASH=`121836 B`、RAM_D1=`196664 B`、ELF/HEX SHA-256=`b77fc9de42ef3257b3155ea4f12d942d1903395671bd22c4c2173b04322aae09`/`1ca3ac65704aae4116a77c0ed90e22a46de970b36e0b038758dae0815dd800dd`。当前ACTIVE日志和GOOD证据对应旧G映像，不能冒充新候选实板通过；应先收口日志与TF介质，再烧录新候选并重做最小active/Classic RX回归。
+
+旧G映像已在停止`0x100`、保持`0x110`时得到STALE：RX=`13257→13357`继续增长，page0八项保留末值/raw且全部STALE；但其v3会话实体介质已由`fsck_msdos` exit=`206`判为损坏，永久不得作为CSV/manifest通过证据。用户随后明确允许丢弃该会话，主机已对外置`/dev/disk4`重建MBR+FAT32、部署静态网页/151 B active+candidate DBC及空`/log /config /sys`，卸载后的`fsck_msdos -n` exit=`0`、只读重挂载后`cmp`通过并再次卸载。介质恢复消除了“不能写卡”的操作阻断，但新的large-DBC candidate/active、v3实体日志和未烧录P0回滚候选的最小实板回归均为`[待确认]`，需要插回板端上电后从零取得。
 
 | 模块 | 状态 | 证据摘要 |
 | --- | --- | --- |
@@ -41,6 +45,7 @@
 
 ## 当前阻断项
 
+- 阶段17旧G会话的实体TF证据永久无效：其`fsck_msdos` exit=`206`和CSV/meta链空闲/长度越界不能由后续格式化覆盖。用户现已明确授权丢弃该会话；新`/dev/disk4s1`已重建并离线`fsck=0`、只读重挂载`cmp`通过，但当前处于安全卸载状态，尚无板端mount、静态页服务、large DBC上传/active恢复或新v3文件证据。解除条件是用户插回开发板上电；之后按单socket顺序建立新candidate/selection/active并重做G实体日志与新P0候选最小回归。
 - 最新回归中可确定复现的“零数据连接永久占用唯一socket”已关闭：最终100 ms候选完成构建、反汇编、烧录、10轮原始TCP回收、浏览器和9 API回归，后续请求无需复位。浏览器短连接在单socket上的偶发长尾仍属已知能力边界；同步读数已证明该长尾发生时socket已LISTEN且idle timeout count未增长，因此当前没有证据授权继续修改该状态机。另一个源码层面的半包`HANDLE_WAIT`超时仍未被现场复现，本轮不做预防性扩展。
 - FAT 属性与会话文件的实体只读检查已完成，不再是当前阻断：`/Volumes/NO NAME/log/20260724_012916204_signal-v2.csv`为`8035 B`，macOS CST 创建/修改时间为`2026-07-24 01:29:16/01:29:36`，均非1970；首条UTC记录为`2026-07-23T17:29:16.745Z`。`/log`目录自身1970创建时间为旧目录历史元数据，不否定新文件验收。ST-Link变量采样曾因`unknown state`未成功，但不影响本次基于实体文件属性的结论。
 - 新时间阶段的主体现场验收和实体 CSV 内容只读复核均已完成，不再等待网页部署或把历史`"unixMs":lu`列为当前阻断。该历史非 JSON 缺陷已最小修复、重建、反汇编和重烧录；`/Volumes/NO NAME/log/signal-v2.csv`已实际只读确认大小`28553 B`、唯一表头及记录行。运行态计数仍不替代该实体内容读取，旧`/log/signal.csv`历史证据也不能替代新文件内容。
@@ -251,3 +256,23 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 用户恢复CAN列表发送后，CAN RX持续增长、marker=`42434`/sequence=`4658`/quality=`ok`且错误计数为0；100 ms日志会话`/log/20260726_222238000_signal-v2.csv`的非停机A/B快照为file=`122743→138295 B`、write/flush=`213→240`、failure/drop=0，底层open/write/sync/close均为0。保持CAN和日志活动时完成物理断电。
 - 断电取卡后立即只读挂载：目标CSV为399223 B/4159行、SHA-256=`6d520cd29fede3553566062ca182c1f984276c6b313e4fab20e64794960f1a04`；4158条数据全部8列、时间单调、末尾换行且无撕裂行。卸载卷后`fsck_msdos -n`退出0；网页和两份DBC与仓库源一致。
 - TF插回并重新上电后，ping=`3/3`，RTOS/W5500/TF/QSPI、网页哈希、151 B active DBC及外部CAN均恢复。新会话`/log/20260726_223433000_signal-v2.csv`的file=`39223→54775 B`、write/flush=`68→95`、failure/drop=0且底层结果全0；验证后已正常停止日志并关闭OpenOCD。P0故障注入A/B/C均判定通过，下一步先完成治理、最终构建/反汇编、提交与推送，再按审查报告选择下一项未关闭的高风险整改。
+## 2026-08-01 TF重建后上电与D网页门禁关闭
+
+- 用户确认TF已插入开发板并上电。实测ping 3/3；`GET /api/status`为HTTP200且`tf.status=0`；板端`GET /`为36254 B，SHA-256与仓库`www/index.html`同为`629530064e9d448bc615562426c1cfec9d493e820580bebe4fc67e23ce9c9c4e`。`GET /api/dbc/runtime`恢复旧active为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。这关闭了前述TF/网页外部阻断。
+- 真实`BNE_CLASSIC_CAN_TEST_100KB.dbc`以100071 B重新上传；B受理返回generation1、source CRC32=`4B88D9CE`和`/dbc/upload.0000000000000001.tmp`。C构造完成后candidate token=`0000000000000001-000186E7-4B88D9CE`、total=`896`、默认selected=`0`。不能复用已格式化删除的旧generation7。
+- 浏览器从板端新网页选择ordinal0..7，`POST /api/dbc/selection`完成后回读generation2、token=`0000000000000002-000186E7-4B88D9CE`、selected=`8`、selected messages=`1`。分页实测page1返回ordinal8..15；`q=packvoltage`匹配112项并显示8项；清空搜索后`selected=true`精确返回ordinal0..7且next disabled。独立HTTP回读同样只有这8项，浏览器warn/error日志为空。
+- 页面操作期间曾有一次自动CAN刷新`Failed to fetch`，约4秒后HTTP自行恢复；源码只读审计确认同一页面所有`fetch`均由`requestQueue/exclusive()`串行，候选请求和自动CAN刷新不存在同页并发。多标签页、其他主机或`curl`不共享该队列，仍由服务端单socket边界处理。本次不扩展多客户端并发能力。
+- D门禁现为通过，E开始；只允许selected-only runtime、`definition_hash`规则兼容、active generation持久化和非活动runtime构造/短临界切换。外部Classic CAN selected-only RX、`/api/signals`、选择性CSV、故障恢复和CAN-FD实板路径仍`[未验证]`。
+
+## 2026-08-01 大 DBC P0 回滚补强与 TF 重建后待上板
+
+- 旧故障会话经授权放弃；新卡仅部署可复现网页和151 B基线DBC，卸载状态只读`fsck_msdos -n`退出0并安全弹出。它不是large DBC candidate、规则或CSV持久化证据。
+- candidate/selection/active manifest均补齐同锁即时回滚：new-current rename、读回或active runtime publish失败均恢复previous；恢复失败保留previous供启动恢复。
+- FatFs镜像FAT/FSINFO写失败改为`FR_DISK_ERR`；仅说明错误不再被静默吞掉，旧介质根因、TF写失败注入和物理掉电恢复仍`[未验证]`。
+- 新候选尚未烧录：`verify.sh` CTest=`34/34`，FLASH=`121948 B`，ELF SHA-256=`2d225a84feee60027e294ea6154c1f7e59882680cdb41fb64c39fa7d212dd60a`。下一动作是卡插回开发板并上电，再以真实100071 B DBC重建所有实体证据。
+
+## 2026-08-01 新TF卡的B–E实板恢复状态
+
+- 真实100071 B源经流式上传、候选构造、ordinal0–7 selection及active提交后，当前持久身份为active generation=`1`、candidate=`2`、selection CRC=`E5CB6C8F`、selected-only=`8 signals/1 message`。candidate搜索/分页每页8项，page1为ordinal8–15未选择项。
+- 一次正常软件复位后的最早runtime读取为空，后续candidate恢复查询和GDB确认runtime有效，再次HTTP runtime稳定为`loaded=true`、100071 B、1消息/8信号。这关闭正常active reload，不覆盖TF写失败、断电或强制reload失败路径。
+- HTTP响应收口已改为最终`SEND_OK`后直接graceful DISCON，修复长selection响应后的单socket残留ESTABLISHED；实际连续status/page1/active请求均恢复。最终烧录ELF=`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`，外部CAN/CSV与故障路径仍待验。

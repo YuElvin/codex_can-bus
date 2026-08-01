@@ -20,7 +20,9 @@ typedef enum {
   DBC_SELECTED_RUNTIME_MESSAGE_LIMIT,
   DBC_SELECTED_RUNTIME_RULE_KEY_MISSING,
   DBC_SELECTED_RUNTIME_RULE_DEFINITION_CONFLICT,
-  DBC_SELECTED_RUNTIME_NOT_PREPARED
+  DBC_SELECTED_RUNTIME_NOT_PREPARED,
+  DBC_SELECTED_RUNTIME_PREPARED_GENERATION_MISMATCH,
+  DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH
 } DbcSelectedRuntimeStatus;
 
 typedef struct {
@@ -64,6 +66,34 @@ typedef struct {
   DbcSelectedRuntimeSignal signals[LARGE_DBC_ACTIVE_MAX_SIGNALS];
 } DbcSelectedRuntime;
 
+typedef enum {
+  SIGNAL_VALUE_QUALITY_MISSING = 0,
+  SIGNAL_VALUE_QUALITY_GOOD,
+  SIGNAL_VALUE_QUALITY_STALE,
+  SIGNAL_VALUE_QUALITY_ERROR
+} SignalValueQuality;
+
+/*
+ * Numeric state is kept separately from the runtime string/decode catalog.
+ * update_seq is even while stable and odd while the single decoder writer is
+ * publishing a new value.
+ */
+typedef struct {
+  volatile double value;
+  volatile int64_t raw;
+  volatile uint32_t updated_ms;
+  volatile uint32_t update_seq;
+  volatile uint8_t quality;
+} SignalValueState;
+
+typedef struct {
+  double value;
+  int64_t raw;
+  uint32_t updated_ms;
+  uint32_t update_seq;
+  SignalValueQuality quality;
+} SignalValueSnapshot;
+
 /* Only enabled rules participate in compatibility checks. */
 typedef struct {
   bool enabled;
@@ -83,6 +113,7 @@ typedef struct {
 
 typedef struct {
   DbcSelectedRuntime slots[2];
+  SignalValueState value_slots[2][LARGE_DBC_ACTIVE_MAX_SIGNALS];
   uint8_t active_slot;
   uint8_t prepared_slot;
   bool has_active;
@@ -94,9 +125,22 @@ DbcSelectedRuntimeStatus dbc_selected_runtime_build_inactive(
   DbcSelectedRuntimeSnapshot *snapshot,
   const DbcSelectedRuntimeBuildRequest *request);
 
+/* Clears an unpublished runtime/value slot without touching the active slot. */
+DbcSelectedRuntimeStatus dbc_selected_runtime_discard_prepared(
+  DbcSelectedRuntimeSnapshot *snapshot);
+
 /* Caller supplies the short platform critical section around this publication. */
 DbcSelectedRuntimeStatus dbc_selected_runtime_publish_prepared(
   DbcSelectedRuntimeSnapshot *snapshot);
+
+/*
+ * Publishes only when the pending slot and runtime generation match the
+ * identity that was durably committed. A mismatch changes no slot state.
+ */
+DbcSelectedRuntimeStatus dbc_selected_runtime_publish_prepared_checked(
+  DbcSelectedRuntimeSnapshot *snapshot,
+  uint64_t expected_runtime_generation,
+  uint8_t expected_prepared_slot);
 
 const DbcSelectedRuntime *dbc_selected_runtime_active(
   const DbcSelectedRuntimeSnapshot *snapshot);
@@ -105,6 +149,16 @@ const DbcSelectedRuntime *dbc_selected_runtime_prepared(
 const DbcSelectedRuntimeSignal *dbc_selected_runtime_find_signal(
   const DbcSelectedRuntime *runtime,
   const char *key);
+
+/* Decoder-only mutable access; slot identity always follows the active runtime. */
+SignalValueState *dbc_selected_runtime_active_value_slots(
+  DbcSelectedRuntimeSnapshot *snapshot);
+
+/* Copies exactly one active numeric slot using the sequence/recheck contract. */
+bool dbc_selected_runtime_copy_active_value(
+  const DbcSelectedRuntimeSnapshot *snapshot,
+  uint16_t value_state_index,
+  SignalValueSnapshot *out_value);
 
 const char *dbc_selected_runtime_status_string(DbcSelectedRuntimeStatus status);
 

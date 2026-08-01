@@ -898,7 +898,10 @@ FRESULT sync_window (	/* Returns FR_OK or FR_DISK_ERROR */
 			if (wsect - fs->fatbase < fs->fsize) {		/* Is it in the FAT area? */
 				for (nf = fs->n_fats; nf >= 2; nf--) {	/* Reflect the change to all FAT copies */
 					wsect += fs->fsize;
-					disk_write(fs->drv, fs->win, wsect, 1);
+					if (disk_write(fs->drv, fs->win, wsect, 1) != RES_OK) {
+						res = FR_DISK_ERR;
+						break;
+					}
 				}
 			}
 		}
@@ -961,8 +964,11 @@ FRESULT sync_fs (	/* FR_OK:succeeded, !=0:error */
 			st_dword(fs->win + FSI_Nxt_Free, fs->last_clst);
 			/* Write it into the FSInfo sector */
 			fs->winsect = fs->volbase + 1;
-			disk_write(fs->drv, fs->win, fs->winsect, 1);
-			fs->fsi_flag = 0;
+			if (disk_write(fs->drv, fs->win, fs->winsect, 1) != RES_OK) {
+				res = FR_DISK_ERR;
+			} else {
+				fs->fsi_flag = 0;
+			}
 		}
 		/* Make sure that no pending write process in the physical drive */
 		if (disk_ioctl(fs->drv, CTRL_SYNC, 0) != RES_OK) res = FR_DISK_ERR;

@@ -15,6 +15,7 @@ if(LARGE_DBC_REAL_FIXTURE AND NOT EXISTS "${LARGE_DBC_REAL_FIXTURE}")
 endif()
 
 add_library(can_bus_core
+  src/core/dbc_active_commit.c
   src/core/can_tx_control.c
   src/core/dbc_candidate_catalog.c
   src/core/dbc_candidate_commit.c
@@ -32,6 +33,7 @@ add_library(can_bus_core
   src/core/rule_engine.c
   src/core/rule_config.c
   src/core/rule_file.c
+  src/core/selected_signal_log.c
   src/core/signal_api.c
   src/core/signal_cache.c
   src/core/signal_csv.c
@@ -107,6 +109,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/ff_gen_drv.c
     ${CUBE_MX_DIR}/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
     ${STM32_HAL_SOURCES}
+    src/core/dbc_active_commit.c
     src/core/dbc_candidate_catalog.c
     src/core/dbc_candidate_commit.c
     src/core/dbc_candidate_format.c
@@ -115,6 +118,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/core/dbc_catalog_index.c
     src/core/can_tx_control.c
     src/core/dbc_parser.c
+    src/core/dbc_selected_runtime.c
     src/core/dbc_stream_index.c
     src/core/dbc_stream_parser.c
     src/core/dbc_upload.c
@@ -123,6 +127,7 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
     src/core/rule_engine.c
     src/core/rule_config.c
     src/core/rule_file.c
+    src/core/selected_signal_log.c
     src/core/signal_api.c
     src/core/signal_cache.c
     src/core/signal_csv.c
@@ -213,6 +218,10 @@ endif()
 
 if(CAN_BUS_BUILD_TESTS)
   enable_testing()
+
+  add_executable(test_dbc_active_commit tests/test_dbc_active_commit.c)
+  target_link_libraries(test_dbc_active_commit PRIVATE can_bus_core)
+  add_test(NAME dbc_active_commit COMMAND test_dbc_active_commit)
 
   add_executable(test_signal_codec tests/test_signal_codec.c)
   target_link_libraries(test_signal_codec PRIVATE can_bus_core)
@@ -325,6 +334,10 @@ if(CAN_BUS_BUILD_TESTS)
   add_executable(test_signal_csv tests/test_signal_csv.c)
   target_link_libraries(test_signal_csv PRIVATE can_bus_core)
   add_test(NAME signal_csv COMMAND test_signal_csv)
+
+  add_executable(test_selected_signal_log tests/test_selected_signal_log.c)
+  target_link_libraries(test_selected_signal_log PRIVATE can_bus_core)
+  add_test(NAME selected_signal_log COMMAND test_selected_signal_log)
 
   add_executable(test_signal_log_control tests/test_signal_log_control.c)
   target_link_libraries(test_signal_log_control PRIVATE can_bus_core)

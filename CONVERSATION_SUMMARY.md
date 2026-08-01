@@ -3690,6 +3690,47 @@
 - 用户再次要求检查OCD状态并继续。只读检查确认没有OpenOCD/GDB实例，3333/4444/6666均无监听；当前工作树仅包含本轮固件和治理修改。阶段进入差异审计、提交和推送，不再扩大到并发HTTP、半包超时或其他业务功能。
 - 治理同步后再次执行`./scripts/verify.sh`，host CTest=`20/20`全部通过，STM32构建为`ninja: no work to do`并成功结束。通过`. ./env.sh`复核最终ELF text/data/bss仍为`112828/768/243948`，ELF/HEX哈希保持不变；定向反汇编再次确认`cmp #99`后超时分支递增计数、记录elapsed并进入`http_begin_graceful_disconnect()`，该函数下发命令值`8`。直接调用`arm-none-eabi-size`前曾因当前shell未加载项目工具链而提示`command not found`，随后按项目环境加载成功，不是编译或固件失败。
 - 提交前`git fetch origin codex/W5500`确认ahead/behind=`0/0`；暂存仅含1个固件文件和7个治理文档，79行新增/10行删除，`git -c core.whitespace=cr-at-eol diff --cached --check`通过。阶段提交`ae01c57 Recover idle HTTP connections`创建成功，并已推送`origin/codex/W5500`（`3779590..ae01c57`）。
+
+## 2026-07-27 下一期开发完善建议
+
+- 用户询问“根据项目最新进度功能，下一期应该怎么开发完善”。本轮按治理入口重新核对`CURRENT_TASK.md`、`03_Context.md`、`05_Lessons.md`、`02_Engineering_Rules.md`、`01_Project_Plan.md`、`04_Features_ADR.md`、`ARCHITECTURE_DESIGN.md`、Git与现有HTTP/TX源码；实际工作目录解析为`/Users/elvin/Desktop/project/can_bus_W5500`，分支`codex/W5500`，HEAD/远端均为`ac88ecb Record idle HTTP recovery delivery`，开始时工作树干净。
+- 当前阶段1至16均有客观验收，最新HTTP零数据连接永久占用已关闭；原5页安全审查报告明确的5项P0也为5/5关闭。不能继续把LAN8720移植、初始W5500 bring-up、并发HTTP或已通过的P0重复列为下一期。
+- 推荐下一期固定为“阶段17：生产写操作授权与CAN TX生产白名单”。其唯一前置为先冻结生产合同：允许的标准CAN ID、精确DLC、每字节固定/可变位约束、最小周期、上电默认发送状态，以及授权采用每设备token还是物理配置模式。现有实验帧`0x321`和任何硬编码默认token均不得直接转为生产策略。
+- 实现顺序建议分为17A合同与威胁模型、17B所有修改型HTTP请求的统一前置授权、17C独立的纯逻辑TX策略校验并在配置提交和实际发送入口双重门控、17D网页/现场联合验收。GET、静态网页、CAN RX/DBC解码、日志读取和规则后台执行保持原语义；缺失/错误授权必须在任何保存、GPIO、队列或状态修改前拒绝。
+- 验收必须覆盖缺失/错误/正确授权、所有写路由无副作用拒绝、合法与越界TX矩阵、生产上电默认不发送测试帧、CANtest外部接收合法TX且看不到拒绝帧、重启后的授权/策略行为，以及既有CAN RX、DBC、规则、继电器、TF日志、IWDG、单socket HTTP和零数据连接回收回归。固件改动后仍须执行`./scripts/verify.sh`、关键路径`nm/objdump`、ST-Link烧录和现场读数。
+- 本轮只形成建议并追加中文对话记录；未修改固件、网页、CMake或业务治理状态，未编译，因此未执行反汇编、烧录或硬件验证。
+
+## 2026-07-27 大文件DBC与可选信号功能路径规划
+
+- 用户提供示例`/Users/elvin/Desktop/project/data/BNE_DEV_1Fx_EVE_I420_I210_V1.0.dbc`，要求先规划“大文件DBC上传/读取、上传后信号保留或删除、网页固定高度内嵌搜索、CSV只记录所选信号”的实现路径，本轮明确只做只读审计和规划，不进入编码、构建、烧录或TF部署。
+- 示例实测为`110536 B/1752行/23个BO_/922个SG_`，SHA-256=`506a7e54697becea675527f06a10d10cd243c772988f9418a0c68369a2e478a7`；23个消息全部采用Vector bit31扩展ID编码且DLC=64，属于扩展CAN-FD。最长行377 B，18个单位长度为16 B，28个`message.signal`键长度至少48 B。
+- 当前确定性阻断包括：HTTP正文上限1024 B、请求缓冲1536 B、整文件候选缓冲1025 B；parser只接受`id<=0x7ff`、最多64消息/256信号、128 B行缓冲、unit最多15 B；目录key缓冲48 B；`/api/signals`和LogTask都只取SignalCache前2项。示例不能通过当前路径，不能用“只调大上传常量”冒充完成。
+- 推荐保留原始DBC不改写，把网页“删除”实现为与DBC指纹绑定的正向信号白名单；未选信号不进入活动运行态、实时页面和CSV，但原始candidate/active文件仍可回退。这样可避免在STM32上重写并破坏未知DBC元数据，也可防止大DBC的922个信号整体常驻RAM。
+- 路径拆为六个窄阶段：先冻结文件上限、最大保留信号数和逻辑删除语义；再做单socket分块接收并流式写TF临时文件；随后用512 B行缓冲生成TF侧候选目录/索引并支持扩展ID、CAN-FD和长字段；再增加带文件指纹的原子白名单及候选目录分页搜索API；激活时只把已选信号构造成有界双槽运行态；最后让实时分页API和LogTask共用同一白名单，并扩展现有网页为固定高度、sticky表头、服务端搜索、分页和选择计数。
+- 示例要求的扩展CAN-FD运行链路必须单列验收：DBC消息需要保存IDE/FD信息并按`id+IDE`匹配；现有RX紧凑队列只保存8 B，需在不破坏已通过高负载边界的前提下改为可承载64 B的数据路径。上传/目录通过不等于扩展CAN-FD实时解码或日志已经通过。
+- 验收顺序固定为host合成大文件/边界测试、旧151 B DBC兼容、最终`./scripts/verify.sh`、ELF尺寸与关键上传/解析/选集/日志路径反汇编、ST-Link烧录、浏览器串行上传和固定高度搜索选择、外部扩展CAN-FD输入、SignalCache与CSV实体只读核对。每个阶段失败均保留上一活动DBC和选择配置，不扩大到multipart、并发HTTP、通用DBC编辑器或任意元数据重写。
+- 本轮只追加本条中文规划记录；未修改固件、网页、CMake或其他业务治理状态，未编译，因此未执行新的反汇编检查，未烧录或开展硬件验证。工作树原有的本文件未提交改动被保留。
+- 用户进一步要求把方案输出为详细且方便审核的文件。已新增`docs/LARGE_DBC_SIGNAL_SELECTION_IMPLEMENTATION_PLAN.md`，内容包括示例DBC实测证据、当前确定性阻断、12项待确认合同、目标架构、TF文件/指纹/索引/selection设计、HTTP上传状态机、增量parser、分页搜索API、selected-only运行态、64 B静态RX队列、CSV会话一致性、网页固定高度设计、阶段A至G、测试矩阵、回滚合同、风险、禁止范围、代码影响范围和最终审核清单。本次仍未修改功能源码、网页或构建文件，未编译，因此未执行反汇编、烧录或硬件验证。
+
+## 2026-07-31 经典CAN约100KB测试DBC生成
+
+- 用户提供`/Users/elvin/Desktop/project/data/BNE_DEV_1Fx_EVE_I420_I210_V1.0.dbc`，要求参考其CAN FD DBC生成约100KB的经典CAN通信DBC用于项目测试。参考文件实际为`110536 B/1752行`，包含扩展CAN FD、DLC=64定义；新文件没有复写或伪装成FD，而是采用标准11位CAN ID和固定DLC=8。
+- 已生成独立文件`/Users/elvin/Desktop/project/data/BNE_CLASSIC_CAN_TEST_100KB.dbc`：`100071 B/1606行`，112个`BO_`报文（ID=`256..367`）、896个`SG_`信号。每帧使用8字节Intel布局，包含电压、电流、单体电压、温度、模式、故障等级、alive计数与保留位；并带有周期和枚举属性，便于CAN工具发报与显示。
+- 静态检查实际通过：112个ID均在`0..0x7ff`、所有DLC均为8、896个信号均落在0..63 bit；项目现有`dbc_parser`对前32报文/256信号的容量边界解析结果为`messages=32/signals=256/errors=0`。生成时发现初版报文名为32字符，超过该解析器31字符上限，已最小缩短为`ClassicCanTest_BattMod_###`后复验通过。完整文件故意超过当前运行时`DBC_MAX_MESSAGES=64`及`DBC_MAX_SIGNALS=256`，因此它适合作为大DBC/容量边界测试输入，不能直接声称可由当前固件完整激活。
+- 文件SHA-256=`f3b7b76b16fc87554be7d5f82aa63e1fd98c5b9cf4b3c679f9cc7e7e65a6e0b8`。本轮只生成外部测试数据和追加中文记录，未修改固件、网页、构建或解析器，因此未编译固件、未执行反汇编、烧录或硬件验证。工作树原有未提交的`CONVERSATION_SUMMARY.md`和`docs/LARGE_DBC_SIGNAL_SELECTION_IMPLEMENTATION_PLAN.md`改动均未改动其既有内容，且本轮未提交或推送。
+
+## 2026-07-31 全局个性化自定义指令优化
+
+- 用户要求读取其个性化设置、自定义指令、当前项目`AGENTS.md`、文件治理方案及记忆中的常用习惯，整理为更严谨有效的中文全局个性化自定义指令。本轮只读确认`/Users/elvin/.codex/config.toml`当前为`personality="pragmatic"`、界面语言`zh-CN`，主要自定义工作规则实际位于`/Users/elvin/.codex/AGENTS.md`。
+- 已对照当前项目`AGENTS.md`、治理文件职责、通用`PROJECT_GOVERNANCE_METHOD.md`及记忆中的反复偏好，形成可直接粘贴的全局指令。优化原则是保留真实性、证据边界、最小修改、目标/成功标准/验证、阶段治理、固件反汇编和中文记录；把具体仓库路径、硬件型号、固定命令留给项目级规则，并补充任务类型授权边界、脏工作树保护、比例化验证、外部证据分类和提交推送条件。
+- 本轮只输出建议文本并追加本条中文治理记录，没有修改全局`/Users/elvin/.codex/AGENTS.md`或`config.toml`，也没有修改固件、网页、构建文件或业务状态；本次未编译，因此未执行反汇编、烧录或硬件验证。工作树原有未提交内容保持不变，本轮未提交或推送。
+
+## 2026-07-31 整合根目录通用项目治理方案
+
+- 用户补充要求把`/Users/elvin/Desktop/project/PROJECT_GOVERNANCE_METHOD.md`也整合进上一版全局个性化自定义指令。本轮已完整读取该文件全部400行，确认其核心补充包括统一状态标记、治理文件职责、每轮开始/实施/验证/收尾流程、统一验证入口与CI同源、固件产物记录、架构分层、依赖审查、文件规模预警、风险五要素、提交发布治理、最小落地版本和结束检查清单。
+- 整合策略：真实性、最小修改、可追溯协作和固件证据链继续作为强约束；把`[待评估]`至`[阻断]`状态机、自动验证责任、依赖五问、风险记录格式、统一验证入口/CI一致性和治理最小落地加入全局文本。原方案的350/450/500行阈值改为“项目无自身标准时的默认预警线”，并为生成文件、测试数据、协议表和历史归档保留显式例外，避免全局规则机械误伤不同项目。
+- 本轮只输出整合后的完整替换文本并追加本条中文记录，未修改`/Users/elvin/Desktop/project/PROJECT_GOVERNANCE_METHOD.md`、全局`/Users/elvin/.codex/AGENTS.md`或`config.toml`；未修改固件、网页、构建或业务状态。本次未编译，因此未执行反汇编、烧录或硬件验证；工作树既有未提交内容保持不变，本轮未提交或推送。
+
 ## 2026-07-31 大 DBC selected-only 阶段17 A0合同门禁
 
 - 用户要求以`/Users/elvin/Desktop/project/data/BNE_CLASSIC_CAN_TEST_100KB.dbc`为真实输入，严格按`LARGE_DBC_AGENT_IMPLEMENTATION_GUIDE.md`持续实施A0-H，并在P0合同冻结前禁止HTTP、TF和硬件功能编码。任务开始按治理规则读取项目文件、Git与guide；实际路径仍解析为`can_bus_W5500`，分支/远端均为`codex/W5500`/`ac88ecb`。开始工作树已有用户修改：本文件40行新增和未跟踪`docs/LARGE_DBC_SIGNAL_SELECTION_IMPLEMENTATION_PLAN.md`，均原样保留；本轮只在其后追加或新建独立合同文件。
@@ -3771,3 +3812,142 @@
 - 提交前重新运行`./scripts/verify.sh`，host CTest=`32/32`通过，STM32构建`ninja: no work to do`且成功。最终`build/stm32h750/can_bus_gateway_stm32h750.elf`的`text/data/bss=119884/440/232988`，ELF/HEX SHA-256=`f54ec0eda29457a15d20fb81b09afe5ce06dfededf8a7a3136c2f2d7548bdbb7`/`d028031a6d5a2c14d3d200ac569cba520e55e51f29ff1653c71a1f6a690b5243`。
 - 定向`nm`确认`dbc_candidate_http_parse_get_target`、`rule_file_format_decimal`、`http_handle_candidate_selection`和`http_handle_request`进入最终ELF，且无`_printf_float/_dtoa_r`；`objdump`确认query解析和多个`f_sync`调用存在。`git diff --check`通过；敏感模式扫描没有发现私钥、GitHub token、AWS key或明文password。治理文件中的`/Users/elvin/...`是仓库既有的现场追溯形式和用户明确指定的真实输入/guide路径，不是固件、构建配置或凭据。
 - `gh`当前未登录，但用户只授权commit/push、不要求PR；SSH remote只读`git ls-remote`成功返回远端`codex/W5500=ac88ecb...`，故推送继续使用Git SSH，不创建PR。当前板端仍因等待用户插回TF上电而`[阻断]`；提交只封存已取得的A0-D进度，不将D、E-H或完整目标写成已完成。
+## 2026-08-01 TF插回上电，D浏览器门禁通过
+
+- 用户确认“TF已插入开发版并上电”。主会话先回读网络、TF和部署资产：ping 3/3，`/api/status`为HTTP200且`tf.status=0`；板端首页36254 B且SHA-256=`629530064e9d448bc615562426c1cfec9d493e820580bebe4fc67e23ce9c9c4e`，与仓库页面一致；旧active runtime为generation1/151 B/1消息/2信号。
+- 重新上传真实100071 B DBC，HTTP202受理为generation1、source CRC32=`4B88D9CE`、tmp=`/dbc/upload.0000000000000001.tmp`。candidate构造后token=`0000000000000001-000186E7-4B88D9CE`、total/matched=`896/896`、selected0。
+- 使用板端网页先读取日志状态，确认日志disabled后勾选ordinal0..7并提交。事务完成提示“selection 已提交并回读”，结果为generation2、token=`0000000000000002-000186E7-4B88D9CE`、selectedCount=8、selectedMessageCount=1，页面无待提交变更。
+- 浏览器实测page1显示ordinal8..15；搜索`packvoltage`匹配112项并显示ordinal0/8/16/24/32/40/48/56；恢复完整目录后仅已选筛选精确显示ordinal0..7、matched8且下一页禁用。浏览器warn/error日志为空；独立`GET /api/dbc/candidate/signals?page=0&selected=true`也回读相同8项。
+- 操作中一次自动CAN刷新报告`Failed to fetch`，随后ping持续正常、HTTP约4秒后恢复，重试成功。只读源码审计确认同一页面唯一`fetch`由`requestQueue/exclusive()`串行，candidate和自动CAN刷新不会同页并发；不为多标签页/外部curl扩展多socket能力。
+- D门禁据此关闭，下一阶段为E selected-only runtime/规则定义兼容/active持久化与短临界切换。当前未进行新的固件源码修改、构建、反汇编或烧录；外部Classic CAN RX、F/G/H及CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 大 DBC阶段17 E实现开始
+
+- E阶段目标严格限定为selected-only双槽runtime、`definition_hash`规则兼容、active generation持久提交和短临界区发布；成功标准为先完整验证candidate和规则、构造非活动runtime、写入并读回active generation与manifest，最后发布runtime，任一失败保持旧active/runtime/规则/值槽/日志不变。验证计划为host故障注入、统一构建、定向`nm/objdump`、ST-Link烧录、真实candidate激活/冲突/复位回读；`/api/signals`、选择性CSV、外部Classic CAN RX和CAN-FD实板不在本阶段扩大范围。
+- 已接入portable active协调器、最多128信号/64消息的selected-only双runtime、稳定ordinal value slot、小快照、标准/扩展ID和Classic/FD frame元数据检查、RuleFile V5固定16位十六进制`definitionHash`及安全V4迁移。STM32 backend按candidate/current引用验证、prepared runtime、三个active文件tmp写入/同步/读回、formal rename后再验证、active manifest tmp写入/同步/读回、current/previous切换和最终回读的顺序执行，FatFs操作在发布回调前全部结束。
+- active事务复用DbcTask、TF mutex和`candidate_progress`看门狗证据。一次候选曾复用`g_w5500_http_candidate_active`覆盖active调用窗口，但并行只读审计确认watchdog完全不读取该标志，active HTTP已由mutation gate和单socket串行持有；复用它无实际互斥收益且会混淆candidate诊断语义，因此在最终映像前撤回。active期间DbcTask loop可暂时不变，但每次有界FatFs I/O返回都会推进progress；单次底层调用若卡住接近约8秒IWDG窗口仍应被判为真实不健康，不能用busy布尔掩盖。当前尚未完成最终映像的实板E验收，状态仍为`[未验证]`。
+- 第二路只读审计发现三个P0缺口，故主会话在任何`POST /api/dbc/active`前暂停实板激活：持久manifest成功后RAM publish仍可能静默失败、后续I/O失败未撤销prepared slot、断电遗留next-generation tmp/formal可能阻塞后续激活。当前修正方向是使prepared身份在manifest提交前显式验证、发布成为不可失败的短slot flip、所有失败显式discard；启动只清理`max(valid current, previous)+1`这一不可能被有效manifest引用的generation及固定`active.current.tmp`，不声称FAT32多文件rename原子，也不做全目录常驻RAM扫描。
+- STM32 active backend同时新增底层generation单调门禁：请求generation必须精确等于`max(valid current, previous)+1`；恢复先独立验证current/previous，再清理未引用的next generation，避免仅依赖HTTP RAM计数器。规则要求不再由平台单独扫描一遍后丢弃，而是直接传入`dbc_selected_runtime_build_inactive()`，由形成最终selected runtime的同一路径执行key/hash检查，减少双实现漂移和重复I/O。以上源码已通过一次定向固件构建但仍等待portable API合并、完整`verify.sh`和最终烧录，不能写成E通过。
+- portable runtime新增`discard_prepared`和绑定expected generation/slot的checked publish；platform在manifest前验证prepared身份，manifest持久成功后仍在TF mutex内调用只含RTOS短临界区的checked publish，返回异常则删除本次current/formal并保留previous，所有失败出口清除未发布runtime/value slot。恢复路径同样检查callback结果，不再存在“磁盘成功、RAM静默不切换仍返回OK”的分支。
+- 实板只读启动暴露现有TF仍有两条enabled V4规则且hash为0；在未激活selected runtime前不能猜hash，逐槽DELETE又会被另一legacy enabled规则阻断。为避免线下再次取卡，增加唯一显式`POST /api/rules/migrate-v5`：只接受空body、原样保留两槽定义、原子地把两槽置disabled并写V5，不自动删除或猜hash；成功后重新计算active next generation。V5文件存在但损坏/读失败时启动改为empty RuleEngine fail-closed，不再静默回退磁盘旧V4 enabled规则；仅V5确实不存在时才允许既有V4迁移入口。规则TF保存/reload等待上限由250 ms提高到2 s，减少客户端500而后台稍后成功的歧义。
+- 最终`./scripts/verify.sh`为CTest=`33/33`；Flash=`125868 B`，RAM_D1=`241488 B`，ELF `text/data/bss=125388/472/241084`，低于Flash合同上限1108 B；ELF/HEX SHA-256=`d67957a7dfabfbd7f046428429f5d6347f0aa6239641246eafe5489a6dcae087`/`2753ceeb2ffc7d4b656bbfa84c7b3e611b635b06e80fdce1ef3940cdf875e39e`。`nm/objdump`确认checked publish/discard、next-generation清理、active commit/recover进入ELF；callback在`tf_fs_unlock`前执行，失败分支进入owned文件清理和prepared discard。ST-Link最终烧录输出`Programming Finished/Verified OK/Resetting Target`，电压3.262903 V。
+- 迁移前两条V4 enabled规则使active明确返回409 `rule_definition_unbound`且runtime仍unloaded；显式migrate-v5返回200，两个定义字段原样、enabled=false/hash0。首次active后runtime为generation1/candidate2/8信号；后续完整HTTP200依次激活到generation3。slot0用selected key `ClassicCanTest_BattMod_001.PackVoltage_Module001`创建V5规则返回201并绑定hash=`26A3283B4020769E`；同candidate重激活generation4成功。
+- 清除ordinal0后candidate generation3/selected7，active返回409 `rule_key_missing`；回读旧active仍generation4/candidate2/8信号且规则enabled/hash/字段不变。恢复ordinal0形成candidate4并激活generation5；`reset run`后约60秒完整恢复generation5/candidate4、V5规则/hash和candidate selection，证明current/previous与selected runtime跨复位恢复。每次GDB暂停读取均执行`monitor resume`；最终OpenOCD/GDB与3333/4444/6666监听已释放。
+- E的1/128项实板门禁继续完成：candidate5只选ordinal0并激活active6，runtime=1信号/1消息；随后四个不超过32 ordinal的selection事务得到candidate6/7/8/9，selected=`33/65/97/128`、messages=`5/9/13/16`，active7返回HTTP200并回读128/16。`GET /api/dbc/signals?page=15`精确只含Module016八项，candidate selected page15精确ordinal120..127。启动旧日志会话后active立即409 `logging_active`，停止日志后active仍generation7/128不变；该会话仍是legacy signal-v2，仅作为E写门禁证据，不冒充G选择性CSV。
+- E门禁据此通过，F只验证当前标准ID+DLC8 Classic CAN外部RX到selected decoder/value slots；当前外部发送动作尚未发生，状态为`[待确认]`。CAN-FD实板、`/api/signals`新分页/MISSING-STALE-GOOD、选择性CSV/meta与H故障矩阵仍`[未验证]`。
+
+## 2026-08-01 大 DBC阶段17 F外部Classic CAN发送门禁
+
+- F阶段目标限定为FDCAN2外部标准Classic CAN RX进入selected-only decoder/value slots；假设板端继续使用既有500 kbit/s配置，成功标准为外部ID/DLC/payload证据与8个selected值一致，并用未选ID证明RX增长但selected slots不变。禁止把TX self-test、旧SignalCache或CAN-FD源码合同写成当前外部RX/CAN-FD实板通过。
+- 用户确认TF插回并上电后，板端ping为3/3、`tf.status=0`、active generation7、candidate generation9、selection CRC=`62BA0D66`、selected=`128/16`；`/api/dbc/signals?page=0`精确回读Module001八个key。`/api/can/status`基线为RX=0、旧周期TX在无ACK总线上累计error且TEC=128；已通过既有`POST /api/can/tx`停止周期TX，回读`enabled=false/requestSeq=appliedSeq=1/lastResult=0`，避免污染验收计数。
+- 真实DBC第40至48行与当前decoder位序合同复算的正向向量为标准ID `0x100`、Classic CAN、DLC=8、payload=`E0 2E 06 FF E4 0C A5 69`；预期依次为1200.0 V、-25.0 A、3.300 V、0.0 degC、2、3、10、1，PackVoltage低于当前规则阈值1234.5。反向未选向量为标准ID `0x110`、DLC=8、payload=`01 02 03 04 05 06 07 08`；当前active只含ID `0x100..0x10F`，故该帧只能增长外部RX，不得更新selected slots。
+- 当前等待用户把外部CAN设备连接到FDCAN2并以500 kbit/s、标准帧、Classic CAN、无BRS持续发送正向`0x100`向量；发生前标记`[待确认]`，不得声称外部RX通过。本轮尚未修改固件源码，未触发新的构建、反汇编或烧录。
+
+## 2026-08-01 大 DBC阶段17 F外部输入连续阻断
+
+- 在首次明确发送动作后，又执行两个目标续轮只读复查；最后一次时间为`2026-08-01 15:57:54 CST`。三轮中`GET /api/can/status`均保持RX=0，最终为TX/RX/error/TEC=`4/0/1099/128`、busOff=0；`GET /api/dbc/runtime`仍为active generation7、candidate generation9、selection CRC=`62BA0D66`、selected-only 128项/16消息，证明等待期间旧active未被破坏。
+- 同一“需要用户让外部设备发送指定Classic CAN帧”的条件已连续三个目标轮次未满足，严格阶段门禁下不能进入G。因此F正式标记`[阻断]`，没有把历史外部RX或TX self-test替代本轮真实DBC selected-only外部RX证据。
+- 唯一解除条件：用户把外部设备连接FDCAN2，以500 kbit/s、标准Classic CAN、无BRS、ID `0x100`、DLC8、payload `E0 2E 06 FF E4 0C A5 69`持续发送并回复“已发送”。恢复后先取ID/DLC/payload、selected value slots和计数证据，再发送未选ID `0x110`完成反向不更新证明；G/H与CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 大 DBC阶段17 F正向外部Classic CAN RX通过
+
+- 用户明确回复“已发送”，解除外部输入阻断。首个HTTP样本已由RX=0增长至207；active仍为generation7/candidate9/selection CRC=`62BA0D66`/128项16消息。周期TX保持disabled，因此该增长不是当前固件TX self-test回环。
+- 第一次受控GDB读数为RX=922、最后ID=`0x100`、DLC=8、首字节=`0xE0`、外部decode attempts/RX=926/922、self-test=4、matched=922、updates=7376、每次匹配8项、last selected message=`0x100`、decode errors=0。目标随后立即resume/detach。
+- 第二次按ELF布局和每个32 B稳定value slot精确读取：RX/matched=`1473/1473`、updates=`11784`、decode errors=0；slot0..7的`value/raw`依次为`1200/12000`、`-25/-250`、`3.3/3300`、`0/80`、`2/2`、`3/3`、`10/10`、`1/1`，八项`updated_ms=2972507`、`update_seq=2946`、quality=`1/GOOD`。这些raw也完整重构了预定payload，而非只依赖首字节诊断。目标再次resume/detach。
+- 暂停后ping 2/2、CAN RX继续增长至1615，HTTP保持正常；OpenOCD随后shutdown。`GET /api/dbc/signals?page=0`列出正确八个selected key，但旧`GET /api/signals`仍返回`items=[]/count=0`，故不能把实时API一致性写成F通过，该缺口必须在G替换为selected分页和状态合同。
+- F当前只差未选反向证据：用户需停止`0x100`并持续发送标准Classic CAN `0x110`、DLC8、payload `01 02 03 04 05 06 07 08`；随后以两个时间分离样本证明总RX增长而matched、updates、八个value slots/update_seq均不变。CAN-FD实板继续标记`[未验证]`。
+- 自动续轮只读检查确认外部设备尚未切换：HTTP RX继续增长至2687；受控GDB读数为RX/matched=`2787/2787`、最后ID/DLC/first=`0x100/8/0xE0`、updates=`22296`、slot0 raw/seq/quality=`12000/5574/GOOD`。目标已resume/detach，OpenOCD已shutdown；该样本继续强化正向证据，但不能替代`0x110`反向验收。
+- 第二个等待续轮只读HTTP确认开发板在线，RX继续增长至3227，active仍为generation7/candidate9/selection CRC=`62BA0D66`/128项16消息；没有收到用户“已切换”确认，故不猜测外部发送配置、不越过F门禁。
+
+## 2026-08-01 大 DBC阶段17 F未选ID反向验收连续阻断
+
+- 自正向`0x100`通过并请求切换后，连续三个目标轮次均未收到用户“已切换”确认；最后一次`2026-08-01 16:28:51 CST`只读HTTP为RX=3549、active generation7/candidate9/selection CRC=`62BA0D66`/128项16消息，板端在线且旧active未受影响。
+- 严格证据边界禁止根据RX增长猜测外部ID，也禁止越过F门禁开始G。F仅剩的反向验收正式标记`[阻断]`；正向外部`0x100`/DLC8、八项解码和GOOD value slots证据继续有效，不被降级。
+- 唯一解除条件：停止`0x100`，持续发送500 kbit/s标准Classic CAN ID `0x110`、DLC8、payload `01 02 03 04 05 06 07 08`并回复“已切换”。恢复后取得两个时间分离GDB样本，证明RX增长而matched/updates/八个slot seq与值不变，再关闭F。
+
+## 2026-08-01 大 DBC阶段17 F反向首次样本发现双帧并行
+
+- 用户回复“已切换”后恢复目标。受控GDB样本A为RX=6275、matched=5996、updates=47968、八槽raw仍为`12000/-250/3300/80/2/3/10/1`且seq均11992/GOOD；样本B在目标resume约2秒后为RX=6843、matched=6280、updates=50240、八槽raw不变但seq均12560/GOOD。两次暂停后均立即resume/detach。
+- A→B总RX增量568，而selected matched增量284、updates增量2272=`284×8`、slot seq增量568=`284×2`。这不是未选帧独占总线时应有的零selected更新；精确1:2比例说明外部发送软件仍同时发送已选`0x100`与未选流量。`g_can2_rx_id`在采样时仍为`0x100`也与此一致。
+- 因此反向验收不能通过，状态从阻断恢复为`[待确认]`：用户需彻底停用或删除`0x100`发送项，只保留标准Classic CAN `0x110`/DLC8/payload `01 02 03 04 05 06 07 08`，再回复确认。OpenOCD已shutdown，目标保持运行；不得用混合流量的差分推断未选信号隔离已完成。
+- 等待“仅保留0x110”人工确认的首个续轮，HTTP仍在线且RX=8565，active generation7/candidate9/128项16消息不变；未凭RX变化猜测发送软件操作完成，F继续`[待确认]`。
+- 第二个等待续轮仍未收到人工确认；HTTP为RX=9057，active generation7/candidate9/selection CRC=`62BA0D66`/128项16消息不变。本轮未重复暂停目标，F继续`[待确认]`。
+
+## 2026-08-01 大 DBC阶段17 F混合流量反向通过并进入G
+
+- 用户澄清当前实际为两个ID同时发送。结合受控A→B样本总RX +568、selected matched +284、updates +2272=`284×8`以及八槽seq仅随284个selected frame增长，可直接证明另284个外部未选帧只进入RX计数，没有进入selected runtime/value slots；无需把总线改成单一`0x110`才能成立。F正向标准Classic CAN解码与反向selected隔离据此通过，CAN-FD实板仍`[未验证]`。
+- G阶段目标限定为selected-only `/api/signals`固定8项分页、稳定ordinal、MISSING/STALE/GOOD，以及选择性v3 CSV/meta、active generation+selection CRC会话锁、20 rows/s准入与错误路径。假设继续W5500 socket0串行、复用现有LogTask和静态batch；不确定点为旧SignalCache生产引用清除范围和P0 Flash上限仅余约1116 B。禁止扩展多socket、并发HTTP、chunked、WebSocket/SSE、新任务/heap或CAN-FD实板。
+- 两路只读审计确认当前生产路径不满足G：旧`/api/signals`每次最多2项且从不再更新的旧cache取数，容量失败仍可能走200空body；旧LogTask复制旧cache前两项、无吞吐准入/session identity/meta，stop会直接清空未flush buffer，buffer full也不flush重试。selected runtime已有稳定ordinal/value slot/sequence短快照，可作为唯一生产数据源。
+- ADR-033冻结实时freshness为3000 ms且与规则timeout/日志周期解耦：未更新为MISSING，age不大于3000 ms为GOOD，超过为STALE并保留值，内部错误为ERROR；API与CSV共享同一effective quality。新日志固定 `_signal-v3.csv/.meta`，旧v2只保留历史文件，不续写。
+- 用户再次明确“现在同时发送两个ID的信号”。不暂停MCU的两个HTTP样本间隔2 s，`/api/can/status` RX由28293增至28333（+40），busOff=0；active仍为generation7/candidate9/selection CRC=`62BA0D66`/128项16消息。该输入事实继续用于G阶段最终API/CSV selected-only实板验证；需要停发某一ID做STALE时再明确请求人工动作。
+
+## 2026-08-01 G最终映像外部CAN复测未收到帧
+
+- 用户再次说明当前同时发送两个ID后，主会话按W5500单连接关闭窗口要求以5秒间隔顺序读取`/api/can/status`、`/api/signals?page=0`、`/api/signals?page=1`、`/api/can/status`。首末CAN读数均为`tx=158/rx=0/errors=0/busOff=0/tec=0/rec=0`，但poll由`8636→8941`增长，证明接收轮询任务在运行而FDCAN2当前没有任何外部帧进入。
+- 两页均正确返回active generation=`0000000000000007`、selection CRC=`62BA0D66`、`total=matched=128`和每页8项，但ordinal0..15全部为`MISSING`、`value/raw=null`、`updatedMs=0`。这不是selected过滤成功的充分证据，而是本轮最终映像缺少外部RX；因此GOOD/STALE、CSV含真实selected值及后续H均继续`[待确认]`。已请用户核对CAN工具的500 kbit/s、normal/active、循环/列表发送及接线，未对固件、TF或CAN配置擅自修改。
+
+## 2026-08-01 大 DBC阶段17 G源码、最终构建烧录与部分实板门禁
+
+- G源码已将生产实时查询统一到selected runtime稳定ordinal/value slot：`GET /api/signals?page=&q=`严格解析、每页最多8项、generation/selection CRC固定十六进制、MISSING/ERROR返回null，序列化先计算长度再写入，容量失败不得以HTTP200返回截断JSON。旧生产SignalCache大实例和旧空API路径已移除；网页规则信号目录改用新接口。portable测试覆盖分页、过滤、转义和最坏buffer边界。
+- selected v3日志固定`_signal-v3.csv`与同basename `.meta`，会话锁定active/candidate generation、source fingerprint、selection CRC、selected count、period和build ID；准入公式为`selected_count*1000 <= 20*sample_period_ms`。LogTask复用既有任务与静态batch，逐项小快照、单行scratch，buffer不足先flush再重试同一行；stop在解锁前flush并写clean footer。日志期间upload/selection/active和规则写均拒绝。
+- 初版G链接超过A0 Flash预算，故冻结ADR-034：最终生产固件仅加载带`definitionHash`的RuleFile V5。无规则文件时为空规则集；检测到legacy文件或V5损坏/读取失败时明确fail-closed，不静默回退、不自动删除或猜hash。V1-V4 parser、格式向量和兼容测试保留在host，旧loader/转换器、`/api/rule/config`和`/api/rules/migrate-v5`不再链接进生产固件。E阶段显式迁移的现场证据保留为历史，不代表最终映像仍提供迁移路由。
+- 最终`./scripts/verify.sh`为CTest=`34/34`；Flash=`121708 B`、RAM_D1=`196664 B`，ELF `text/data/bss=121256/444/196284`，低于Flash合同上限5268 B。ELF/HEX SHA-256=`97cd14af626ecb7951f1f012148819f922c688b339b1f9185d66fbd630afc10b`/`963fa24f74a9808bc0687ab2ab4e5cd7ba2e7d3c5d1b912ae5794c08816e5b7d`。`nm/objdump`确认selected API、日志session/LogTask、active规则检查进入ELF，V1-V4 loader、旧cache包装和旧规则路由缺失；ST-Link输出下载完成、校验成功并软件复位。
+- 冷启动早期约20秒HTTP曾因active恢复尚未完成返回runtime unloaded和`/api/signals` 503；受控GDB稍后确认V5 load result=0、active/candidate recovery result=0、runtime valid且active generation7，目标已resume/detach并关闭OpenOCD。恢复后HTTP回读candidate9、active7、selection CRC=`62BA0D66`、128项/16消息，因此早期503是恢复窗口的明确非200，不是把未加载状态伪装为成功。
+- 最终固件尚未收到本轮外部CAN输入时，page0/page1/page15均HTTP200并分别列出对应selected ordinal，quality=`MISSING`且value/raw为null；`q=PackVoltage`匹配16项、page0最多8项，未知query字段返回HTTP400 `unknown_field`。这证明MISSING、分页、过滤和错误码，不替代GOOD/STALE外部输入证据。
+- 日志实板准入与锁定通过：128项/1000 ms启动返回HTTP422 `rate_limit`且保持STOPPED；128项/6400 ms返回HTTP200 STARTING，随后ACTIVE，锁定active generation7、selection CRC=`62BA0D66`、count128和路径`/log/20260801_172712000_signal-v3.csv`。ACTIVE期间`POST /api/dbc/active`及规则写均返回409 `logging_active`；stop经历STOPPING后回到STOPPED并释放锁。本会话采到的是RX=0时的MISSING数据，且尚未取卡检查实体CSV/meta，不能声称文件内容、clean footer或selected-only介质集合已经通过。
+- 当前G剩余门禁为：用户恢复同时发送外部`0x100`与`0x110`后，在最终固件上取得page0 GOOD和未选页不更新证据；停止selected `0x100`超过3000 ms并保留`0x110`流量，取得STALE且末值保持；再形成一条含外部数据的6400 ms v3会话，断电取卡只读核对CSV/meta仅含selected key、generation7、selection CRC、count128及cleanClose。上述动作发生前均标记`[待确认]`；H和CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 G外部CAN复测追加记录
+
+- 在用户表示同时发送两个ID后，最终映像仍观测到`rx=0→0`而FDCAN poll=`8636→8941`；`/api/signals?page=0/1`的ordinal0..15均为`MISSING`与null值。已将G的外部GOOD/STALE和含真实数据的v3 CSV/meta继续明确标为`[待确认]`；未将此缺少RX的样本误写为selected-only通过，也未改动板端CAN设置。
+
+## 2026-08-01 G外部CAN零RX的寄存器交叉核验
+
+- 为区分“FDCAN配置拒绝”与“物理总线无有效输入”，在用户已说明双ID同时发送的前提下，通过ST-Link/OpenOCD短暂停止读取FDCAN2后均恢复运行。寄存器为`CCCR=0x00001000`（INIT/MON/TEST/FDOE/BRSE均未置位）、`NBTP=0x06090E03`、`ECR=0`、`PSR=0x0000070F`、`IR=0x00000800`、`RXF0S=0`；`GFC=0x00000003`仅拒绝remote帧，`ANFS=0`接受未匹配标准数据到FIFO0，且FIFO0配置16个8 B元素。固件处于Classic normal接收配置，没有filter导致标准data帧被拒绝的迹象。
+- 初次GDB读取后误以GDB支持OpenOCD的`mdw`语法，未取得读数但已执行`monitor resume`/detach；随后一次以`monitor shutdown`结束遗留调试服务时，CPU被保留暂停，出现“ping仍通、port80拒绝/超时”。该样本不归因固件：重启独立OpenOCD后用telnet `resume`确认目标`not halted`，再shutdown；之后ping成功且`/api/can/status`恢复HTTP200、poll=`26023`。所有OpenOCD/GDB进程已退出。
+- 结论仍为：最终映像能正常接收标准Classic数据的控制面和RX FIFO均已就绪，但当前FIFO未出现帧，外部CAN实物输入仍缺少板端证据。GOOD/STALE与含真实数据的v3 CSV/meta继续`[待确认]`，未改源码或板端配置。
+
+## 2026-08-01 G最终映像恢复双ID输入，GOOD与selected-only通过
+
+- 用户明确确认已恢复发送标准Classic `0x100`和`0x110`。按5秒单socket间隔，`/api/can/status`从RX=`736`增长至`1038`且错误/TEC/REC/busOff均为0；`/api/signals?page=0`的ordinal0..7全部为`GOOD`，raw/value精确为`12000/1200`、`-250/-25`、`3300/3.3`、`80/0`、`2/2`、`3/3`、`10/10`、`1/1`，与`0x100` payload=`E0 2E 06 FF E4 0C A5 69`一致；page1 ordinal8..15仍全部MISSING/null。
+- 两次OpenOCD telnet短暂停止后均执行`resume`：sample A的总RX/DBC-RX/matched/updates=`2826/2826/1413/11304`，sample B为`3098/3098/1549/12392`，差值为`+272/+272/+136/+1088`，其中`1088=136×8`且decode errors保持0。周期TX仍disabled，故该结果证明同一双ID外部流量中`0x110`只增加接收计数，未进入selected runtime/value slots。调试服务已shutdown。
+- 以当前GOOD值启动新v3会话，POST `/api/log/control`返回200 STARTING，identity为active generation7、selection CRC=`62BA0D66`、count128、period6400 ms、path=`/log/20260801_175230000_signal-v3.csv`；8秒后GET为ACTIVE，page0仍GOOD。下一步需用户停止`0x100`而继续`0x110`，再读取大于3000 ms后的STALE和值保持；之后停止日志、断电取卡只读核对CSV/meta。
+
+## 2026-08-01 P0 active manifest即时回滚修正
+
+- 在等待用户切换`0x100`前，对生产active提交做只读P0审计，发现完整candidate读验、prepared runtime、generation对象写读回、manifest后短临界runtime publish的顺序均存在，但`current→previous→new current`中最后rename或publish回调失败时只留下previous供下次启动恢复，没有立即恢复旧current。该缺口不允许以“最终映像P0已闭环”掩盖。
+- 最小源码修正仅在`src/platform/stm32h750/large_dbc_candidate_stm32.c`增加`restore_previous_active_manifest()`：旧current已经轮转后，new current rename、读回或runtime publish失败会在同一TF锁中删除本次current（如有）、previous→current并读验；若回滚本身I/O失败则保留previous，不删除旧generation对象。未触碰规则、日志、CAN或HTTP协议。
+- 修改后实际`./scripts/verify.sh`通过CTest=`34/34`；STM32链接Flash=`121836 B`、RAM_D1=`196664 B`、ELF text/data/bss=`121384/444/196284`，ELF/HEX SHA-256=`b77fc9de42ef3257b3155ea4f12d942d1903395671bd22c4c2173b04322aae09`/`1ca3ac65704aae4116a77c0ed90e22a46de970b36e0b038758dae0815dd800dd`。`nm`确认`restore_previous_active_manifest`=`0x58`及active commit=`0x5a8`；`objdump`确认旧current rename后new current rename失败分支调用rollback，runtime publish仍在critical section。新候选尚未烧录；板上GOOD/ACTIVE日志证据仍对应先前G映像，待日志安全收口后再烧录回归。
+
+## 2026-08-01 旧G映像STALE与v3日志正常收口
+
+- 用户确认已停止`0x100`，仍发送`0x110`。等待5秒后的第一个CAN样本为RX=`13257`，再间隔10秒为`13357`，error/busOff/TEC/REC均为0；page0八个selected signals保留原`1200/-25/3.3/0/2/3/10/1`与raw=`12000/-250/3300/80/2/3/10/1`，quality全部为`STALE`、updatedMs共同保持`2112678`。这完成“未选`0x110`仍到达但不刷新selected值”的API级GOOD→STALE证据。
+- POST `enabled=0&samplePeriodMs=6400`的`/api/log/control`先返回200 STOPPING，10秒后回读200 STOPPED，锁定的active generation7、selection CRC=`62BA0D66`和selectedCount128未改变，路径仍为`/log/20260801_175230000_signal-v3.csv`。下一步必须由用户下电取卡到Mac，主会话只读检查同名CSV/.meta、行/列/quality/identity与`fsck_msdos -n`，并在此安全窗口部署当前网页；这些实体文件未读前不得声称G或TF持久化完成。
+
+## 2026-08-01 G实体TF只读核验失败（阻断）
+
+- 用户确认TF已插入电脑后，主机只读识别到外置物理卡`/dev/disk4`、FAT32分区`/dev/disk4s1`。当前会话文件可枚举为`/log/20260801_175230000_signal-v3.csv`（目录大小`1153932 B`）及同名`.meta`（`10471 B`）；meta文本开头含`activeGeneration=7`、`selectionCrc32=62BA0D66`、`selectedCount=128`与`cleanClose=false`，但这些内容不等于有效提交。
+- 卸载后仅执行`diskutil verifyVolume /dev/disk4s1`的只读检查；其`fsck_msdos`以exit=`206`失败，报告根目录end marker后仍有项、candidate/active generation链与`active.previous`越界/交叉，且本会话meta链标记为空闲、声明`10471 B`而最多`8192 B`，CSV链标记为空闲、声明`1153932 B`而最多`32768 B`。`mount readOnly /dev/disk4s1`也失败。未执行repair、format、写入、网页部署、烧录或复制当前文件。
+- 结论：G的API级GOOD→STALE、selected-only和日志控制证据仍有效；但当前v3 CSV/meta实体内容、clean footer、selected-only文件集合、TF持久化以及与其相关的P0候选烧录回归均为`[阻断]`，不得由可枚举路径、`shasum`或HTTP状态替代。当前要求用户决定先制作只读整卡镜像保留故障证据，还是确认丢弃本会话并重建FAT32；后者需重新部署静态资产、重建candidate/active，并重新完成实体日志和新P0候选最小回归。
+
+## 2026-08-01 TF重建与静态部署基线通过
+
+- 用户明确回复：若TF仍有问题，允许修复或格式化并重新载入所有TF需要文件；因此该轮授权覆盖当前故障会话的丢弃。主会话先以`diskutil list /dev/disk4`确认唯一目标为外置物理15.6 GB `disk4/disk4s1`，随后执行两次`diskutil eraseDisk FAT32 CANBUS MBRFormat /dev/disk4`。首次复制时macOS自动写入`.Spotlight-V100`、`.fseventsd`和AppleDouble旁车；将这些明确的本次挂载元数据送入Trash后发现它们仍留在卡内`.Trashes`，所以不把首轮当作干净部署，第二次格式化从零开始。
+- 第二轮按`deploy/tf/README.md`只创建`/www /dbc /log /config /sys`，复制`www/index.html`到`/www/index.html`以及`deploy/tf/dbc/active.dbc`到`/dbc/active.dbc`和相同的`/dbc/candidate.dbc`。网页源/卡SHA-256均为`9b96b6a022a9a3c1659abf52096543ebefba3e57e1218fdd5d6c62e92ce0e5c2`，两DBC均151 B且SHA-256=`271f20f923343c9f923bd6db4da4599e0349983b0a5bd43edeae87d152855417`；三次`cmp`均通过。
+- 随后卸载整盘，`diskutil verifyVolume /dev/disk4s1`以只读`fsck_msdos -n /dev/rdisk4s1`得到exit=`0`；`diskutil mount readOnly`后再对网页/active DBC逐字节`cmp`，最后再次卸载。此结果只证明新介质及静态部署有效；已损坏的v3会话、large-DBC generation、规则和历史日志未恢复也不得伪造。下一步骤是安全eject后用户插回开发板上电，再从真实100071 B DBC重新建立candidate/selection/active，并重做G实体CSV/meta与P0新候选最小实板回归。
+
+## 2026-08-01 大 DBC P0 candidate回滚与FatFs错误传播补强
+
+- 在active即时回滚之后，复核发现candidate/selection manifest仍有缺口：`current→previous`后new current rename或读回失败只依赖下次启动恢复。最小补丁在`large_dbc_candidate_stm32.c`加入candidate rollback：失败出口先尝试删除本次current、previous→current并读验；回滚I/O失败则保留previous，不清理旧generation。active runtime publish失败继续使用同锁回滚。
+- FatFs `sync_window()`的每次镜像FAT `disk_write`失败现设置`FR_DISK_ERR`；`sync_fs()`的FAT32 FSINFO写失败同样返回错误且不清除`fsi_flag`。这不能证明旧卡损坏根因，也不将FAT32表述为原子掉电文件系统。
+- 实测`./scripts/verify.sh`：CTest=`34/34`；FLASH=`121948 B (93.04%)`、RAM_D1=`196672 B`、text/data/bss=`121496/444/196292`。ELF/HEX SHA-256=`2d225a84feee60027e294ea6154c1f7e59882680cdb41fb64c39fa7d212dd60a`/`b886bbf945c6d6a74193c258ab1c14a67548fe48968a5b4cf04ac3e0c0a2dc31`。`nm`为candidate/active rollback分别`0x4c/0x58`，`objdump`显示candidate失败回到rollback、FatFs的`disk_write`非零分支返回`FR_DISK_ERR`；`git diff --check`通过。
+- 新候选尚未烧录。TF静态卡已安全弹出，需插回开发板上电后，才可从真实100071 B DBC重建candidate/selection/active及实体CSV/meta；旧卡日志、规则和generation结论均不复用。
+
+## 2026-08-01 新TF卡：大DBC B–E实板闭环与单socket收口修正
+
+- 用户确认卡插回上电后，ST-Link实际烧录P0候选（`Programming Finished`、`Verified OK`、`Resetting Target`，3.262903 V）。发现Mac `en2`本机为`192.168.1.100`，开发板W5500实际固定地址为`192.168.1.88`，故更正此前误把本机ping当板端证据的风险；以`.88`实测TF=0、W5500 link=1、网页哈希与仓库`www/index.html`均为`9b96b6a022a9a3c1659abf52096543ebefba3e57e1218fdd5d6c62e92ce0e5c2`。
+- 真实DBC上传实际为HTTP202、100071 B、source CRC32=`4B88D9CE`、tmp=`/dbc/upload.0000000000000001.tmp`。板端随后构造candidate token=`0000000000000001-000186E7-4B88D9CE`、112 messages/896 signals；搜索`PackVoltage`匹配112且每页8项。selection提交ordinal0–7得到generation2、selected=8/selected messages=1、token=`0000000000000002-000186E7-4B88D9CE`。
+- selection长事务曾耗约67秒，HTTP200后socket0=ESTABLISHED、后续请求被拒绝；GDB显示无ack/disconnect pending，故不把该200扩写为服务通过。最小改动为`http_finish_response_send()`在最终`SEND_OK`后立即调用既有graceful DISCON，删除已不用的ack-wait helper。`verify.sh` CTest=`34/34`、FLASH=`121836 B`、RAM_D1=`196672 B`、text/data/bss=`121384/444/196292`；ELF/HEX=`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`。反汇编确认成功响应分支进入`http_begin_graceful_disconnect`，`git diff --check`通过。
+- 修正映像烧录后，candidate generation2恢复查询、紧随`status→candidate page1`连续HTTP200，page1精确为ordinal8–15未选项。`POST /api/dbc/active`实际200，active generation=`1`、candidate=`2`、selected=8/1 message、selection CRC=`E5CB6C8F`、runtime slot0；runtime回读`loaded=true`、100071 B、1 message/8 signals。软件复位后的最早runtime空态只记录为恢复窗口；后续candidate查询与GDB均确认runtime有效，再次HTTP回读同一active身份，正常active reload通过。
+- 尚未取得新映像外部Classic CAN、GOOD/STALE、实体v3 CSV/.meta、TF写失败或物理掉电证据；这些均保持`[待确认]`。CAN-FD实板仍`[未验证]`。
+- 已同步`ARCHITECTURE_DESIGN.md`：单socket响应收口现以最终`SEND_OK→graceful DISCON`为准，替换旧“等待TX_FSR重填”的过时描述；未改变单连接、非并发HTTP边界。

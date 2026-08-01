@@ -7,7 +7,7 @@
 #include "dbc_parser.h"
 #include "rule_engine.h"
 
-#define DBC_SIGNAL_CATALOG_PAGE_SIZE 16u
+#define DBC_SIGNAL_CATALOG_PAGE_SIZE 8u
 
 typedef struct {
   char key[RULE_SIGNAL_KEY_MAX];

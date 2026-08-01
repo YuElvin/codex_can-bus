@@ -58,7 +58,11 @@ TF 卡 + W25Q128 + FreeRTOS`。
 | QSPI W25Q128 | 单规则双槽备份与诊断 | 默认启动只读识别；`0x00FFF000` 固定为诊断区，`0x00FFE000`/`0x00FFD000` 为单规则双槽；通用Web或版本存储不属于一期实现 |
 | TF RuleFile | `/config/rule.conf` 单规则启动覆盖 | v1 固定文本字段，最大 256 字节；有效文件优先于 QSPI，缺失只创建不覆盖，非法保持当前安全配置 |
 
-一期最终编译基线：FLASH/RAM_D1=`92628/242792 B`，ELF `text/data/bss=92232/384/242408`。后续任何新阶段引入网络服务、缓存或日志变化时必须重新复查Flash/RAM水位。
+阶段17 G最终编译基线：FLASH/RAM_D1=`121708/196664 B`，ELF `text/data/bss=121256/444/196284`，低于Flash最大`126976 B`共5268 B。大DBC不把896项目录常驻双runtime：active双槽只含最多128信号/64消息及对应稳定numeric value slots；完整DBC/index/selection留在TF并以固定小端、size/CRC、generation/manifest校验。selected实时API和v3日志均逐页/逐项读取稳定value slot，不整体复制大结构。
+
+active事务顺序固定为candidate完整校验、V5规则definition hash检查、非活动selected runtime构造、active tmp写入/同步/读回、formal验证、manifest tmp写入/读回与current/previous切换、短临界slot发布。失败清理本次owned文件和prepared slot；启动只选择有效current或previous，并清理未引用next generation。FAT32多文件rename不视为原子。
+
+生产固件RuleFile路径为V5-only fail-closed：启动只加载具有`definitionHash`的V5；无任何文件时使用空规则集，发现legacy文件或V5损坏时明确拒绝并保持空RuleEngine，不回退、不猜hash、不自动删除。V1-V4格式parser与兼容测试保留在host构建，但legacy loader、转换器及迁移HTTP路由不链接进固件；这是守住A0 Flash合同的固定产品边界。
 
 ## 4. FreeRTOS 任务设计
 
@@ -401,3 +405,5 @@ B阶段把`DbcUploadState`接入既有W5500 socket0和TF互斥层，不新增tas
 C阶段在既有DbcTask中加入固定命令，不新增task或通用消息总线。静态backend持有parser、builder、4个FatFs FIL与512 B I/O scratch；message/signal共用一个分区spool，index和selection不常驻整份目录。I/O进度计数作为DbcTask长操作的IWDG替代heartbeat，每32次FatFs调用让出1 tick；任何FatFs调用仍逐次记录operation/result。`_FS_LOCK=3`覆盖source+spool/index与一个辅助读回文件。最终固定顺序是二读校验source、生成并读回temp、rename三件套、正式三件套读回、写同步并验证current.tmp、current移previous、current.tmp移current、current再读回；RAM candidate snapshot仅在最后成功后更新。启动验证current/previous所有引用并从最大有效generation继续，active/runtime仍独立。
 
 D阶段沿用同一DbcTask和TF mutex。HTTP只快照token/query/page或selection mutation，再由DbcTask顺序读取index/selection；响应正文使用3072 B静态scratch先完整生成，再以不超过512 B片段和固定Content-Length发送。选择写入生成新的不可变candidate generation，只复用原`.dbc/.idx`内容并重写`.sel`，按temp、formal、manifest readback顺序提交。网页仍由TF `/www/index.html`提供；固件默认页helper不会覆盖已有页面，因此网页版本部署仍采用下电取卡、主机逐字节校验、插回上电的既有运维边界。
+
+2026-08-01的实板长selection发现，响应虽已完整交付但等待`TX_FSR`重填的收口可能遗留无pending标记的`ESTABLISHED` socket。当前单socket架构改以最终chunk的W5500 `SEND_OK`为收口边界，立即调用既有graceful `DISCON`；仍不增加连接复用、并发请求或额外socket。修正后冷启动candidate恢复、连续status/page和active长请求均实测恢复。

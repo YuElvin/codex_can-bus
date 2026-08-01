@@ -183,7 +183,7 @@ function renderCanTx(data, forceForm) {
 }
 function renderSignalTable(bodyId, data, direction) {
   const body=$(bodyId); const items=Array.isArray(data.items)?data.items:[]; const rowClass=direction==='TX'?'tx-row':'rx-row';
-  const rows=items.map(item=>{ const row=document.createElement('tr'); row.className=rowClass; const key=String(item.key ?? '—'); const split=key.lastIndexOf('.'); const message=split>0?key.slice(0,split):'—'; const signal=split>0?key.slice(split+1):key; for (const value of [direction,message,signal,String(item.value ?? '—'),String(item.raw ?? '—'),String(item.unit ?? '—'),String(item.updated_ms ?? '—'),String(item.quality ?? '—')]) addCell(row,value); return row; });
+  const rows=items.map(item=>{ const row=document.createElement('tr'); row.className=rowClass; const key=String(item.key ?? '—'); const split=key.lastIndexOf('.'); const message=split>0?key.slice(0,split):'—'; const signal=split>0?key.slice(split+1):key; for (const value of [direction,message,signal,String(item.value ?? '—'),String(item.raw ?? '—'),String(item.unit ?? '—'),String(item.updatedMs ?? item.updated_ms ?? '—'),String(item.quality ?? '—')]) addCell(row,value); return row; });
   if (!rows.length) { const row=document.createElement('tr'); row.className=rowClass; addCell(row,direction); const cell=document.createElement('td'); cell.colSpan=7; cell.textContent='当前没有 DBC 信号快照'; row.append(cell); rows.push(row); }
   body.replaceChildren(...rows);
 }
@@ -313,12 +313,13 @@ async function loadSignalCatalog() {
   invalidateSignalCatalog('正在读取活动 DBC 信号目录');
   const keys=[]; let page=0;
   for (;;) {
-    const data=await exclusive('读取 DBC 信号目录',()=>api('/api/dbc/signals?page='+page));
-    if (!data.loaded) { signalCatalog=[]; signalCatalogReason='没有已激活的 DBC，无法启用规则'; return; }
+    const data=await exclusive('读取 DBC 信号目录',()=>api('/api/signals?page='+page));
+    if (!data.generation) { signalCatalog=[]; signalCatalogReason='没有已激活的 DBC，无法启用规则'; return; }
     for (const item of Array.isArray(data.items)?data.items:[]) if (item && item.key) keys.push(String(item.key));
     const total=Number(data.total);
-    if (!Number.isInteger(total) || total<0) throw new Error('/api/dbc/signals 返回无效 total');
-    if ((page+1)*16>=total) break;
+    const pageSize=Number(data.pageSize);
+    if (!Number.isInteger(total) || total<0 || !Number.isInteger(pageSize) || pageSize<1) throw new Error('/api/signals 返回无效分页');
+    if ((page+1)*pageSize>=total) break;
     page+=1;
   }
   signalCatalog=Array.from(new Set(keys));

@@ -3,12 +3,13 @@
 #include "main.h"
 #include "dbc_candidate_catalog.h"
 #include "dbc_candidate_http.h"
+#include "dbc_decoder.h"
 #include "dbc_parser.h"
-#include "dbc_signal_catalog.h"
 #include "dbc_upload.h"
 #include "platform/large_dbc_candidate_stm32.h"
 #include "platform/stm32h750_bringup.h"
 #include "rule_file.h"
+#include "selected_signal_log.h"
 #include "signal_api.h"
 #include "signal_log_control.h"
 
@@ -167,6 +168,15 @@ volatile uint32_t g_w5500_http_dbc_runtime_errors = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_valid = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_generation = 0u;
 volatile uint32_t g_w5500_http_dbc_runtime_active_slot = 0xffffffffu;
+volatile uint32_t g_w5500_http_active_generation_hi;
+volatile uint32_t g_w5500_http_active_generation_lo;
+volatile uint32_t g_w5500_http_active_candidate_generation_hi;
+volatile uint32_t g_w5500_http_active_candidate_generation_lo;
+volatile uint32_t g_w5500_http_active_selection_crc32;
+volatile uint32_t g_w5500_http_active_recovery_result = 0xffffffffu;
+volatile uint32_t g_w5500_http_active_pending;
+volatile uint32_t g_w5500_http_active_complete;
+volatile uint32_t g_w5500_http_active_transaction_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_signals_count = 0u;
 static volatile uint32_t g_w5500_http_dbc_reload_complete = 0u;
 static volatile uint32_t g_w5500_http_dbc_reload_result = 0xffffffffu;
@@ -190,32 +200,16 @@ extern volatile uint32_t g_can2_rec;
 extern volatile uint32_t g_can2_send_result;
 extern volatile uint32_t g_can2_poll_count;
 extern volatile uint32_t g_w25q128_jedec_id;
-extern volatile uint32_t g_rule_task_config_on_threshold;
-extern volatile uint32_t g_rule_task_config_off_threshold;
-extern volatile uint32_t g_rule_task_config_delay_ms;
-extern volatile uint32_t g_rule_task_config_timeout_ms;
-extern volatile uint32_t g_rule_task_config_pending_on_threshold;
-extern volatile uint32_t g_rule_task_config_pending_off_threshold;
-extern volatile uint32_t g_rule_task_config_pending_delay_ms;
-extern volatile uint32_t g_rule_task_config_pending_timeout_ms;
-extern volatile uint32_t g_rule_task_config_reload;
 extern volatile uint32_t g_rule_task_config_result;
 extern volatile uint32_t g_rule_task_config_generation;
-extern volatile uint32_t g_rule_task_config_save_request;
 extern volatile uint32_t g_rule_task_engine_reload;
-extern volatile uint32_t g_rule_file_v3_save_request;
-extern volatile uint32_t g_rule_file_v3_save_result;
-extern volatile uint32_t g_rule_file_v3_load_result;
-extern volatile uint32_t g_rule_file_v3_rule_count;
-extern volatile uint32_t g_rule_file_v2_load_result;
-extern volatile uint32_t g_rule_file_v4_load_result;
-extern volatile uint32_t g_rule_file_v4_save_request;
-extern volatile uint32_t g_rule_file_v4_save_result;
-extern RuleFileV4 g_rule_file_v4_current;
-extern RuleFileV4 g_rule_file_v4_pending;
-extern RuleFileV3 g_rule_file_v3_current;
-extern RuleFileV3 g_rule_file_v3_pending;
+extern volatile uint32_t g_rule_file_v5_load_result;
+extern volatile uint32_t g_rule_file_v5_save_request;
+extern volatile uint32_t g_rule_file_v5_save_result;
+extern RuleFileV5 g_rule_file_v5_current;
+extern RuleFileV5 g_rule_file_v5_pending;
 extern SignalLogControl g_signal_log_control;
+extern SelectedSignalLogSession g_selected_signal_log_session;
 
 #define W5500_S0_REG_BLOCK 0x01u
 #define W5500_S0_TX_BLOCK 0x02u
@@ -316,7 +310,6 @@ static char g_http_dbc_candidate_buffer[W5500_HTTP_UPLOAD_BODY_MAX + 1u];
 static DbcDatabase g_http_dbc_candidate_db;
 static DbcDatabase g_http_dbc_runtime_db[2];
 static const DbcDatabase *g_http_dbc_runtime_active_db;
-static DbcSignalCatalogEntry g_http_dbc_signal_page[DBC_SIGNAL_CATALOG_PAGE_SIZE];
 static DbcUploadState g_http_dbc_upload;
 static DbcUploadResult g_http_dbc_upload_completed;
 static uint64_t g_http_dbc_upload_next_generation = 1u;
@@ -342,6 +335,14 @@ static LargeDbcCandidateSnapshot g_http_candidate_selection_backend_result;
 static volatile uint32_t g_http_candidate_selection_pending;
 static volatile uint32_t g_http_candidate_selection_complete;
 static volatile uint32_t g_http_candidate_selection_result = 0xffffffffu;
+static DbcSelectedRuntimeSnapshot g_http_selected_runtime;
+static DbcActiveDescriptor g_http_active_descriptor;
+static LargeDbcActiveRequest g_http_active_request;
+static LargeDbcActiveResult g_http_active_backend_result;
+static DbcSelectedRuleRequirement
+  g_http_active_rule_requirements[RULE_FILE_V2_RULE_COUNT];
+static char g_http_active_rule_keys[RULE_FILE_V2_RULE_COUNT][RULE_SIGNAL_KEY_MAX];
+static uint64_t g_http_active_next_generation = 1u;
 static uint8_t g_w5500_http_disconnect_pending;
 static uint32_t g_w5500_http_disconnect_pending_start_tick;
 static uint32_t g_w5500_http_ack_wait_start_tick;
@@ -708,29 +709,14 @@ static int http_begin_graceful_disconnect(void) {
   return 0;
 }
 
-static void http_begin_ack_wait(void) {
-  const uint32_t initial_fsr =
-    g_w5500_http_trace_post_sendok_tx_fsr_result == (uint32_t)W5500_OK
-      ? g_w5500_http_trace_post_sendok_tx_fsr_value
-      : 0xffffffffu;
-  g_w5500_http_ack_wait_start_tick = HAL_GetTick();
-  g_w5500_http_ack_wait_pending = 1u;
-  ++g_w5500_http_ack_wait_count;
-  g_w5500_http_ack_wait_initial_fsr = initial_fsr;
-  g_w5500_http_ack_wait_final_fsr = initial_fsr;
-  g_w5500_http_ack_wait_elapsed_ms = 0u;
-}
-
 static int http_finish_response_send(void) {
   if (g_w5500_http_trace_send_count == 0u) {
     return 1;
   }
-  if (g_w5500_http_trace_post_sendok_tx_fsr_result == (uint32_t)W5500_OK &&
-      g_w5500_http_trace_post_sendok_tx_fsr_value == W5500_SOCKET_BUFFER_SIZE) {
-    return http_begin_graceful_disconnect();
-  }
-  http_begin_ack_wait();
-  return 0;
+  /* SEND_OK is the W5500 completion boundary for the final response chunk.
+   * Start TCP close now; waiting for TX_FSR to refill left a long candidate
+   * response in ESTABLISHED with neither close state armed. */
+  return http_begin_graceful_disconnect();
 }
 
 static int http_open_listener(void) {
@@ -768,33 +754,6 @@ static bool request_path_is(const char *request, const char *method, const char 
   }
   const char *actual = request + method_len + 1u;
   return strncmp(actual, path, path_len) == 0 && (actual[path_len] == ' ' || actual[path_len] == '?');
-}
-
-static bool request_dbc_signals_page(const char *request, uint32_t *page) {
-  static const char prefix[] = "GET /api/dbc/signals?page=";
-  const size_t prefix_len = sizeof(prefix) - 1u;
-  const char *value;
-  uint32_t parsed = 0u;
-  bool has_digit = false;
-
-  if (request == NULL || page == NULL || strncmp(request, prefix, prefix_len) != 0) {
-    return false;
-  }
-  value = request + prefix_len;
-  while (*value >= '0' && *value <= '9') {
-    const uint32_t digit = (uint32_t)(*value - '0');
-    if (parsed > (UINT32_MAX - digit) / 10u) {
-      return false;
-    }
-    parsed = parsed * 10u + digit;
-    has_digit = true;
-    ++value;
-  }
-  if (!has_digit || *value != ' ') {
-    return false;
-  }
-  *page = parsed;
-  return true;
 }
 
 static const char *http_status_text(uint16_t code) {
@@ -981,12 +940,21 @@ static size_t build_dbc_runtime_body(char *body, size_t len) {
   return (size_t)snprintf(body,
                           len,
                           "{\"ok\":true,\"data\":{\"active\":\"%s\",\"loaded\":%s,"
-                          "\"generation\":%lu,\"activeSlot\":%lu,\"lastResult\":%lu,"
+                          "\"generation\":%lu,\"activeGeneration\":\"%08lX%08lX\","
+                          "\"candidateGeneration\":\"%08lX%08lX\","
+                          "\"selectionCrc32\":\"%08lX\",\"selectedOnly\":%s,"
+                          "\"activeSlot\":%lu,\"lastResult\":%lu,"
                           "\"bytes\":%lu,\"lines\":%lu,\"messages\":%lu,"
                           "\"signals\":%lu,\"skipped\":%lu,\"errors\":%lu}}",
                           W5500_HTTP_DBC_ACTIVE_PATH,
                           g_w5500_http_dbc_runtime_valid != 0u ? "true" : "false",
                           (unsigned long)g_w5500_http_dbc_runtime_generation,
+                          (unsigned long)g_w5500_http_active_generation_hi,
+                          (unsigned long)g_w5500_http_active_generation_lo,
+                          (unsigned long)g_w5500_http_active_candidate_generation_hi,
+                          (unsigned long)g_w5500_http_active_candidate_generation_lo,
+                          (unsigned long)g_w5500_http_active_selection_crc32,
+                          w5500_http_selected_runtime_available() != 0 ? "true" : "false",
                           (unsigned long)g_w5500_http_dbc_runtime_active_slot,
                           (unsigned long)g_w5500_http_dbc_runtime_result,
                           (unsigned long)g_w5500_http_dbc_runtime_bytes,
@@ -997,81 +965,14 @@ static size_t build_dbc_runtime_body(char *body, size_t len) {
                           (unsigned long)g_w5500_http_dbc_runtime_errors);
 }
 
-static size_t build_dbc_signals_body(char *body, size_t len, uint32_t page) {
-  const DbcDatabase *db = NULL;
-  uint32_t generation = g_w5500_http_dbc_runtime_generation;
-  bool loaded = false;
-  size_t total = 0u;
-  size_t count = 0u;
-  size_t used;
-
-  if (w5500_http_dbc_lock() == 0) {
-    generation = g_w5500_http_dbc_runtime_generation;
-    db = w5500_http_active_dbc_snapshot();
-    if (db != NULL) {
-      loaded = true;
-      total = dbc_signal_catalog_total(db);
-      count = dbc_signal_catalog_page(db,
-                                      (size_t)page,
-                                      g_http_dbc_signal_page,
-                                      DBC_SIGNAL_CATALOG_PAGE_SIZE);
-    }
-    w5500_http_dbc_unlock();
-  }
-  used = (size_t)snprintf(body,
-                          len,
-                          "{\"ok\":true,\"data\":{\"generation\":%lu,\"page\":%lu,\"total\":%lu,\"loaded\":%s,\"items\":[",
-                          (unsigned long)generation,
-                          (unsigned long)page,
-                          (unsigned long)total,
-                          loaded ? "true" : "false");
-  if (used >= len) {
+static size_t build_can_tx_signals_body(char *body, size_t len) {
+  static const char empty[] =
+    "{\"ok\":true,\"data\":{\"items\":[],\"count\":0}}";
+  if (body == NULL || sizeof(empty) > len) {
     return len;
   }
-  for (size_t i = 0u; i < count; ++i) {
-    const int written = snprintf(body + used,
-                                 len - used,
-                                 "%s{\"key\":\"%s\"}",
-                                 i == 0u ? "" : ",",
-                                 g_http_dbc_signal_page[i].key);
-    if (written < 0 || (size_t)written >= len - used) {
-      return len;
-    }
-    used += (size_t)written;
-  }
-  {
-    const int written = snprintf(body + used, len - used, "]}}");
-    if (written < 0 || (size_t)written >= len - used) {
-      return len;
-    }
-    used += (size_t)written;
-  }
-  return used;
-}
-
-static size_t build_signals_body(char *body, size_t len) {
-  SignalCacheEntry entries[SIGNAL_API_MAX_ITEMS];
-  const size_t count = can2_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
-  g_w5500_http_signals_count = (uint32_t)count;
-  return signal_api_build_json(entries, count, body, len);
-}
-
-static size_t build_can_tx_signals_body(char *body, size_t len) {
-  SignalCacheEntry entries[SIGNAL_API_MAX_ITEMS];
-  const size_t count = can2_tx_signal_cache_copy(entries, SIGNAL_API_MAX_ITEMS);
-  return signal_api_build_json(entries, count, body, len);
-}
-
-static size_t build_rule_config_body(char *body, size_t len) {
-  return (size_t)snprintf(body,
-                          len,
-                          "{\"ok\":true,\"data\":{\"onThreshold\":%lu,\"offThreshold\":%lu,"
-                          "\"delayMs\":%lu,\"timeoutMs\":%lu,\"generation\":%lu}}",
-                          (unsigned long)g_rule_task_config_on_threshold,
-                          (unsigned long)g_rule_task_config_off_threshold,
-                          (unsigned long)g_rule_task_config_delay_ms,
-                          (unsigned long)g_rule_task_config_timeout_ms,
-                          (unsigned long)g_rule_task_config_generation);
+  memcpy(body, empty, sizeof(empty));
+  return sizeof(empty) - 1u;
 }
 
 static size_t build_manual_relay_body(char *body, size_t len) {
@@ -1104,11 +1005,14 @@ static size_t build_manual_relay_body(char *body, size_t len) {
 }
 
 static size_t build_rules_body(char *body, size_t len, int slot) {
-  const RuleFileV4Slot *first = &g_rule_file_v4_current.slots[0];
-  const RuleFileV4Slot *second = &g_rule_file_v4_current.slots[1];
-  const char *source = g_rule_file_v4_load_result == 0u ? "v4" :
-                       g_rule_file_v3_load_result == 0u ? "v3" :
-                       g_rule_file_v2_load_result == 0u ? "v2" : "v1-qspi";
+  const RuleFileV5Slot *first = &g_rule_file_v5_current.slots[0];
+  const RuleFileV5Slot *second = &g_rule_file_v5_current.slots[1];
+  const char *source = g_rule_file_v5_load_result == 0u ? "v5" :
+    g_rule_file_v5_load_result == 1u ? "none" :
+    g_rule_file_v5_load_result == 7u ? "legacy-incompatible" :
+    "v5-invalid";
+  const uint64_t first_hash = first->definition_hash;
+  const uint64_t second_hash = second->definition_hash;
   char first_threshold[32];
   char second_threshold[32];
 
@@ -1117,23 +1021,28 @@ static size_t build_rules_body(char *body, size_t len, int slot) {
     return len;
   }
   if (slot >= 0 && slot < 2) {
-    const RuleFileV4Slot *rule = &g_rule_file_v4_current.slots[slot];
+    const RuleFileV5Slot *rule = &g_rule_file_v5_current.slots[slot];
     char threshold[32];
     if (rule_file_format_decimal(rule->threshold, threshold, sizeof(threshold)) == 0u) {
       return len;
     }
     return (size_t)snprintf(body, len,
-      "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":4,\"slot\":%d,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}}",
-      source, slot, rule->enabled ? "true" : "false", (unsigned)rule->relay,
-      rule->signal_key, threshold, rule->action_state == RELAY_STATE_ON ? "on" : "off",
+      "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":%u,\"slot\":%d,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"definitionHash\":\"%08lX%08lX\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}}",
+      source, 5u, slot, rule->enabled ? "true" : "false", (unsigned)rule->relay,
+      rule->signal_key,
+      (unsigned long)((slot == 0 ? first_hash : second_hash) >> 32u),
+      (unsigned long)(uint32_t)(slot == 0 ? first_hash : second_hash),
+      threshold, rule->action_state == RELAY_STATE_ON ? "on" : "off",
       (unsigned long)rule->delay_ms, (unsigned long)rule->timeout_ms,
       rule->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)rule->priority);
   }
   return (size_t)snprintf(body, len,
-    "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":4,\"rules\":[{\"slot\":0,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u},{\"slot\":1,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}]}}",
-    source, first->enabled ? "true" : "false", (unsigned)first->relay, first->signal_key, first_threshold,
+    "{\"ok\":true,\"data\":{\"source\":\"%s\",\"version\":%u,\"rules\":[{\"slot\":0,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"definitionHash\":\"%08lX%08lX\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u},{\"slot\":1,\"enabled\":%s,\"relay\":%u,\"signalKey\":\"%s\",\"definitionHash\":\"%08lX%08lX\",\"threshold\":%s,\"action\":\"%s\",\"delayMs\":%lu,\"timeoutMs\":%lu,\"safeState\":\"%s\",\"priority\":%u}]}}",
+    source, 5u, first->enabled ? "true" : "false", (unsigned)first->relay, first->signal_key,
+    (unsigned long)(first_hash >> 32u), (unsigned long)(uint32_t)first_hash, first_threshold,
     first->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)first->delay_ms, (unsigned long)first->timeout_ms, first->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)first->priority,
-    second->enabled ? "true" : "false", (unsigned)second->relay, second->signal_key, second_threshold,
+    second->enabled ? "true" : "false", (unsigned)second->relay, second->signal_key,
+    (unsigned long)(second_hash >> 32u), (unsigned long)(uint32_t)second_hash, second_threshold,
     second->action_state == RELAY_STATE_ON ? "on" : "off", (unsigned long)second->delay_ms, (unsigned long)second->timeout_ms, second->safe_state == RELAY_STATE_ON ? "on" : "off", (unsigned)second->priority);
 }
 
@@ -1356,6 +1265,7 @@ int w5500_http_load_active_dbc(void) {
 #define DBC_WORK_COMMAND_CANDIDATE 2u
 #define DBC_WORK_COMMAND_CANDIDATE_QUERY 3u
 #define DBC_WORK_COMMAND_CANDIDATE_SELECTION 4u
+#define DBC_WORK_COMMAND_ACTIVE 5u
 
 static void candidate_record_snapshot_unlocked(
   const DbcCandidateDescriptor *candidate) {
@@ -1440,6 +1350,100 @@ static void candidate_progress(void *context,
   if ((g_w5500_http_candidate_progress_count & 31u) == 0u) {
     vTaskDelay(pdMS_TO_TICKS(1u));
   }
+}
+
+static DbcSelectedRuntimeStatus active_publish_runtime(
+  void *context,
+  DbcSelectedRuntimeSnapshot *snapshot,
+  const DbcActiveDescriptor *active,
+  uint8_t prepared_slot) {
+  (void)context;
+  DbcSelectedRuntimeStatus status;
+  taskENTER_CRITICAL();
+  status = dbc_selected_runtime_publish_prepared_checked(
+    snapshot, active->active_generation, prepared_slot);
+  if (status == DBC_SELECTED_RUNTIME_OK) {
+    g_http_active_descriptor = *active;
+    g_w5500_http_active_generation_hi =
+      (uint32_t)(active->active_generation >> 32u);
+    g_w5500_http_active_generation_lo = (uint32_t)active->active_generation;
+    g_w5500_http_active_candidate_generation_hi =
+      (uint32_t)(active->candidate_generation >> 32u);
+    g_w5500_http_active_candidate_generation_lo =
+      (uint32_t)active->candidate_generation;
+    g_w5500_http_active_selection_crc32 = active->selection_crc32;
+    g_w5500_http_dbc_runtime_generation =
+      (uint32_t)active->active_generation;
+    g_w5500_http_dbc_runtime_active_slot = snapshot->active_slot;
+    g_w5500_http_dbc_runtime_bytes = active->source_size;
+    g_w5500_http_dbc_runtime_messages = active->selected_message_count;
+    g_w5500_http_dbc_runtime_signals = active->selected_count;
+    g_w5500_http_dbc_runtime_lines = 0u;
+    g_w5500_http_dbc_runtime_skipped = 0u;
+    g_w5500_http_dbc_runtime_errors = 0u;
+    g_w5500_http_dbc_runtime_valid = 1u;
+    g_w5500_http_dbc_runtime_result = 0u;
+    ++g_w5500_http_dbc_runtime_load_count;
+  }
+  taskEXIT_CRITICAL();
+  return status;
+}
+
+static int active_copy_rule_requirements(
+  DbcSelectedRuleRequirement *requirements,
+  size_t *rule_count) {
+  if (requirements == NULL || rule_count == NULL) {
+    return 1;
+  }
+  *rule_count = 0u;
+  if (g_rule_file_v5_load_result == 0u) {
+    for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+      const RuleFileV5Slot *rule = &g_rule_file_v5_current.slots[slot];
+      if (!rule->enabled) {
+        continue;
+      }
+      memcpy(g_http_active_rule_keys[*rule_count], rule->signal_key,
+             sizeof(g_http_active_rule_keys[*rule_count]));
+      requirements[*rule_count] = (DbcSelectedRuleRequirement){
+        .enabled = true,
+        .key = g_http_active_rule_keys[*rule_count],
+        .definition_hash = rule->definition_hash
+      };
+      ++*rule_count;
+    }
+    return 0;
+  }
+  if (g_rule_file_v5_load_result == 1u) {
+    return 0;
+  }
+  return g_rule_file_v5_load_result == 7u ? 2 : 1;
+}
+
+int w5500_http_recover_large_dbc_active(void) {
+  size_t rule_count = 0u;
+  bool available = false;
+  uint64_t next_generation = 0u;
+  memset(&g_http_active_backend_result, 0,
+         sizeof(g_http_active_backend_result));
+  if (active_copy_rule_requirements(g_http_active_rule_requirements,
+                                    &rule_count) != 0) {
+    g_w5500_http_active_recovery_result =
+      LARGE_DBC_ACTIVE_STM32_RULE_DEFINITION_CONFLICT;
+    return 1;
+  }
+  const LargeDbcActiveStm32Status status =
+    stm32h750_large_dbc_active_recover(
+      g_http_active_rule_requirements, rule_count, &g_http_selected_runtime,
+      active_publish_runtime, NULL, candidate_progress, NULL, &available,
+      &g_http_active_backend_result, &next_generation);
+  g_w5500_http_active_recovery_result = (uint32_t)status;
+  if (status != LARGE_DBC_ACTIVE_STM32_OK) {
+    return 1;
+  }
+  taskENTER_CRITICAL();
+  g_http_active_next_generation = next_generation;
+  taskEXIT_CRITICAL();
+  return available ? 0 : 1;
 }
 
 int w5500_http_recover_large_dbc_candidate(void) {
@@ -1594,6 +1598,38 @@ static int w5500_http_request_candidate_selection(
   return 0;
 }
 
+static int w5500_http_request_active_commit(void) {
+  const uint8_t command = DBC_WORK_COMMAND_ACTIVE;
+  size_t rule_count = 0u;
+  if (g_w5500_dbc_reload_queue == NULL || g_w5500_http_active_pending != 0u ||
+      active_copy_rule_requirements(g_http_active_rule_requirements,
+                                    &rule_count) != 0) {
+    return 1;
+  }
+  taskENTER_CRITICAL();
+  g_http_active_request = (LargeDbcActiveRequest){
+    .active_generation = g_http_active_next_generation,
+    .writes_blocked = g_signal_log_control.enabled,
+    .rules = g_http_active_rule_requirements,
+    .rule_count = rule_count,
+    .runtime_snapshot = &g_http_selected_runtime,
+    .publish = active_publish_runtime,
+    .publish_context = NULL
+  };
+  g_w5500_http_active_complete = 0u;
+  g_w5500_http_active_transaction_result = 0xffffffffu;
+  g_w5500_http_active_pending = 1u;
+  taskEXIT_CRITICAL();
+  if (g_http_active_request.active_generation == 0u ||
+      xQueueSend(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
+    g_w5500_http_active_pending = 0u;
+    ++g_w5500_http_dbc_reload_queue_drop_count;
+    return 1;
+  }
+  ++g_w5500_http_dbc_reload_enqueue_count;
+  return 0;
+}
+
 int w5500_http_dbc_reload_requested(void) {
   return g_w5500_dbc_reload_queue != NULL &&
                  uxQueueMessagesWaiting(g_w5500_dbc_reload_queue) != 0u
@@ -1606,12 +1642,6 @@ int w5500_http_process_dbc_reload(void) {
   if (g_w5500_dbc_reload_queue == NULL ||
       xQueueReceive(g_w5500_dbc_reload_queue, &command, 0u) != pdPASS) {
     return 1;
-  }
-  if (command == DBC_WORK_COMMAND_RELOAD) {
-    const int result = w5500_http_load_active_dbc();
-    g_w5500_http_dbc_reload_result = (uint32_t)result;
-    g_w5500_http_dbc_reload_complete = 1u;
-    return result;
   }
   if (command == DBC_WORK_COMMAND_CANDIDATE) {
     DbcCandidateDescriptor published;
@@ -1707,6 +1737,30 @@ int w5500_http_process_dbc_reload(void) {
     taskEXIT_CRITICAL();
     return status == LARGE_DBC_CANDIDATE_STM32_OK ? 0 : 4;
   }
+  if (command == DBC_WORK_COMMAND_ACTIVE) {
+    taskENTER_CRITICAL();
+    g_w5500_http_active_pending = 0u;
+    g_http_active_request.writes_blocked = g_signal_log_control.enabled;
+    taskEXIT_CRITICAL();
+    const LargeDbcActiveStm32Status status =
+      stm32h750_large_dbc_active_commit(&g_http_active_request,
+                                        candidate_progress, NULL,
+                                        &g_http_active_backend_result);
+    taskENTER_CRITICAL();
+    g_w5500_http_active_transaction_result = (uint32_t)status;
+    if (status == LARGE_DBC_ACTIVE_STM32_OK) {
+      if (g_http_active_backend_result.active.active_generation == UINT64_MAX) {
+        g_http_active_next_generation = 0u;
+      } else {
+        g_http_active_next_generation =
+          g_http_active_backend_result.active.active_generation + 1u;
+      }
+    }
+    g_w5500_http_active_complete = 1u;
+    taskEXIT_CRITICAL();
+    candidate_mutation_end();
+    return status == LARGE_DBC_ACTIVE_STM32_OK ? 0 : 5;
+  }
   return 1;
 }
 
@@ -1726,6 +1780,101 @@ int w5500_http_dbc_reload_result(void) {
 
 const DbcDatabase *w5500_http_active_dbc_snapshot(void) {
   return g_w5500_http_dbc_runtime_valid != 0u ? g_http_dbc_runtime_active_db : NULL;
+}
+
+int w5500_http_selected_runtime_available(void) {
+  return dbc_selected_runtime_active(&g_http_selected_runtime) != NULL ? 1 : 0;
+}
+
+size_t w5500_http_decode_selected_frame(const CanFrame *frame,
+                                        uint32_t now_ms) {
+  return dbc_decode_frame_to_selected_values(&g_http_selected_runtime, frame,
+                                             now_ms);
+}
+
+size_t w5500_http_selected_rule_snapshots(
+  const RuleEngine *engine,
+  SignalSnapshot *out_signals,
+  size_t out_capacity) {
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_active(&g_http_selected_runtime);
+  if (engine == NULL || out_signals == NULL || runtime == NULL) {
+    return 0u;
+  }
+  size_t count = 0u;
+  for (size_t rule_index = 0u;
+       rule_index < engine->rule_count && count < out_capacity;
+       ++rule_index) {
+    const Rule *rule = &engine->rules[rule_index];
+    if (!rule->enabled) {
+      continue;
+    }
+    bool duplicate = false;
+    for (size_t existing = 0u; existing < count; ++existing) {
+      if (strcmp(out_signals[existing].key, rule->signal_key) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+    const DbcSelectedRuntimeSignal *signal =
+      dbc_selected_runtime_find_signal(runtime, rule->signal_key);
+    SignalValueSnapshot value;
+    if (signal == NULL ||
+        !dbc_selected_runtime_copy_active_value(
+          &g_http_selected_runtime, signal->value_state_index, &value)) {
+      continue;
+    }
+    memset(&out_signals[count], 0, sizeof(out_signals[count]));
+    memcpy(out_signals[count].key, signal->key,
+           sizeof(out_signals[count].key));
+    out_signals[count].value = value.value;
+    out_signals[count].updated_ms = value.updated_ms;
+    out_signals[count].valid = value.quality == SIGNAL_VALUE_QUALITY_GOOD;
+    ++count;
+  }
+  return count;
+}
+
+int w5500_http_selected_signal_definition(const char *key,
+                                           uint64_t *definition_hash) {
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_active(&g_http_selected_runtime);
+  const DbcSelectedRuntimeSignal *signal =
+    dbc_selected_runtime_find_signal(runtime, key);
+  if (signal == NULL || definition_hash == NULL) {
+    return 1;
+  }
+  *definition_hash = signal->definition_hash;
+  return 0;
+}
+
+int w5500_http_selected_log_signal(
+  uint64_t active_generation,
+  uint32_t selection_crc32,
+  uint16_t signal_index,
+  DbcSelectedRuntimeSignal *signal,
+  SignalValueSnapshot *value) {
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_active(&g_http_selected_runtime);
+  if (runtime == NULL || signal == NULL || value == NULL ||
+      runtime->runtime_generation != active_generation ||
+      runtime->selection_crc32 != selection_crc32 ||
+      signal_index >= runtime->signal_count) {
+    return 1;
+  }
+  *signal = runtime->signals[signal_index];
+  if (!dbc_selected_runtime_copy_active_value(
+        &g_http_selected_runtime, signal->value_state_index, value)) {
+    return 2;
+  }
+  const DbcSelectedRuntime *current =
+    dbc_selected_runtime_active(&g_http_selected_runtime);
+  return current == runtime &&
+         current->runtime_generation == active_generation &&
+         current->selection_crc32 == selection_crc32 ? 0 : 3;
 }
 
 static int http_send_bytes(const uint8_t *data, size_t len) {
@@ -1988,6 +2137,57 @@ static int http_handle_candidate_query(const char *request) {
                             response_len);
 }
 
+static int http_handle_selected_signals(const char *request) {
+  const char *target = request + sizeof("GET ") - 1u;
+  const char *target_end = strchr(target, ' ');
+  SignalApiQuery query;
+  SignalApiPage page;
+  size_t response_len = 0u;
+  SignalApiStatus status;
+
+  if (target_end == NULL) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 400u,
+                                "invalid_signals_query",
+                                "invalid signals query");
+  }
+  status = signal_api_parse_get_target(
+    target, (size_t)(target_end - target), &query);
+  if (status != SIGNAL_API_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 400u,
+                                signal_api_status_string(status),
+                                "invalid signals query");
+  }
+  status = signal_api_build_selected_page(
+    &g_http_selected_runtime, &query, HAL_GetTick(),
+    LARGE_DBC_SIGNAL_STALE_AFTER_MS, &page);
+  if (status == SIGNAL_API_INVALID_STATE) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 503u,
+                                "selected_runtime_unavailable",
+                                "selected runtime unavailable");
+  }
+  if (status == SIGNAL_API_SNAPSHOT_BUSY) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 409u,
+                                "snapshot_busy",
+                                "selected runtime changed");
+  }
+  if (status != SIGNAL_API_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 500u,
+                                signal_api_status_string(status),
+                                "signals snapshot failed");
+  }
+  status = signal_api_serialize_selected_page(
+    &page, g_http_response_body, sizeof(g_http_response_body), &response_len);
+  if (status != SIGNAL_API_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_SIGNALS, 500u,
+                                signal_api_status_string(status),
+                                "signals response failed");
+  }
+  g_w5500_http_signals_count = page.item_count;
+  http_record_request(W5500_HTTP_PATH_SIGNALS, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body,
+                            response_len);
+}
+
 static bool http_candidate_token_matches(
   const char *token, const DbcCandidateDescriptor *candidate) {
   uint64_t generation = 0u;
@@ -2124,76 +2324,104 @@ static int http_handle_candidate_selection(const char *body,
                             response_len);
 }
 
-static bool http_parse_rule_value(const char *body, const char *key, uint32_t *value) {
-  const char *entry = strstr(body, key);
-  char *end = NULL;
-  unsigned long parsed;
-
-  if (entry == NULL) {
-    return false;
+static int http_handle_active_commit(void) {
+  size_t ignored_rule_count = 0u;
+  const int rule_source = active_copy_rule_requirements(
+    g_http_active_rule_requirements, &ignored_rule_count);
+  if (rule_source == 2) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "rule_definition_unbound",
+                                "enabled legacy rule requires confirmation");
   }
-  entry += strlen(key);
-  while (*entry == ' ' || *entry == '\t' || *entry == ':') {
-    ++entry;
+  if (rule_source != 0) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 500u,
+                                "rule_source_invalid",
+                                "rule source invalid");
   }
-  parsed = strtoul(entry, &end, 10);
-  if (end == entry || parsed > 0xfffffffful) {
-    return false;
+  const HttpCandidateMutationGate gate = candidate_mutation_begin();
+  if (gate != HTTP_CANDIDATE_MUTATION_OK) {
+    return http_candidate_error(
+      W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+      gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+        "logging_active" : "candidate_busy",
+      "active commit blocked");
   }
-  *value = (uint32_t)parsed;
-  return true;
-}
-
-static int http_handle_rule_config(const char *body, size_t body_len) {
-  uint32_t on_threshold;
-  uint32_t off_threshold;
-  uint32_t delay_ms;
-  uint32_t timeout_ms;
-  const uint32_t generation = g_rule_task_config_generation;
-
-  if (body_len == 0u || body_len >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
-      !http_parse_rule_value(body, "\"onThreshold\"", &on_threshold) ||
-      !http_parse_rule_value(body, "\"offThreshold\"", &off_threshold) ||
-      !http_parse_rule_value(body, "\"delayMs\"", &delay_ms) ||
-      !http_parse_rule_value(body, "\"timeoutMs\"", &timeout_ms) ||
-      on_threshold <= off_threshold || delay_ms > timeout_ms) {
-    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 400u);
-    return http_send_json_error(400u, "invalid_rule_config", "invalid rule config");
+  if (w5500_http_request_active_commit() != 0) {
+    candidate_mutation_end();
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "active_busy",
+                                "active queue unavailable");
   }
-
-  g_rule_task_config_pending_on_threshold = on_threshold;
-  g_rule_task_config_pending_off_threshold = off_threshold;
-  g_rule_task_config_pending_delay_ms = delay_ms;
-  g_rule_task_config_pending_timeout_ms = timeout_ms;
-  g_rule_task_config_result = 0xffffffffu;
-  g_rule_task_config_save_request = 1u;
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_task_config_save_request == 0u && g_rule_task_config_result != 0xffffffffu) {
-      break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1u));
+  if (!http_wait_candidate_flag(&g_w5500_http_active_complete, 120000u)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 504u,
+                                "active_completion_timeout",
+                                "query runtime state");
   }
-  if (g_rule_task_config_save_request != 0u || g_rule_task_config_result != 0u) {
-    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 500u);
-    return http_send_json_error(500u, "rule_config_save_failed", "rule config save failed");
+  LargeDbcActiveStm32Status status;
+  LargeDbcActiveResult active;
+  taskENTER_CRITICAL();
+  status = (LargeDbcActiveStm32Status)
+    g_w5500_http_active_transaction_result;
+  active = g_http_active_backend_result;
+  taskEXIT_CRITICAL();
+  if (status == LARGE_DBC_ACTIVE_STM32_LOGGING_ACTIVE) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "logging_active",
+                                "active rejected while logging");
   }
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_task_config_generation != generation && g_rule_task_config_reload == 0u) {
-      break;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1u));
+  if (status == LARGE_DBC_ACTIVE_STM32_RULE_KEY_MISSING) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "rule_key_missing",
+                                "enabled rule key not selected");
   }
-  if (g_rule_task_config_generation == generation || g_rule_task_config_reload != 0u) {
-    http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 500u);
-    return http_send_json_error(500u, "rule_config_reload_failed", "rule config reload pending");
+  if (status == LARGE_DBC_ACTIVE_STM32_RULE_DEFINITION_CONFLICT) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "rule_definition_conflict",
+                                "enabled rule definition changed");
   }
-  const size_t response_len = build_rule_config_body(g_http_response_body,
-                                                     sizeof(g_http_response_body));
-  if (response_len >= sizeof(g_http_response_body)) {
-    return 1;
+  if (status == LARGE_DBC_ACTIVE_STM32_NOT_FOUND) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 404u,
+                                "candidate_unavailable",
+                                "candidate unavailable");
   }
-  http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 200u);
-  return http_send_response(200u, "application/json", g_http_response_body, response_len);
+  if (status == LARGE_DBC_ACTIVE_STM32_GENERATION_EXHAUSTED) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
+                                "generation_exhausted",
+                                "active generation exhausted");
+  }
+  if (status == LARGE_DBC_ACTIVE_STM32_VERIFY_FAILED ||
+      status == LARGE_DBC_ACTIVE_STM32_RUNTIME_FAILED) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 422u,
+                                "active_validation_failed",
+                                "candidate cannot form runtime");
+  }
+  if (status != LARGE_DBC_ACTIVE_STM32_OK) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 507u,
+                                "active_persist_failed",
+                                "active transaction failed");
+  }
+  const int written = snprintf(
+    g_http_response_body, sizeof(g_http_response_body),
+    "{\"ok\":true,\"data\":{\"activeGeneration\":\"%08lX%08lX\","
+    "\"candidateGeneration\":\"%08lX%08lX\",\"selectedCount\":%u,"
+    "\"selectedMessageCount\":%u,\"selectionCrc32\":\"%08lX\","
+    "\"runtimeSlot\":%u}}",
+    (unsigned long)(active.active.active_generation >> 32u),
+    (unsigned long)(uint32_t)active.active.active_generation,
+    (unsigned long)(active.active.candidate_generation >> 32u),
+    (unsigned long)(uint32_t)active.active.candidate_generation,
+    (unsigned)active.active.selected_count,
+    (unsigned)active.active.selected_message_count,
+    (unsigned long)active.active.selection_crc32,
+    (unsigned)active.runtime_slot);
+  if (written < 0 || (size_t)written >= sizeof(g_http_response_body)) {
+    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 500u,
+                                "active_response_failed",
+                                "active committed; query runtime");
+  }
+  http_record_request(W5500_HTTP_PATH_DBC_ACTIVE, 200u);
+  return http_send_response(200u, "application/json", g_http_response_body,
+                            (size_t)written);
 }
 
 enum {
@@ -2381,8 +2609,20 @@ static size_t http_append_u64_decimal(char *body, size_t len, size_t used, uint6
   return used;
 }
 
+static const char *selected_log_state_name(uint8_t state) {
+  switch ((SelectedSignalLogState)state) {
+    case SELECTED_SIGNAL_LOG_STOPPED: return "STOPPED";
+    case SELECTED_SIGNAL_LOG_STARTING: return "STARTING";
+    case SELECTED_SIGNAL_LOG_ACTIVE: return "ACTIVE";
+    case SELECTED_SIGNAL_LOG_STOPPING: return "STOPPING";
+    case SELECTED_SIGNAL_LOG_FAILED: return "FAILED";
+    default: return "INVALID";
+  }
+}
+
 static size_t build_log_control_body(char *body, size_t len) {
   SignalLogControl control;
+  SelectedSignalLogSession session;
   uint64_t unix_ms = 0u;
   size_t used;
   int written;
@@ -2390,6 +2630,7 @@ static size_t build_log_control_body(char *body, size_t len) {
 
   taskENTER_CRITICAL();
   control = g_signal_log_control;
+  session = g_selected_signal_log_session;
   taskEXIT_CRITICAL();
   (void)signal_log_control_unix_ms(&control, now_ms, &unix_ms);
   written = snprintf(body,
@@ -2405,8 +2646,18 @@ static size_t build_log_control_body(char *body, size_t len) {
   if (used >= len) {
     return len;
   }
-  written = snprintf(body + used, len - used, ",\"utcOffsetMin\":%d,\"path\":\"%s\"}}",
-                     (int)control.utc_offset_min, signal_log_control_session_path(&control));
+  written = snprintf(
+    body + used, len - used,
+    ",\"utcOffsetMin\":%d,\"path\":\"%s\","
+    "\"state\":\"%s\",\"activeGeneration\":\"%08lX%08lX\","
+    "\"selectionCrc32\":\"%08lX\",\"selectedCount\":%u}}",
+    (int)control.utc_offset_min,
+    session.identity.csv_path,
+    selected_log_state_name(session.state),
+    (unsigned long)(session.identity.active_generation >> 32u),
+    (unsigned long)session.identity.active_generation,
+    (unsigned long)session.identity.selection_crc32,
+    (unsigned)session.identity.selected_count);
   if (written < 0 || (size_t)written >= len - used) {
     return len;
   }
@@ -2439,6 +2690,7 @@ static int http_handle_log_control(const char *body, size_t body_len) {
   uint64_t unix_ms = 0u;
   int32_t utc_offset_min;
   SignalLogControl control;
+  SelectedSignalLogSession session;
 
   if (!http_form_parse_log_control(body, body_len, &enabled, &sample_period_ms, &has_unix_ms, &unix_ms,
                                    &utc_offset_min)) {
@@ -2452,25 +2704,119 @@ static int http_handle_log_control(const char *body, size_t body_len) {
   }
   taskENTER_CRITICAL();
   control = g_signal_log_control;
-  if (enabled && g_http_candidate_mutation_busy != 0u) {
-    taskEXIT_CRITICAL();
-    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 409u);
-    return http_send_json_error(409u, "candidate_busy",
-                                "candidate mutation in progress");
-  }
-  if (enabled && !has_unix_ms && !control.time_synced) {
-    taskEXIT_CRITICAL();
-    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
-    return http_send_json_error(400u, "time_not_synced", "starting log requires unixMs");
-  }
-  if (!signal_log_control_set(&control, enabled, sample_period_ms, has_unix_ms, unix_ms, HAL_GetTick(),
-                              utc_offset_min)) {
-    taskEXIT_CRITICAL();
-    http_record_request(W5500_HTTP_PATH_LOG_CONTROL, 400u);
-    return http_send_json_error(400u, "invalid_log_control", "unable to apply log control");
-  }
-  g_signal_log_control = control;
+  session = g_selected_signal_log_session;
   taskEXIT_CRITICAL();
+
+  if (!enabled) {
+    if (session.state == SELECTED_SIGNAL_LOG_STARTING ||
+        session.state == SELECTED_SIGNAL_LOG_STOPPING) {
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 409u,
+                                  "log_transition_busy", "");
+    }
+    if (session.state == SELECTED_SIGNAL_LOG_ACTIVE) {
+      if (selected_signal_log_session_transition(
+            &session, SELECTED_SIGNAL_LOG_STOPPING) !=
+          SELECTED_SIGNAL_LOG_OK) {
+        return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 409u,
+                                    "invalid_log_state", "");
+      }
+    } else if (session.state == SELECTED_SIGNAL_LOG_FAILED) {
+      (void)selected_signal_log_session_transition(
+        &session, SELECTED_SIGNAL_LOG_STOPPED);
+      control.enabled = false;
+    } else {
+      control.enabled = false;
+    }
+    taskENTER_CRITICAL();
+    g_selected_signal_log_session = session;
+    g_signal_log_control = control;
+    taskEXIT_CRITICAL();
+  } else {
+    if (session.state == SELECTED_SIGNAL_LOG_FAILED) {
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 409u,
+                                  "log_failed_needs_reset", "");
+    }
+    const HttpCandidateMutationGate gate = candidate_mutation_begin();
+    if (gate != HTTP_CANDIDATE_MUTATION_OK) {
+      return http_candidate_error(
+        W5500_HTTP_PATH_LOG_CONTROL, 409u,
+        gate == HTTP_CANDIDATE_MUTATION_LOGGING ?
+          "logging_active" : "candidate_busy",
+        "");
+    }
+    const uint32_t now_ms = HAL_GetTick();
+    if (!signal_log_control_set(&control, true, sample_period_ms,
+                                has_unix_ms, unix_ms, now_ms,
+                                utc_offset_min)) {
+      candidate_mutation_end();
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 400u,
+                                  "time_not_synced", "");
+    }
+    const DbcSelectedRuntime *runtime =
+      dbc_selected_runtime_active(&g_http_selected_runtime);
+    if (runtime == NULL) {
+      candidate_mutation_end();
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 503u,
+                                  "selected_runtime_unavailable", "");
+    }
+    if (!selected_signal_log_admissible(runtime->signal_count,
+                                        sample_period_ms)) {
+      candidate_mutation_end();
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 422u,
+                                  "rate_limit", "");
+    }
+    SelectedSignalLogIdentity identity;
+    memset(&identity, 0, sizeof(identity));
+    identity.meta_format_version = SELECTED_SIGNAL_LOG_META_FORMAT_VERSION;
+    identity.csv_format_version = SELECTED_SIGNAL_LOG_CSV_FORMAT_VERSION;
+    identity.selected_count = runtime->signal_count;
+    identity.active_generation = runtime->runtime_generation;
+    identity.candidate_generation = runtime->candidate_generation;
+    identity.source_size = runtime->source_size;
+    identity.source_crc32 = runtime->source_crc32;
+    identity.selection_crc32 = runtime->selection_crc32;
+    identity.sample_period_ms = sample_period_ms;
+    identity.start_unix_ms = control.session_start_unix_ms;
+    memcpy(identity.firmware_build_id, "large-dbc-g-v1",
+           sizeof("large-dbc-g-v1"));
+    SelectedSignalLogStatus log_status = selected_signal_log_format_paths(
+      identity.start_unix_ms, control.session_utc_offset_min,
+      identity.csv_path, sizeof(identity.csv_path),
+      identity.meta_path, sizeof(identity.meta_path));
+    if (log_status != SELECTED_SIGNAL_LOG_OK) {
+      candidate_mutation_end();
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 500u,
+                                  "log_path_failed", "");
+    }
+    size_t ignored_size = 0u;
+    const int csv_size_result = stm32h750_tf_file_size_locked(
+      identity.csv_path, &ignored_size);
+    ignored_size = 0u;
+    const int meta_size_result = stm32h750_tf_file_size_locked(
+      identity.meta_path, &ignored_size);
+    if ((csv_size_result != 0 && csv_size_result != FR_NO_FILE) ||
+        (meta_size_result != 0 && meta_size_result != FR_NO_FILE)) {
+      candidate_mutation_end();
+      return http_candidate_error(W5500_HTTP_PATH_LOG_CONTROL, 500u,
+                                  "log_path_check_failed", "");
+    }
+    selected_signal_log_session_init(&session);
+    log_status = selected_signal_log_session_prepare(
+      &session, &identity, csv_size_result == 0, meta_size_result == 0);
+    if (log_status != SELECTED_SIGNAL_LOG_OK) {
+      candidate_mutation_end();
+      const uint16_t code =
+        log_status == SELECTED_SIGNAL_LOG_RATE_LIMIT ? 422u : 409u;
+      return http_candidate_error(
+        W5500_HTTP_PATH_LOG_CONTROL, code,
+        selected_signal_log_status_string(log_status), "");
+    }
+    taskENTER_CRITICAL();
+    g_signal_log_control = control;
+    g_selected_signal_log_session = session;
+    taskEXIT_CRITICAL();
+    candidate_mutation_end();
+  }
   {
     const size_t response_len = build_log_control_body(g_http_response_body, sizeof(g_http_response_body));
     if (response_len >= sizeof(g_http_response_body)) return 1;
@@ -2672,31 +3018,102 @@ static bool http_form_parse_rule(const char *body,
 }
 
 static int http_validate_rule_signal_key(const char *signal_key) {
-  const DbcDatabase *db;
-  int result;
-
-  if (w5500_http_dbc_lock() != 0) {
+  uint64_t definition_hash = 0u;
+  if (w5500_http_selected_runtime_available() == 0) {
     return -1;
   }
-  db = w5500_http_active_dbc_snapshot();
-  result = db == NULL ? -1 : (dbc_signal_catalog_contains(db, signal_key) ? 0 : 1);
-  w5500_http_dbc_unlock();
-  return result;
+  return w5500_http_selected_signal_definition(signal_key,
+                                                &definition_hash) == 0 ? 0 : 1;
+}
+
+static void rule_v5_slot_from_v4(const RuleFileV4Slot *source,
+                                 RuleFileV5Slot *target) {
+  const uint64_t definition_hash = target->definition_hash;
+  memset(target, 0, sizeof(*target));
+  target->enabled = source->enabled;
+  target->relay = source->relay;
+  memcpy(target->signal_key, source->signal_key,
+         sizeof(target->signal_key));
+  target->threshold = source->threshold;
+  target->action_state = source->action_state;
+  target->delay_ms = source->delay_ms;
+  target->timeout_ms = source->timeout_ms;
+  target->safe_state = source->safe_state;
+  target->priority = source->priority;
+  target->definition_hash = definition_hash;
+}
+
+static void rule_v4_slot_from_v5(const RuleFileV5Slot *source,
+                                 RuleFileV4Slot *target) {
+  memset(target, 0, sizeof(*target));
+  target->enabled = source->enabled;
+  target->relay = source->relay;
+  memcpy(target->signal_key, source->signal_key,
+         sizeof(target->signal_key));
+  target->threshold = source->threshold;
+  target->action_state = source->action_state;
+  target->delay_ms = source->delay_ms;
+  target->timeout_ms = source->timeout_ms;
+  target->safe_state = source->safe_state;
+  target->priority = source->priority;
+}
+
+static bool rule_v5_seed_disabled_keys(RuleFileV5 *rules) {
+  if (rules == NULL) {
+    return false;
+  }
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_active(&g_http_selected_runtime);
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    if (rules->slots[slot].signal_key[0] != '\0') {
+      continue;
+    }
+    if (rules->slots[slot].enabled) {
+      return false;
+    }
+    if (runtime == NULL || runtime->signal_count == 0u) {
+      return false;
+    }
+    const DbcSelectedRuntimeSignal *signal =
+      &runtime->signals[slot < runtime->signal_count ? slot : 0u];
+    memcpy(rules->slots[slot].signal_key, signal->key,
+           sizeof(rules->slots[slot].signal_key));
+    rules->slots[slot].definition_hash = signal->definition_hash;
+  }
+  return true;
 }
 
 static int http_handle_rules_write(uint32_t operation, int path_slot, const char *body, size_t body_len) {
   RuleFileV4 candidate;
+  RuleFileV5 candidate_v5 = {0};
   RuleFileV4Slot replacement = {0};
   uint32_t slot = path_slot >= 0 ? (uint32_t)path_slot : 0u;
   const uint32_t generation = g_rule_task_config_generation;
   uint16_t code = 200u;
 
-  if (g_rule_file_v4_load_result != 0u && g_rule_file_v3_load_result != 0u &&
-      g_rule_file_v2_load_result != 0u) {
-    http_record_request(W5500_HTTP_PATH_RULES, 500u);
-    return http_send_json_error(500u, "rules_source_unavailable", "valid v2 or v3 rules required");
+  if (g_signal_log_control.enabled) {
+    return http_candidate_error(W5500_HTTP_PATH_RULES, 409u,
+                                "logging_active", "");
   }
-  candidate = g_rule_file_v4_current;
+  if (g_rule_file_v5_load_result != 0u &&
+      g_rule_file_v5_load_result != 1u &&
+      g_rule_file_v5_load_result != 7u) {
+    return http_candidate_error(W5500_HTTP_PATH_RULES, 409u,
+                                "v5_rule_file_invalid", "");
+  }
+  if (g_rule_file_v5_load_result != 0u && operation != HTTP_RULES_POST) {
+    return http_candidate_error(W5500_HTTP_PATH_RULES, 409u,
+                                "v5_rule_confirmation_required", "");
+  }
+
+  memset(&candidate, 0, sizeof(candidate));
+  candidate_v5 = g_rule_file_v5_current;
+  for (size_t candidate_slot = 0u;
+       candidate_slot < RULE_FILE_V2_RULE_COUNT;
+       ++candidate_slot) {
+    rule_v4_slot_from_v5(&candidate_v5.slots[candidate_slot],
+                         &candidate.slots[candidate_slot]);
+  }
   if (operation == HTTP_RULES_DELETE) {
     if (body_len != 0u) {
       http_record_request(W5500_HTTP_PATH_RULES, 400u);
@@ -2745,19 +3162,42 @@ static int http_handle_rules_write(uint32_t operation, int path_slot, const char
     http_record_request(W5500_HTTP_PATH_RULES, 400u);
     return http_send_json_error(400u, "invalid_rule", "invalid rule set");
   }
+  for (size_t candidate_slot = 0u;
+       candidate_slot < RULE_FILE_V2_RULE_COUNT;
+       ++candidate_slot) {
+    rule_v5_slot_from_v4(&candidate.slots[candidate_slot],
+                         &candidate_v5.slots[candidate_slot]);
+    if (candidate_v5.slots[candidate_slot].enabled) {
+      uint64_t definition_hash = 0u;
+      if (w5500_http_selected_signal_definition(
+            candidate_v5.slots[candidate_slot].signal_key,
+            &definition_hash) != 0) {
+        http_record_request(W5500_HTTP_PATH_RULES, 409u);
+        return http_send_json_error(409u, "rule_key_missing",
+                                    "enabled rule key is not selected");
+      }
+      candidate_v5.slots[candidate_slot].definition_hash = definition_hash;
+    }
+  }
+  if (!rule_v5_seed_disabled_keys(&candidate_v5)) {
+    http_record_request(W5500_HTTP_PATH_RULES, 409u);
+    return http_send_json_error(409u, "dbc_unavailable",
+                                "selected runtime required");
+  }
 
-  g_rule_file_v4_pending = candidate;
-  g_rule_file_v4_save_result = 0xffffffffu;
-  g_rule_file_v4_save_request = 1u;
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_file_v4_save_request == 0u && g_rule_file_v4_save_result != 0xffffffffu) break;
+  g_rule_file_v5_pending = candidate_v5;
+  g_rule_file_v5_save_result = 0xffffffffu;
+  g_rule_file_v5_save_request = 1u;
+  for (uint32_t wait_ms = 0u; wait_ms < 2000u; ++wait_ms) {
+    if (g_rule_file_v5_save_request == 0u &&
+        g_rule_file_v5_save_result != 0xffffffffu) break;
     vTaskDelay(pdMS_TO_TICKS(1u));
   }
-  if (g_rule_file_v4_save_request != 0u || g_rule_file_v4_save_result != 0u) {
+  if (g_rule_file_v5_save_request != 0u || g_rule_file_v5_save_result != 0u) {
     http_record_request(W5500_HTTP_PATH_RULES, 500u);
     return http_send_json_error(500u, "rule_save_failed", "rule file save failed");
   }
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
+  for (uint32_t wait_ms = 0u; wait_ms < 2000u; ++wait_ms) {
     if (g_rule_task_config_generation != generation && g_rule_task_engine_reload == 0u &&
         g_rule_task_config_result == 0u) break;
     vTaskDelay(pdMS_TO_TICKS(1u));
@@ -3148,8 +3588,9 @@ static int http_handle_request(uint16_t rx_size) {
     }
     body_offset = (size_t)((header_end + 4u) - request);
     if (body_offset > read_len) return W5500_HTTP_HANDLE_WAIT;
+    const bool body_optional = rules_operation == HTTP_RULES_DELETE;
     has_content_length = http_parse_content_length(request, header_end, &content_length);
-    if ((!has_content_length && rules_operation != HTTP_RULES_DELETE) ||
+    if ((!has_content_length && !body_optional) ||
         content_length > W5500_HTTP_RULES_BODY_MAX ||
         (has_content_length && (size_t)rx_size < body_offset + content_length)) {
       if ((has_content_length && (size_t)rx_size < body_offset + content_length) &&
@@ -3158,7 +3599,7 @@ static int http_handle_request(uint16_t rx_size) {
       http_record_request(W5500_HTTP_PATH_RULES, 400u);
       return http_send_json_error(400u, "bad_request", "invalid rules body");
     }
-    if ((rules_operation != HTTP_RULES_DELETE && content_length == 0u) ||
+    if ((!body_optional && content_length == 0u) ||
         body_offset + content_length > read_len ||
         (size_t)rx_size != body_offset + content_length) {
       if (http_consume_rx(rx_rd, rx_size) != 0) return W5500_HTTP_HANDLE_ERROR;
@@ -3299,31 +3740,6 @@ static int http_handle_request(uint16_t rx_size) {
              ? W5500_HTTP_HANDLE_OK
              : W5500_HTTP_HANDLE_ERROR;
   }
-  if (request_path_is(request, "POST", "/api/rule/config")) {
-    if (header_end == NULL) {
-      return W5500_HTTP_HANDLE_WAIT;
-    }
-    const size_t body_offset = (size_t)((header_end + 4u) - request);
-    size_t content_length = 0u;
-    if (!http_parse_content_length(request, header_end, &content_length) ||
-        content_length == 0u || content_length >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
-        (size_t)rx_size < body_offset + content_length ||
-        body_offset + content_length >= W5500_HTTP_REQUEST_BUFFER_SIZE ||
-        body_offset + content_length > read_len) {
-      if (http_consume_rx(rx_rd, rx_size) != 0) {
-        return W5500_HTTP_HANDLE_ERROR;
-      }
-      http_record_request(W5500_HTTP_PATH_RULE_CONFIG, 400u);
-      return http_send_json_error(400u, "bad_request", "invalid rule config body");
-    }
-    if (http_consume_rx(rx_rd, rx_size) != 0) {
-      return W5500_HTTP_HANDLE_ERROR;
-    }
-    request[body_offset + content_length] = '\0';
-    return http_handle_rule_config(&request[body_offset], content_length) == 0
-             ? W5500_HTTP_HANDLE_OK
-             : W5500_HTTP_HANDLE_ERROR;
-  }
   if (request_path_is(request, "POST", "/api/dbc/selection")) {
     size_t content_length = 0u;
     size_t body_offset;
@@ -3429,9 +3845,7 @@ static int http_handle_request(uint16_t rx_size) {
     if (http_consume_rx(rx_rd, rx_size) != 0) {
       return W5500_HTTP_HANDLE_ERROR;
     }
-    return http_candidate_error(W5500_HTTP_PATH_DBC_ACTIVE, 409u,
-                                "active_stage_pending",
-                                "active_stage_pending") == 0 ?
+    return http_handle_active_commit() == 0 ?
       W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
   }
 
@@ -3441,7 +3855,6 @@ static int http_handle_request(uint16_t rx_size) {
 
   uint16_t code = 404u;
   uint32_t path_code = 0u;
-  uint32_t dbc_signals_page = 0u;
   size_t body_len = 0u;
   const char *content_type = "application/json";
   if (request_path_is(request, "GET", "/api/status")) {
@@ -3472,18 +3885,9 @@ static int http_handle_request(uint16_t rx_size) {
                              "/api/dbc/candidate/signals")) {
     return http_handle_candidate_query(request) == 0 ?
       W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
-  } else if (request_dbc_signals_page(request, &dbc_signals_page)) {
-    code = 200u;
-    path_code = W5500_HTTP_PATH_DBC_SIGNALS;
-    body_len = build_dbc_signals_body(body, sizeof(g_http_response_body), dbc_signals_page);
   } else if (request_path_is(request, "GET", "/api/signals")) {
-    code = 200u;
-    path_code = W5500_HTTP_PATH_SIGNALS;
-    body_len = build_signals_body(body, sizeof(g_http_response_body));
-  } else if (request_path_is(request, "GET", "/api/rule/config")) {
-    code = 200u;
-    path_code = W5500_HTTP_PATH_RULE_CONFIG;
-    body_len = build_rule_config_body(body, sizeof(g_http_response_body));
+    return http_handle_selected_signals(request) == 0 ?
+      W5500_HTTP_HANDLE_OK : W5500_HTTP_HANDLE_ERROR;
   } else if (request_path_is(request, "GET", "/api/rules")) {
     code = 200u;
     path_code = W5500_HTTP_PATH_RULES;

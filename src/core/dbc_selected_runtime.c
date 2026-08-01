@@ -2,8 +2,13 @@
 
 #include <string.h>
 
-_Static_assert(sizeof(DbcSelectedRuntimeSnapshot) <= 48u * 1024u,
-               "selected runtime slots exceeded the 48 KiB sub-budget");
+_Static_assert(sizeof(DbcSelectedRuntimeSnapshot) <=
+                 LARGE_DBC_STATIC_RAM_BUDGET_BYTES,
+               "selected runtime and value slots exceeded the P0 RAM budget");
+_Static_assert(sizeof(SignalValueState) <= 32u,
+               "signal value state must remain a small numeric slot");
+_Static_assert(sizeof(SignalValueSnapshot) <= 32u,
+               "signal value snapshot must remain a small numeric copy");
 
 static uint8_t inactive_slot(const DbcSelectedRuntimeSnapshot *snapshot) {
   return snapshot->has_active ? (uint8_t)(snapshot->active_slot ^ 1u) : 0u;
@@ -270,7 +275,8 @@ static DbcSelectedRuntimeStatus construct_runtime(
   return check_rules(runtime, request->rules, request->rule_count);
 }
 
-DbcSelectedRuntimeStatus dbc_selected_runtime_build_inactive(
+__attribute__((noinline)) DbcSelectedRuntimeStatus
+dbc_selected_runtime_build_inactive(
   DbcSelectedRuntimeSnapshot *snapshot,
   const DbcSelectedRuntimeBuildRequest *request) {
   if (snapshot == NULL) {
@@ -282,6 +288,8 @@ DbcSelectedRuntimeStatus dbc_selected_runtime_build_inactive(
     return status;
   }
   const uint8_t slot = inactive_slot(snapshot);
+  memset(snapshot->value_slots[slot], 0,
+         sizeof(snapshot->value_slots[slot]));
   status = construct_runtime(&snapshot->slots[slot], request);
   if (status != DBC_SELECTED_RUNTIME_OK) {
     memset(&snapshot->slots[slot], 0, sizeof(snapshot->slots[slot]));
@@ -292,7 +300,7 @@ DbcSelectedRuntimeStatus dbc_selected_runtime_build_inactive(
   return DBC_SELECTED_RUNTIME_OK;
 }
 
-DbcSelectedRuntimeStatus dbc_selected_runtime_publish_prepared(
+DbcSelectedRuntimeStatus dbc_selected_runtime_discard_prepared(
   DbcSelectedRuntimeSnapshot *snapshot) {
   if (snapshot == NULL) {
     return DBC_SELECTED_RUNTIME_INVALID_ARGUMENT;
@@ -300,10 +308,62 @@ DbcSelectedRuntimeStatus dbc_selected_runtime_publish_prepared(
   if (!snapshot->has_prepared) {
     return DBC_SELECTED_RUNTIME_NOT_PREPARED;
   }
+
+  const uint8_t slot = snapshot->prepared_slot;
+  snapshot->has_prepared = false;
+  snapshot->prepared_slot = 0u;
+  if (slot >= 2u || (snapshot->has_active && slot == snapshot->active_slot)) {
+    return DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH;
+  }
+  memset(&snapshot->slots[slot], 0, sizeof(snapshot->slots[slot]));
+  memset(snapshot->value_slots[slot], 0,
+         sizeof(snapshot->value_slots[slot]));
+  return DBC_SELECTED_RUNTIME_OK;
+}
+
+__attribute__((noinline)) DbcSelectedRuntimeStatus
+dbc_selected_runtime_publish_prepared_checked(
+  DbcSelectedRuntimeSnapshot *snapshot,
+  uint64_t expected_runtime_generation,
+  uint8_t expected_prepared_slot) {
+  if (snapshot == NULL) {
+    return DBC_SELECTED_RUNTIME_INVALID_ARGUMENT;
+  }
+  if (!snapshot->has_prepared) {
+    return DBC_SELECTED_RUNTIME_NOT_PREPARED;
+  }
+  if (expected_prepared_slot >= 2u ||
+      snapshot->prepared_slot != expected_prepared_slot ||
+      (snapshot->has_active &&
+       snapshot->prepared_slot == snapshot->active_slot)) {
+    return DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH;
+  }
+  if (expected_runtime_generation == 0u ||
+      snapshot->slots[snapshot->prepared_slot].runtime_generation !=
+        expected_runtime_generation) {
+    return DBC_SELECTED_RUNTIME_PREPARED_GENERATION_MISMATCH;
+  }
   snapshot->active_slot = snapshot->prepared_slot;
   snapshot->has_active = true;
   snapshot->has_prepared = false;
   return DBC_SELECTED_RUNTIME_OK;
+}
+
+__attribute__((noinline)) DbcSelectedRuntimeStatus
+dbc_selected_runtime_publish_prepared(
+  DbcSelectedRuntimeSnapshot *snapshot) {
+  if (snapshot == NULL) {
+    return DBC_SELECTED_RUNTIME_INVALID_ARGUMENT;
+  }
+  if (!snapshot->has_prepared || snapshot->prepared_slot >= 2u) {
+    return snapshot->has_prepared ?
+      DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH :
+      DBC_SELECTED_RUNTIME_NOT_PREPARED;
+  }
+  return dbc_selected_runtime_publish_prepared_checked(
+    snapshot,
+    snapshot->slots[snapshot->prepared_slot].runtime_generation,
+    snapshot->prepared_slot);
 }
 
 const DbcSelectedRuntime *dbc_selected_runtime_active(
@@ -314,8 +374,52 @@ const DbcSelectedRuntime *dbc_selected_runtime_active(
 
 const DbcSelectedRuntime *dbc_selected_runtime_prepared(
   const DbcSelectedRuntimeSnapshot *snapshot) {
-  return snapshot != NULL && snapshot->has_prepared ?
+  return snapshot != NULL && snapshot->has_prepared &&
+         snapshot->prepared_slot < 2u &&
+         (!snapshot->has_active ||
+          snapshot->prepared_slot != snapshot->active_slot) ?
     &snapshot->slots[snapshot->prepared_slot] : NULL;
+}
+
+SignalValueState *dbc_selected_runtime_active_value_slots(
+  DbcSelectedRuntimeSnapshot *snapshot) {
+  return snapshot != NULL && snapshot->has_active ?
+    snapshot->value_slots[snapshot->active_slot] : NULL;
+}
+
+bool dbc_selected_runtime_copy_active_value(
+  const DbcSelectedRuntimeSnapshot *snapshot,
+  uint16_t value_state_index,
+  SignalValueSnapshot *out_value) {
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_active(snapshot);
+  if (runtime == NULL || out_value == NULL ||
+      value_state_index >= runtime->signal_count) {
+    return false;
+  }
+
+  const SignalValueState *state =
+    &snapshot->value_slots[snapshot->active_slot][value_state_index];
+  for (uint8_t attempt = 0u; attempt < 3u; ++attempt) {
+    const uint32_t before = state->update_seq;
+    if ((before & 1u) != 0u) {
+      continue;
+    }
+    SignalValueSnapshot value = {
+      .value = state->value,
+      .raw = state->raw,
+      .updated_ms = state->updated_ms,
+      .update_seq = before,
+      .quality = (SignalValueQuality)state->quality
+    };
+    const uint32_t after = state->update_seq;
+    if (before == after && (after & 1u) == 0u) {
+      value.update_seq = after;
+      *out_value = value;
+      return true;
+    }
+  }
+  return false;
 }
 
 const char *dbc_selected_runtime_status_string(DbcSelectedRuntimeStatus status) {
@@ -332,6 +436,10 @@ const char *dbc_selected_runtime_status_string(DbcSelectedRuntimeStatus status) 
     case DBC_SELECTED_RUNTIME_RULE_DEFINITION_CONFLICT:
       return "rule_definition_conflict";
     case DBC_SELECTED_RUNTIME_NOT_PREPARED: return "not_prepared";
+    case DBC_SELECTED_RUNTIME_PREPARED_GENERATION_MISMATCH:
+      return "prepared_generation_mismatch";
+    case DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH:
+      return "prepared_slot_mismatch";
     default: return "unknown";
   }
 }

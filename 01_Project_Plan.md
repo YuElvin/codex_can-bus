@@ -34,7 +34,7 @@
 | 14 | 网页手动 TX 与两槽 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录新网页后，自动刷新 TX/RX=`55/364→576/5540`，两次编辑 TX 分别在`1800/1300 ms`后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX解析 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时 manual `relay1Output=0`与高优先级 off 一致；warn/error为空。此前构建、反汇编和烧录证据已实际完成。 |
 | 15 | 安全审查 P0 可靠性整改 | [已验证] | IWDG任务卡死复位、Crash Dump保持、DBC边界、SignalCache stale、FDCAN外部高负载和TF持续写入物理断电均完成源码与现场验收。TF首次断电失败后最小修复`CTRL_SYNC`及scratch写路径的卡ready等待；最终CTest=`20/20`、固件构建/反汇编/烧录通过。干净FAT32介质复测中断电后CSV为399223 B/4159行、无撕裂尾行，`fsck_msdos -n`退出0；重新上电后TF/DBC/网络/CAN恢复，新日志文件与write/flush继续增长且failure/drop=0。结论不扩大为FAT32任意掉电时刻的原子保证。 |
 | 16 | HTTP零数据连接回收 | [客观已验证] | 原始TCP连接不发数据可稳定复现唯一socket永久`ESTABLISHED`；只增加100 ms空连接计时并复用既有graceful `DISCON`，不改ACK/recovery/API或业务语义。CTest=`20/20`、最终ELF text/data/bss=`112828/768/243948`、定向反汇编、ST-Link烧录通过；10轮空连接在`110.4..146.3 ms`被回收且后续HTTP均成功，浏览器5次新页面、4次manual提交、最终9 API和ping均通过。 |
-| 17 | 大 DBC selected-only 闭环（A0-H） | [阻断：TF已重建，等待插卡上电] | 真实输入固定为`100071 B/112 BO_/896 SG_`标准Classic CAN/DLC8。TF的MBR/FAT32、权威资产、只读哈希/`cmp`和`fsck_msdos -n=0`已通过并eject；连续三个目标轮次开发板离线且Mac无TF卷。用户插卡上电后必须重新上传100KB输入、生成candidate/selection并完成D浏览器验收，之后才能进入E。旧generation7不作为新卷当前证据，CAN-FD实板路径为`[未验证]`。 |
+| 17 | 大 DBC selected-only 闭环（A0-H） | [A0-F通过，G实板收口中] | candidate9/active7为128项16消息；最终G映像在`0x100+0x110`下RX增量272、matched增量136、updates增量`136×8`且page0八项GOOD/page1 MISSING，selected-only外部隔离通过。6400 ms v3会话已在GOOD输入ACTIVE并锁定generation7/CRC/count；STALE与TF内CSV/meta仍`[待确认]`。生产固件V5-only fail-closed，host保留V1-V4解析测试；H与CAN-FD实板仍`[未验证]`。 |
 
 ## 阶段 C 当前状态
 
@@ -92,3 +92,28 @@
 - 两次刷新运行中编辑 TX 均保留：`C2 A5 78 56 02 03 04 05`经过`1800 ms`后提交成功，`C2 A5 00 01 02 03 04 05`经过`1300 ms`后仍保留并提交恢复；最终 TX DBC `sequence=256`。这关闭此前首次输入被覆盖的问题。
 - 候选 DBC经用户授权激活，runtime最终为`loaded=true/generation=1/bytes=151/messages=1/signals=2`。TX/RX表解析 marker=`42434`，sequence分别为`256/4660`；两槽目录均含 marker/sequence，slot1从V4回读为`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时 manual `relay1Output=0`，符合高优先级 off 规则；此前 RuleFile V4 浮点 threshold=`0`问题已修复并复验关闭。
 - 本条只记录最终现场验收；构建、`objdump`和烧录均为此前实际完成的证据。本轮不把 TX self-test 作为外部接收器证明。
+## 2026-08-01 阶段17 D门禁关闭，进入E
+
+- D已在重建TF和真实100KB DBC上完成实板闭环：板端页面哈希一致；candidate generation1建立；ordinal0..7选择事务产生generation2；每页8项、page1、112项关键词检索、8项仅已选筛选和浏览器console均取得现场证据。
+- E范围冻结为：从candidate/index/selection构造最多128信号、64消息的非活动selected-only runtime；按P0 `definition_hash`检查规则；写入并读回active generation；最后只在短临界区提交active manifest/runtime generation。任一失败必须保持旧active、runtime、规则、SignalCache和日志不变。
+- E阶段禁止顺手实现F/G/H，不扩展HTTP并发、socket、消息总线或全量目录常驻RAM；Classic CAN标准ID+DLC8是本轮首要运行路径，CAN-FD实板仍标记`[未验证]`。
+
+## 2026-08-01 P0 active manifest即时回滚修正
+
+- 只读审计发现现有生产路径虽然能在冷启动时从`previous`恢复，但在manifest旋转后的rename或runtime publish失败时没有立即把旧`previous`恢复为`current`，与P0“任何失败保持旧active”的即时语义不完全一致。
+- 已最小增加同一TF mutex内的rollback：若旧current已轮转，失败时先删除本次current（若有）再将previous重命名回current并完整读验；rollback自身I/O失败时保留previous给启动恢复，绝不删除旧generation对象。host+STM32候选构建通过，但尚未烧录，不能把旧G映像的实板证据贴到新hash。
+
+- 旧G映像的GOOD→STALE门禁已关闭：双ID正向隔离后，停`0x100`保留`0x110`使RX继续增长而page0八项保持末值/raw并全部STALE。6400 ms v3会话已正常STOPPED；但下电取卡后的只读FAT检查返回`fsck_msdos` exit=`206`，current CSV/meta链空闲/长度越界，卷不能只读复挂载。因此实体CSV/meta、clean footer和TF持久化改为`[阻断]`，不能从可见文件名或hash推断通过。先由用户选择只读镜像保全或放弃故障会话重建FAT32；后者完成后必须重新取得G实体日志和未烧录P0回滚候选的最小实板回归。
+- 用户已明确选择允许修复/格式化，故障会话未做镜像而被丢弃。主机将明确识别的外置`/dev/disk4`重建为`MBR + FAT32 CANBUS`，部署清单仅含网页、151 B基线active/candidate DBC和空`log/config/sys`目录；网页和DBC均`cmp`/SHA-256一致，卸载后只读`fsck_msdos -n` exit=`0`，read-only重挂载复核后再次卸载。此为可插板的干净部署基线，不复用损坏卡的large generation、规则或日志。下一门禁是板端冷启动，再从真实100071 B输入重建candidate/selection/active、重做v3实体日志与P0新候选实板回归。
+
+## 2026-08-01 大 DBC P0 修正后的恢复计划
+
+- P0实现：candidate、selection与active manifest轮转失败均即时尝试previous回滚；active runtime publish仍位于manifest后短临界区，失败不发布新runtime。FatFs镜像FAT/FSINFO写错误显式传播为`FR_DISK_ERR`。
+- 静态验证：`./scripts/verify.sh` CTest=`34/34`，FLASH=`121948 B`、RAM_D1=`196672 B`，ELF/HEX=`2d225a84feee60027e294ea6154c1f7e59882680cdb41fb64c39fa7d212dd60a`/`b886bbf945c6d6a74193c258ab1c14a67548fe48968a5b4cf04ac3e0c0a2dc31`；反汇编确认rollback与FatFs失败分支。候选未烧录。
+- 下一门禁：干净卡上板后重新上传真实100071 B DBC、选择/激活，重做外部Classic RX、selected API、v3 CSV/meta和故障恢复。旧损坏会话不计入通过；CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 新介质B–E实板状态
+
+- B/C/D：真实`BNE_CLASSIC_CAN_TEST_100KB.dbc`（100071 B、CRC32=`4B88D9CE`）在板端生成candidate，112消息/896信号；分页检索和selection将ordinal0–7持久化为candidate generation2、8信号/1消息。
+- E：active提交为generation1、candidate2、CRC=`E5CB6C8F`、slot0 selected-only runtime；一次软件复位后最终恢复同一runtime。长响应socket收口缺陷已以`SEND_OK→graceful DISCON`最小修正并实板连续请求复验。
+- F/G/H剩余：外部标准Classic CAN `0x100`正向GOOD、混合`0x100/0x110`反向隔离、停`0x100`后的STALE、含真实数据的v3 CSV/.meta和干净TF只读核验，以及TF写失败/掉电异常路径。CAN-FD实板仍`[未验证]`。

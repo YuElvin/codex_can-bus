@@ -997,3 +997,403 @@ size_t rule_file_format_v4(const RuleFileV4 *rules, char *out_text, size_t out_c
   }
   return used;
 }
+
+enum {
+  RULE_FILE_V5_FIELD_VERSION = 1u << 0,
+  RULE_FILE_V5_FIELD_COUNT = 1u << 1,
+  RULE_FILE_V5_SLOT_FIELD_ENABLED = 1u << 0,
+  RULE_FILE_V5_SLOT_FIELD_RELAY = 1u << 1,
+  RULE_FILE_V5_SLOT_FIELD_SIGNAL_KEY = 1u << 2,
+  RULE_FILE_V5_SLOT_FIELD_THRESHOLD = 1u << 3,
+  RULE_FILE_V5_SLOT_FIELD_ACTION = 1u << 4,
+  RULE_FILE_V5_SLOT_FIELD_DELAY = 1u << 5,
+  RULE_FILE_V5_SLOT_FIELD_TIMEOUT = 1u << 6,
+  RULE_FILE_V5_SLOT_FIELD_SAFE_STATE = 1u << 7,
+  RULE_FILE_V5_SLOT_FIELD_PRIORITY = 1u << 8,
+  RULE_FILE_V5_SLOT_FIELD_DEFINITION_HASH = 1u << 9,
+  RULE_FILE_V5_SLOT_FIELD_ALL = RULE_FILE_V5_SLOT_FIELD_ENABLED |
+                                RULE_FILE_V5_SLOT_FIELD_RELAY |
+                                RULE_FILE_V5_SLOT_FIELD_SIGNAL_KEY |
+                                RULE_FILE_V5_SLOT_FIELD_THRESHOLD |
+                                RULE_FILE_V5_SLOT_FIELD_ACTION |
+                                RULE_FILE_V5_SLOT_FIELD_DELAY |
+                                RULE_FILE_V5_SLOT_FIELD_TIMEOUT |
+                                RULE_FILE_V5_SLOT_FIELD_SAFE_STATE |
+                                RULE_FILE_V5_SLOT_FIELD_PRIORITY |
+                                RULE_FILE_V5_SLOT_FIELD_DEFINITION_HASH,
+};
+
+static bool rule_file_parse_hash64_upper(const uint8_t *text,
+                                         size_t len,
+                                         uint64_t *value) {
+  uint64_t parsed = 0u;
+  if (text == NULL || value == NULL || len != 16u) {
+    return false;
+  }
+  for (size_t i = 0u; i < len; ++i) {
+    uint8_t digit;
+    if (text[i] >= (uint8_t)'0' && text[i] <= (uint8_t)'9') {
+      digit = (uint8_t)(text[i] - (uint8_t)'0');
+    } else if (text[i] >= (uint8_t)'A' && text[i] <= (uint8_t)'F') {
+      digit = (uint8_t)(text[i] - (uint8_t)'A' + 10u);
+    } else {
+      return false;
+    }
+    parsed = (parsed << 4u) | digit;
+  }
+  *value = parsed;
+  return true;
+}
+
+static void rule_file_format_hash64_upper(uint64_t value, char text[17]) {
+  static const char digits[] = "0123456789ABCDEF";
+  for (size_t i = 0u; i < 16u; ++i) {
+    text[15u - i] = digits[value & UINT64_C(0x0f)];
+    value >>= 4u;
+  }
+  text[16] = '\0';
+}
+
+static bool rule_file_signal_key_is_round_trip_safe(const char *key,
+                                                    size_t capacity) {
+  const char *end;
+  if (key == NULL || capacity == 0u) {
+    return false;
+  }
+  end = (const char *)memchr(key, '\0', capacity);
+  if (end == NULL || end == key) {
+    return false;
+  }
+  for (const char *cursor = key; cursor < end; ++cursor) {
+    if (*cursor == '\r' || *cursor == '\n' || *cursor == '=') {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool rule_file_v4_slots_are_valid(const RuleFileV4 *rules) {
+  if (rules == NULL ||
+      rules->slots[0].priority == rules->slots[1].priority) {
+    return false;
+  }
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const RuleFileV4Slot *rule = &rules->slots[slot];
+    char threshold[32];
+    if (rule->relay >= RULE_RELAY_COUNT ||
+        !rule_file_signal_key_is_round_trip_safe(rule->signal_key,
+                                                 sizeof(rule->signal_key)) ||
+        rule_file_format_decimal(rule->threshold, threshold,
+                                 sizeof(threshold)) == 0u ||
+        (rule->action_state != RELAY_STATE_OFF &&
+         rule->action_state != RELAY_STATE_ON) ||
+        rule->delay_ms > rule->timeout_ms ||
+        (rule->safe_state != RELAY_STATE_OFF &&
+         rule->safe_state != RELAY_STATE_ON)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool rule_file_v5_slots_are_valid(const RuleFileV5 *rules) {
+  if (rules == NULL ||
+      rules->slots[0].priority == rules->slots[1].priority) {
+    return false;
+  }
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const RuleFileV5Slot *rule = &rules->slots[slot];
+    char threshold[32];
+    if (rule->relay >= RULE_RELAY_COUNT ||
+        !rule_file_signal_key_is_round_trip_safe(rule->signal_key,
+                                                 sizeof(rule->signal_key)) ||
+        rule_file_format_decimal(rule->threshold, threshold,
+                                 sizeof(threshold)) == 0u ||
+        (rule->action_state != RELAY_STATE_OFF &&
+         rule->action_state != RELAY_STATE_ON) ||
+        rule->delay_ms > rule->timeout_ms ||
+        (rule->safe_state != RELAY_STATE_OFF &&
+         rule->safe_state != RELAY_STATE_ON)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool rule_file_parse_v5(const uint8_t *data, size_t len, RuleFileV5 *out_rules) {
+  RuleFileV5 parsed = {0};
+  uint32_t global_fields = 0u;
+  uint32_t slot_fields[RULE_FILE_V2_RULE_COUNT] = {0u};
+  uint32_t version = 0u;
+  uint32_t count = 0u;
+  size_t offset = 0u;
+
+  if (data == NULL || out_rules == NULL || len == 0u ||
+      len > RULE_FILE_V5_MAX_BYTES) {
+    return false;
+  }
+  while (offset < len) {
+    const size_t line_start = offset;
+    size_t line_len;
+    size_t equals = 0u;
+    bool has_equals = false;
+    while (offset < len && data[offset] != (uint8_t)'\n') {
+      ++offset;
+    }
+    line_len = offset - line_start;
+    if (offset < len) {
+      ++offset;
+    }
+    if (line_len > 0u &&
+        data[line_start + line_len - 1u] == (uint8_t)'\r') {
+      --line_len;
+    }
+    if (line_len == 0u) {
+      continue;
+    }
+    for (size_t i = 0u; i < line_len; ++i) {
+      if (data[line_start + i] == (uint8_t)'=') {
+        if (has_equals) {
+          return false;
+        }
+        equals = i;
+        has_equals = true;
+      }
+    }
+    if (!has_equals || equals == 0u || equals + 1u >= line_len) {
+      return false;
+    }
+
+    const uint8_t *key = data + line_start;
+    const uint8_t *value_text = key + equals + 1u;
+    const size_t value_len = line_len - equals - 1u;
+    uint32_t value = 0u;
+    if (rule_file_key_is(key, equals, "version")) {
+      if ((global_fields & RULE_FILE_V5_FIELD_VERSION) != 0u ||
+          !rule_file_parse_u32(value_text, value_len, &version)) {
+        return false;
+      }
+      global_fields |= RULE_FILE_V5_FIELD_VERSION;
+      continue;
+    }
+    if (rule_file_key_is(key, equals, "ruleCount")) {
+      if ((global_fields & RULE_FILE_V5_FIELD_COUNT) != 0u ||
+          !rule_file_parse_u32(value_text, value_len, &count)) {
+        return false;
+      }
+      global_fields |= RULE_FILE_V5_FIELD_COUNT;
+      continue;
+    }
+
+    bool recognized = false;
+    for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+      uint32_t field = 0u;
+      if (rule_file_v2_key_is(key, equals, slot, "enabled")) {
+        field = RULE_FILE_V5_SLOT_FIELD_ENABLED;
+      } else if (rule_file_v2_key_is(key, equals, slot, "relay")) {
+        field = RULE_FILE_V5_SLOT_FIELD_RELAY;
+      } else if (rule_file_v2_key_is(key, equals, slot, "signalKey")) {
+        field = RULE_FILE_V5_SLOT_FIELD_SIGNAL_KEY;
+      } else if (rule_file_v2_key_is(key, equals, slot, "threshold")) {
+        field = RULE_FILE_V5_SLOT_FIELD_THRESHOLD;
+      } else if (rule_file_v2_key_is(key, equals, slot, "action")) {
+        field = RULE_FILE_V5_SLOT_FIELD_ACTION;
+      } else if (rule_file_v2_key_is(key, equals, slot, "delayMs")) {
+        field = RULE_FILE_V5_SLOT_FIELD_DELAY;
+      } else if (rule_file_v2_key_is(key, equals, slot, "timeoutMs")) {
+        field = RULE_FILE_V5_SLOT_FIELD_TIMEOUT;
+      } else if (rule_file_v2_key_is(key, equals, slot, "safeState")) {
+        field = RULE_FILE_V5_SLOT_FIELD_SAFE_STATE;
+      } else if (rule_file_v2_key_is(key, equals, slot, "priority")) {
+        field = RULE_FILE_V5_SLOT_FIELD_PRIORITY;
+      } else if (rule_file_v2_key_is(key, equals, slot,
+                                     "definitionHash")) {
+        field = RULE_FILE_V5_SLOT_FIELD_DEFINITION_HASH;
+      }
+      if (field == 0u) {
+        continue;
+      }
+      if ((slot_fields[slot] & field) != 0u) {
+        return false;
+      }
+
+      if (field == RULE_FILE_V5_SLOT_FIELD_SIGNAL_KEY) {
+        if (value_len >= sizeof(parsed.slots[slot].signal_key)) {
+          return false;
+        }
+        memcpy(parsed.slots[slot].signal_key, value_text, value_len);
+        parsed.slots[slot].signal_key[value_len] = '\0';
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_THRESHOLD) {
+        if (!rule_file_parse_decimal((const char *)value_text, value_len,
+                                     &parsed.slots[slot].threshold)) {
+          return false;
+        }
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_ACTION ||
+                 field == RULE_FILE_V5_SLOT_FIELD_SAFE_STATE) {
+        RelayState *state = field == RULE_FILE_V5_SLOT_FIELD_ACTION ?
+          &parsed.slots[slot].action_state : &parsed.slots[slot].safe_state;
+        if (!rule_file_v2_parse_state(value_text, value_len, state)) {
+          return false;
+        }
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_DEFINITION_HASH) {
+        if (!rule_file_parse_hash64_upper(
+              value_text, value_len, &parsed.slots[slot].definition_hash)) {
+          return false;
+        }
+      } else if (!rule_file_parse_u32(value_text, value_len, &value)) {
+        return false;
+      }
+
+      if (field == RULE_FILE_V5_SLOT_FIELD_ENABLED) {
+        if (value > 1u) {
+          return false;
+        }
+        parsed.slots[slot].enabled = value != 0u;
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_RELAY) {
+        if (value >= RULE_RELAY_COUNT) {
+          return false;
+        }
+        parsed.slots[slot].relay = (uint8_t)value;
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_DELAY) {
+        parsed.slots[slot].delay_ms = value;
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_TIMEOUT) {
+        parsed.slots[slot].timeout_ms = value;
+      } else if (field == RULE_FILE_V5_SLOT_FIELD_PRIORITY) {
+        if (value > UINT8_MAX) {
+          return false;
+        }
+        parsed.slots[slot].priority = (uint8_t)value;
+      }
+      slot_fields[slot] |= field;
+      recognized = true;
+      break;
+    }
+    if (!recognized) {
+      return false;
+    }
+  }
+
+  if (global_fields !=
+        (RULE_FILE_V5_FIELD_VERSION | RULE_FILE_V5_FIELD_COUNT) ||
+      version != 5u || count != RULE_FILE_V2_RULE_COUNT) {
+    return false;
+  }
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    if (slot_fields[slot] != RULE_FILE_V5_SLOT_FIELD_ALL) {
+      return false;
+    }
+  }
+  if (!rule_file_v5_slots_are_valid(&parsed)) {
+    return false;
+  }
+  *out_rules = parsed;
+  return true;
+}
+
+size_t rule_file_format_v5(const RuleFileV5 *rules,
+                           char *out_text,
+                           size_t out_capacity) {
+  size_t used;
+  int header;
+
+  if (rules == NULL || out_text == NULL || out_capacity == 0u ||
+      !rule_file_v5_slots_are_valid(rules)) {
+    return 0u;
+  }
+  header = snprintf(out_text, out_capacity, "version=5\nruleCount=2\n");
+  if (header < 0 || (size_t)header >= out_capacity) {
+    return 0u;
+  }
+  used = (size_t)header;
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const RuleFileV5Slot *rule = &rules->slots[slot];
+    char threshold[32];
+    char definition_hash[17];
+    int written;
+    if (rule_file_format_decimal(rule->threshold, threshold,
+                                 sizeof(threshold)) == 0u) {
+      return 0u;
+    }
+    rule_file_format_hash64_upper(rule->definition_hash, definition_hash);
+    written = snprintf(
+      out_text + used, out_capacity - used,
+      "rule%u.enabled=%u\nrule%u.relay=%u\nrule%u.signalKey=%s\n"
+      "rule%u.threshold=%s\nrule%u.action=%s\nrule%u.delayMs=%lu\n"
+      "rule%u.timeoutMs=%lu\nrule%u.safeState=%s\nrule%u.priority=%u\n"
+      "rule%u.definitionHash=%s\n",
+      (unsigned)slot, rule->enabled ? 1u : 0u,
+      (unsigned)slot, (unsigned)rule->relay,
+      (unsigned)slot, rule->signal_key,
+      (unsigned)slot, threshold,
+      (unsigned)slot,
+      rule->action_state == RELAY_STATE_ON ? "on" : "off",
+      (unsigned)slot, (unsigned long)rule->delay_ms,
+      (unsigned)slot, (unsigned long)rule->timeout_ms,
+      (unsigned)slot,
+      rule->safe_state == RELAY_STATE_ON ? "on" : "off",
+      (unsigned)slot, (unsigned)rule->priority,
+      (unsigned)slot, definition_hash);
+    if (written < 0 || (size_t)written >= out_capacity - used) {
+      return 0u;
+    }
+    used += (size_t)written;
+  }
+  return used <= RULE_FILE_V5_MAX_BYTES ? used : 0u;
+}
+
+bool rule_file_v5_build_engine(const RuleFileV5 *rules,
+                               RuleEngine *out_engine) {
+  if (rules == NULL || out_engine == NULL ||
+      !rule_file_v5_slots_are_valid(rules)) {
+    return false;
+  }
+  RuleFileV4 legacy = {0};
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    legacy.slots[slot].enabled = rules->slots[slot].enabled;
+    legacy.slots[slot].relay = rules->slots[slot].relay;
+    memcpy(legacy.slots[slot].signal_key, rules->slots[slot].signal_key,
+           sizeof(legacy.slots[slot].signal_key));
+    legacy.slots[slot].threshold = rules->slots[slot].threshold;
+    legacy.slots[slot].action_state = rules->slots[slot].action_state;
+    legacy.slots[slot].delay_ms = rules->slots[slot].delay_ms;
+    legacy.slots[slot].timeout_ms = rules->slots[slot].timeout_ms;
+    legacy.slots[slot].safe_state = rules->slots[slot].safe_state;
+    legacy.slots[slot].priority = rules->slots[slot].priority;
+  }
+  return rule_file_v4_build_engine(&legacy, out_engine);
+}
+
+RuleFileV5MigrationStatus rule_file_v5_migrate_disabled_v4(
+  const RuleFileV4 *v4,
+  RuleFileV5 *out_v5) {
+  RuleFileV5 migrated = {0};
+
+  if (v4 == NULL || out_v5 == NULL) {
+    return RULE_FILE_V5_MIGRATION_INVALID_ARGUMENT;
+  }
+  if (!rule_file_v4_slots_are_valid(v4)) {
+    return RULE_FILE_V5_MIGRATION_INVALID_V4;
+  }
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    if (v4->slots[slot].enabled) {
+      return RULE_FILE_V5_MIGRATION_ENABLED_RULE_REQUIRES_DEFINITION_HASH;
+    }
+  }
+  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
+    const RuleFileV4Slot *source = &v4->slots[slot];
+    RuleFileV5Slot *destination = &migrated.slots[slot];
+    destination->enabled = false;
+    destination->relay = source->relay;
+    memcpy(destination->signal_key, source->signal_key,
+           sizeof(destination->signal_key));
+    destination->threshold = source->threshold;
+    destination->action_state = source->action_state;
+    destination->delay_ms = source->delay_ms;
+    destination->timeout_ms = source->timeout_ms;
+    destination->safe_state = source->safe_state;
+    destination->priority = source->priority;
+    destination->definition_hash = 0u;
+  }
+  *out_v5 = migrated;
+  return RULE_FILE_V5_MIGRATION_OK;
+}

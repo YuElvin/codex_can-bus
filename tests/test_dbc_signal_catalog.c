@@ -28,12 +28,14 @@ static int test_paging_and_key_validation(void) {
   ASSERT_TRUE(dbc_signal_catalog_total(&db) == 18u);
   ASSERT_TRUE(dbc_signal_catalog_contains(&db, "EngineData.signal0"));
   ASSERT_TRUE(!dbc_signal_catalog_contains(&db, "EngineData.missing"));
-  ASSERT_TRUE(dbc_signal_catalog_page(&db, 0u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 16u);
+  ASSERT_TRUE(dbc_signal_catalog_page(&db, 0u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 8u);
   ASSERT_TRUE(strcmp(page[0].key, "EngineData.signal0") == 0);
-  ASSERT_TRUE(strcmp(page[15].key, "EngineData.signal15") == 0);
-  ASSERT_TRUE(dbc_signal_catalog_page(&db, 1u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 2u);
+  ASSERT_TRUE(strcmp(page[7].key, "EngineData.signal7") == 0);
+  ASSERT_TRUE(dbc_signal_catalog_page(&db, 1u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 8u);
+  ASSERT_TRUE(strcmp(page[0].key, "EngineData.signal8") == 0);
+  ASSERT_TRUE(dbc_signal_catalog_page(&db, 2u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 2u);
   ASSERT_TRUE(strcmp(page[0].key, "EngineData.signal16") == 0);
-  ASSERT_TRUE(dbc_signal_catalog_page(&db, 2u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 0u);
+  ASSERT_TRUE(dbc_signal_catalog_page(&db, 3u, page, DBC_SIGNAL_CATALOG_PAGE_SIZE) == 0u);
   return 0;
 }
 

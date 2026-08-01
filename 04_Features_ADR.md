@@ -17,6 +17,7 @@
 | F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
 | F-012 | 网页 CAN 发送控制 | [客观通过] | classic CAN窄合同：`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，标准ID、DLC、8字节HEX、`100..10000 ms`；TX self-test/RX缓存独立。用户已部署网页上电，浏览器实测状态灯、TX/RX累计、默认折叠和CANoe式TX/RX DBC表；最终`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms已应用result=0，自动刷新和两次reload均无连接拒绝。CANtest外部输入由用户确认且RX表增长；未直接读取CANtest接收显示，不能声称外部接收器逐帧确认新TX帧 |
 | F-013 | 网页手动 TX 与 DBC `signalKey` 两槽规则 | [最终现场验收完成] | 根目录新网页下自动刷新 TX/RX=`55/364→576/5540`，两次刷新期间编辑均保留并提交，最终 TX `sequence=256`，warn/error为空。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX为 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时manual `relay1Output=0`与高优先级off一致；此前构建、反汇编、烧录已实际完成 |
+| F-014 | 大 DBC selected-only事务闭环 | [A0-F通过，G实板收口中] | active generation7为128项/16消息；最终G映像双ID输入下总RX+272、matched+136、updates+`136×8`，page0八项GOOD与page1 MISSING，证明只更新selected；停`0x100`保留`0x110`后RX仍增长且page0八项STALE/末值保持。v3会话已正常STOPPED；实体CSV/meta仍`[待确认]`，CAN-FD实板`[未验证]`。 |
 
 ## ADR 索引
 
@@ -38,6 +39,10 @@
 | ADR-020 | TF RuleFile v1 采用固定文本格式并通过 RuleTask reload 生效 | 已接受；有效/缺失路径板端验证，非法板端输入未注入 |
 | ADR-029 | 网页 CAN 发送控制保持经典 CAN 窄合同与 TX/RX 证据分离 | 已接受并完成本轮网页现场验收；外部接收器逐帧读回仍非本轮证据 |
 | ADR-031 | 规则选择绑定活动 DBC `signalKey`，但保留两槽与旧 v3 `marker` 回退 | 已接受并完成最终现场验收 |
+| ADR-032 | 大 DBC active采用generation/manifest、prepared selected-only双槽与V5 definition hash | 已接受；A0-E实板门禁通过 |
+| ADR-033 | selected实时质量与G日志合同 | 已接受；G实板收口中 |
+| ADR-034 | 生产固件仅加载RuleFile V5并对legacy/损坏输入fail-closed | 已接受；用于满足A0 Flash预算，host保留V1-V4解析测试 |
+| ADR-035 | active manifest轮转失败必须同步回滚旧current | 已接受；新候选已构建，待烧录回归 |
 
 ## 决策记录摘要
 
@@ -60,6 +65,14 @@ FreeRTOS 单任务版本已经上板验证通过。当前 CAN2 任务在不改�
 前端 dirty-state 修复已在`www`。RuleFile V4 threshold 曾因 nano `printf`缺少浮点链接支持而格式化为`0`；CMake STM32链接选项现增加`-Wl,-u,_printf_float`。`./scripts/verify.sh` host tests=`17/17`通过，STM32 firmware构建成功，最终ELF `text/data/bss=106748/764/243688`；`nm`/map确认`_printf_float`、`_dtoa_r`、`_vfiprintf_r`，`objdump`确认`rule_file_format_decimal`调用`sniprintf`，2026-07-23候选HEX已由OpenOCD完成`Programming Finished/Verified OK/Resetting Target`。
 
 最终现场中，正确部署根目录网页后自动刷新 TX/RX=`55/364→576/5540`且 warn/error为空。两次编辑 TX 在`1800 ms`、`1300 ms`刷新后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC经用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX表解析 marker=`42434`，sequence=`256/4660`。两槽目录均含 marker/sequence；slot1 V4回读`Can2Data.sequence`、threshold=`4660`、priority=`20`、action=`off`。外部 RX sequence=`4660`时manual `relay1Output=0`，符合高优先级off规则。该验收不把 TX self-test 冒充为外部接收器读回。
+
+### ADR-032：大 DBC selected-only active事务
+
+active不覆盖固定`active.dbc`后异步reload，而是验证candidate引用、用index只构造selected records到非活动runtime、检查V5规则key与固定`definitionHash`、写入并读回不可变active generation文件，最后提交current manifest并在同一TF mutex窗口内执行不可失败的短临界slot flip。启动独立验证current/previous，并只清理不可能被两者引用的next-generation tmp/formal；FAT32多文件rename不声明原子。所有失败显式discard prepared slot并保留previous、旧runtime/value slot和规则。实板已验证1/128项、rule key缺失、日志门禁和复位恢复；外部Classic RX属于F，CAN-FD实板仍`[未验证]`。
+
+### ADR-035：active manifest轮转失败的立即回滚
+
+`current→previous→current.tmp→current`不是FAT32的多文件原子操作。若旧current已移动而新current rename、读回或runtime短临界publish失败，平台必须在同一TF锁内删除本次current（如已生成）并把previous恢复为current，再读验旧manifest；绝不只依赖下次启动从previous兜底。若回滚I/O本身失败，previous保留且启动恢复以current/previous独立验证选择旧有效generation；不声称FAT32能在介质故障下提供原子回滚。
 
 ### ADR-006：最小解码先复用 CAN2 轮询，区分 TX self-test 与外部 RX
 
@@ -297,3 +310,43 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 主机只读检查已把故障定位到卷引导区：`/dev/disk4`仍枚举为15.6 GB MBR，`disk4s1`类型为DOS_FAT_32且偏移2048扇区；但`diskutil verifyVolume`调用的`fsck_msdos -n`报告`Invalid BS_jmpBoot in boot block: 555342`并退出201，只读mount失败。当前设备保持unmounted，未执行repair或格式化。由于卡内可能含日志和此前candidate generations，是否尝试镜像/数据恢复属于用户数据保留决策；只有用户确认这些数据可丢弃时，才允许重建MBR/FAT32并从仓库网页、旧active资产和真实100KB DBC重新生成candidate/selection。无论选择哪条路径，旧generation7实板证据可保留为历史，但当前介质恢复后必须重新取得当前generation/selection和网页哈希，不能直接复用为新卡运行态。
 
 用户随后明确授权格式化并要求加载全部TF必需文件。重建范围严格采用`deploy/tf/README.md`：`MBR + FAT32`卷、五个必需目录、新版`/www/index.html`、151 B `/dbc/active.dbc`及相同`/dbc/candidate.dbc`。日志、事务tmp、prev、large-DBC generation/manifest和V4规则均不是可猜测静态资产，不予伪造。格式化删除了旧卡数据且本轮未创建镜像。部署后网页与两DBC分别通过SHA-256和`cmp`；AppleDouble旁车清零，卸载后的FatFs三阶段只读检查exit0，随后只读复挂载再次核对文件并安全eject。该结果只证明主机部署介质有效；必须插回板端冷启动后再证明TF mount、页面服务、active load和新的candidate generation。
+## ADR：阶段17 D网页门禁通过并冻结E边界（2026-08-01）
+
+- 状态：D已验收，E进行中。
+- 决策：重建TF后的candidate generation1只作为上传/索引结果；网页ordinal0..7 selection提交为新的generation2，当前权威token为`0000000000000002-000186E7-4B88D9CE`。后续E不得引用格式化前generation7。
+- 证据：板端网页36254 B哈希与仓库一致；runtime仍为旧generation1/151 B；candidate total896；page1=ordinal8..15；`packvoltage`匹配112；`selected=true`精确8项；独立HTTP与浏览器DOM一致，console无warn/error。
+- E合同：先完整验证candidate并构造非活动selected-only runtime，再进行规则`definition_hash`兼容检查；active generation持久化写入/读回成功后，最后短临界区提交active manifest和runtime generation。任何失败均不得破坏旧active/runtime、规则、SignalCache或日志。
+- 非目标：不为一次短暂`Failed to fetch`引入多socket或并发请求；同页`requestQueue/exclusive()`已证明串行。多标签页/其他客户端是服务端单socket能力边界，不在D扩展。
+
+## ADR：selected实时质量与G日志合同（ADR-033，2026-08-01）
+
+- 状态：已接受，G实施中。
+- F门禁：用户明确确认两个ID同时发送；时间分离样本总RX增量568、selected matched增量284、updates增量`284×8`，因此另284个外部未选帧没有进入selected runtime/value slots。标准Classic CAN正向八项GOOD值与混合流量反向隔离均通过；CAN-FD实板继续`[未验证]`。
+- 实时质量：与规则timeout和日志周期解耦，固定`3000 ms` freshness阈值。`update_seq==0`为`MISSING`；收到且wrap-safe age不大于3000 ms为`GOOD`；超过为`STALE`并保留末值；内部错误为`ERROR`。API与CSV必须调用同一effective-quality逻辑。
+- 实时API：`GET /api/signals?page=0&q=...`严格解析，ASCII不区分大小写搜索，固定最多8项；generation用16位hex字符串、selection CRC用8位hex字符串，item只含ordinal/key/value/raw/unit/quality/updatedMs。MISSING仍列出且value/raw为null。serializer必须两遍长度预检，失败清空body并返回非200。
+- 日志：新增selected-only `_signal-v3.csv`和同basename `.meta`，旧v2文件不续写、不迁移。准入继续使用`selected_count*1000 <= 20*sample_period_ms`；session锁定active/candidate generation、source fingerprint、selection CRC、selected count和period。LogTask逐项短快照、512 B内单行scratch与既有静态batch；buffer不足必须先flush并重试当前行，禁止静默drop。stop必须先flush、写clean footer并同步，完成前继续阻止upload/selection/active。
+- 资源与禁止范围：替换生产旧SignalCache/API/CSV引用，依靠GC回收，不并存两套大实现；不新增任务、队列、heap、多socket、chunked、WebSocket或目录常驻RAM。最终仍须满足Flash上限126976 B、stack margin与统一verify/反汇编/实板TF证据。
+
+2026-08-01旧G映像的API级GOOD/STALE、分页、selected-only和日志控制已取得证据，但当前实体TF验收明确`[阻断]`：取卡后对`/dev/disk4s1`的`diskutil verifyVolume`只读调用`fsck_msdos`返回`206`，根目录有end marker后的目录项，`LOG/20260801_175230000_signal-v3.meta`声明`10471 B`而其链最多`8192 B`，同会话CSV声明`1153932 B`而其链最多`32768 B`；candidate/active generation与`active.previous`也有越界/交叉链。卷已卸载且read-only mount失败。故现有CSV/.meta即便可枚举或可计算hash也不构成clean footer、selected-only或持久化通过；不得继续写卡、部署网页、烧录未验证P0候选或声称FAT32事务成功。必须先由用户决定只读镜像保全，或确认丢弃当前故障会话重建FAT32；重建后重新部署静态资产、生成candidate/active，并重新验收G实体日志和新候选最小回归。
+
+用户随后明确授权格式化并重载。执行范围严格限于已经`diskutil list`确认的外置物理`/dev/disk4`：重新建立`MBR + FAT32 CANBUS`，部署`/www/index.html`、151 B `/dbc/active.dbc`及相同`/dbc/candidate.dbc`，创建空`/log /config /sys`，不恢复故障会话、transaction文件、large generation、规则或历史日志。网页SHA-256=`9b96b6a022a9a3c1659abf52096543ebefba3e57e1218fdd5d6c62e92ce0e5c2`、两份DBC均为151 B/SHA-256=`271f20f923343c9f923bd6db4da4599e0349983b0a5bd43edeae87d152855417`，主机逐字节比较通过；卸载后`fsck_msdos -n` exit=`0`，只读重挂载重复`cmp`后再次卸载。该恢复不追溯改变旧损坏文件的失败结论，也不是G CSV或P0新候选的板端证明；必须上电后重新形成可验证large candidate/active和v3实体会话。
+
+### ADR-034：生产RuleFile采用V5-only fail-closed（2026-08-01）
+
+- 状态：已接受并进入最终烧录映像。E阶段曾使用显式V4→V5迁移接口完成现场规则转换，该结果保留为历史证据；G最终生产映像不再携带V1-V4 loader、转换器、旧`/api/rule/config`或`/api/rules/migrate-v5`路由。
+- 决策：启动只加载带`definitionHash`的V5。没有任何规则文件时使用空规则集；发现legacy文件时返回明确不兼容状态并保持空RuleEngine，V5损坏或读失败同样fail-closed。不得静默接受同名但定义变化的规则，不自动删除、猜测hash或回退到legacy enabled语义。显式V5 `POST /api/rules`仍是从空/legacy状态建立规则的唯一生产入口；PUT/DELETE要求当前V5有效。
+- 依据：A0固定Flash最大值为`126976 B`，G加入selected API和CSV/meta后继续常驻V1-V4生产兼容会超过预算；板端legacy loader精确占用并非零成本。历史格式解析、兼容判定与固定向量仍保留在host代码和测试中，避免丢失格式验证能力，但不链接进固件。
+- 证据：最终`./scripts/verify.sh`为CTest=`34/34`；Flash=`121708 B`、RAM_D1=`196664 B`，ELF `text/data/bss=121256/444/196284`，低于Flash合同上限5268 B；ELF/HEX SHA-256=`97cd14af626ecb7951f1f012148819f922c688b339b1f9185d66fbd630afc10b`/`963fa24f74a9808bc0687ab2ab4e5cd7ba2e7d3c5d1b912ae5794c08816e5b7d`。最终符号检查确认V1-V4 loader与旧路由不在ELF，ST-Link下载、校验和软件复位成功。
+- 边界：这不是删除TF上的legacy文件，也不宣称自动迁移；legacy介质进入当前固件时应明确拒绝。当前已加载V5规则、active generation7和selected runtime的复位恢复通过；H中的更多异常介质/断电恢复仍`[未验证]`。
+
+### ADR-035：manifest即时回滚与FatFs写失败传播（2026-08-01）
+
+- `current→previous→new current`不是FAT32多文件原子事务。candidate、selection及active manifest在new-current rename、读回或active runtime publish失败时，必须同一TF锁内尝试previous→current；回滚失败保留previous供启动恢复，不触碰旧generation、规则、SignalCache或日志。
+- FatFs同步合同要求镜像FAT及FAT32 FSINFO的每个`disk_write`失败均转为`FR_DISK_ERR`，不再把该类失败报告为成功；这不承诺FAT32掉电原子性，也不构成旧卡损坏因果结论。
+- 本ADR只有源码、构建和反汇编证据。新候选未烧录；TF写失败注入、active reload失败和物理掉电恢复仍`[未验证]`。
+
+### ADR-036：单socket响应以SEND_OK为收口边界（2026-08-01）
+
+- 观察到长selection响应已完整HTTP200但后续socket0停在`ESTABLISHED`，原TX_FSR refill等待未保留有效ack/disconnect pending。决策：最终chunk收到W5500 `SEND_OK`后立即发起既有graceful `DISCON`；不增加socket、并发、连接复用或应用层重试。
+- 依据：W5500的`SEND_OK`是本项目发送完成边界；直接按TCP graceful close收口可避免响应已交付后单socket永久占用。失败仍走既有close/recovery路径。
+- 证据：修正后实板冷启动candidate恢复、连续`status→page1`、active长请求及复位后的runtime恢复均已完成。网络断链/恶意半包等扩展场景不因本ADR自动通过。

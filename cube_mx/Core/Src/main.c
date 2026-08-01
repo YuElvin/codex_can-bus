@@ -37,6 +37,7 @@
 #include "rule_config.h"
 #include "rule_engine.h"
 #include "rule_file.h"
+#include "selected_signal_log.h"
 #include "signal_log_buffer.h"
 #include "signal_log_control.h"
 #include "queue.h"
@@ -49,17 +50,12 @@
 /* USER CODE BEGIN PTD */
 typedef enum {
   CONFIG_COMMAND_DIAGNOSTIC = 1u,
-  CONFIG_COMMAND_RULE_SAVE = 2u,
-  CONFIG_COMMAND_RULE_FILE_V4_SAVE = 3u
+  CONFIG_COMMAND_RULE_FILE_V5_SAVE = 4u
 } ConfigCommandType;
 
 typedef struct {
   uint32_t type;
-  uint32_t on_threshold;
-  uint32_t off_threshold;
-  uint32_t delay_ms;
-  uint32_t timeout_ms;
-  RuleFileV4 rule_file_v4;
+  RuleFileV5 rule_file_v5;
 } ConfigCommand;
 
 typedef struct {
@@ -171,6 +167,7 @@ volatile uint32_t g_log_path_mode = 0xffffffffu;
 volatile uint32_t g_log_path_switch_count;
 volatile uint32_t g_log_active_file_size;
 SignalLogControl g_signal_log_control;
+SelectedSignalLogSession g_selected_signal_log_session;
 volatile uint32_t g_rule_task_started;
 volatile uint32_t g_rule_task_loop_count;
 volatile uint32_t g_rule_task_evaluation_count;
@@ -204,37 +201,19 @@ volatile uint32_t g_rule_task_config_reload;
 volatile uint32_t g_rule_task_config_result = 0xffffffffu;
 volatile uint32_t g_rule_task_config_load_count;
 volatile uint32_t g_rule_task_config_generation;
-volatile uint32_t g_rule_task_config_save_request;
-volatile uint32_t g_rule_file_load_result = 0xffffffffu;
-volatile uint32_t g_rule_file_created;
-volatile uint32_t g_rule_file_size;
-volatile uint32_t g_rule_file_read_len;
-volatile uint32_t g_rule_file_v2_load_result = 0xffffffffu;
-volatile uint32_t g_rule_file_v2_created;
-volatile uint32_t g_rule_file_v2_size;
-volatile uint32_t g_rule_file_v2_read_len;
-volatile uint32_t g_rule_file_v2_rule_count;
-volatile uint32_t g_rule_file_v3_load_result = 0xffffffffu;
-volatile uint32_t g_rule_file_v3_size;
-volatile uint32_t g_rule_file_v3_read_len;
-volatile uint32_t g_rule_file_v3_rule_count;
-volatile uint32_t g_rule_file_v3_save_request;
-volatile uint32_t g_rule_file_v3_save_result = 0xffffffffu;
-RuleFileV3 g_rule_file_v3_current;
-RuleFileV3 g_rule_file_v3_pending;
-volatile uint32_t g_rule_file_v4_load_result = 0xffffffffu;
-volatile uint32_t g_rule_file_v4_size;
-volatile uint32_t g_rule_file_v4_read_len;
-volatile uint32_t g_rule_file_v4_rule_count;
-volatile uint32_t g_rule_file_v4_save_request;
-volatile uint32_t g_rule_file_v4_save_result = 0xffffffffu;
-RuleFileV4 g_rule_file_v4_current;
-RuleFileV4 g_rule_file_v4_pending;
 volatile uint32_t g_rule_task_engine_reload;
 static RuleEngine g_rule_task_pending_engine;
 static QueueHandle_t g_config_command_queue;
-static char g_rule_file_v4_text[RULE_FILE_V4_MAX_BYTES + 1u];
-static RuleEngine g_rule_file_v4_candidate_engine;
+volatile uint32_t g_rule_file_v5_load_result = 0xffffffffu;
+volatile uint32_t g_rule_file_v5_size;
+volatile uint32_t g_rule_file_v5_read_len;
+volatile uint32_t g_rule_file_v5_rule_count;
+volatile uint32_t g_rule_file_v5_save_request;
+volatile uint32_t g_rule_file_v5_save_result = 0xffffffffu;
+RuleFileV5 g_rule_file_v5_current;
+RuleFileV5 g_rule_file_v5_pending;
+static char g_rule_file_v5_text[RULE_FILE_V5_MAX_BYTES + 1u];
+static RuleEngine g_rule_file_v5_candidate_engine;
 
 /* USER CODE END PV */
 
@@ -672,273 +651,92 @@ static void rule_task_request_engine_reload(const RuleEngine *candidate)
   taskEXIT_CRITICAL();
 }
 
-static void rule_file_v4_from_v3(const RuleFileV3 *legacy, RuleFileV4 *current)
-{
-  if (legacy == NULL || current == NULL) {
-    return;
-  }
-  memset(current, 0, sizeof(*current));
-  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
-    const RuleFileV3Slot *source = &legacy->slots[slot];
-    RuleFileV4Slot *target = &current->slots[slot];
-    target->enabled = source->enabled;
-    target->relay = source->relay;
-    (void)snprintf(target->signal_key, sizeof(target->signal_key), "Can2Data.marker");
-    target->threshold = (double)source->threshold;
-    target->action_state = source->action_state;
-    target->delay_ms = source->delay_ms;
-    target->timeout_ms = source->timeout_ms;
-    target->safe_state = source->safe_state;
-    target->priority = source->priority;
-  }
-}
-
-static bool rule_file_v4_load_from_tf(void)
+static bool rule_file_v5_load_from_tf(void)
 {
   size_t file_size = 0u;
-  uint8_t file_data[RULE_FILE_V4_MAX_BYTES];
+  uint8_t file_data[RULE_FILE_V5_MAX_BYTES];
   size_t read_len = 0u;
-  RuleFileV4 rules;
+  RuleFileV5 rules;
   RuleEngine candidate;
-  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_V4_PATH, &file_size);
+  const int size_result =
+    stm32h750_tf_file_size_locked(RULE_FILE_V5_PATH, &file_size);
 
-  g_rule_file_v4_size = (uint32_t)file_size;
-  g_rule_file_v4_read_len = 0u;
-  g_rule_file_v4_rule_count = 0u;
+  g_rule_file_v5_size = (uint32_t)file_size;
+  g_rule_file_v5_read_len = 0u;
+  g_rule_file_v5_rule_count = 0u;
   if (g_tf_card_bringup_status != 0) {
-    g_rule_file_v4_load_result = 5u;
+    g_rule_file_v5_load_result = 5u;
     return false;
   }
   if (size_result == FR_NO_FILE) {
-    g_rule_file_v4_load_result = 1u;
+    g_rule_file_v5_load_result = 1u;
     return false;
   }
-  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V4_MAX_BYTES ||
-      stm32h750_tf_read_file_locked(RULE_FILE_V4_PATH, file_data, file_size, &read_len) != 0 ||
-      read_len != file_size) {
-    g_rule_file_v4_read_len = (uint32_t)read_len;
-    g_rule_file_v4_load_result = size_result == 0 && file_size > RULE_FILE_V4_MAX_BYTES ? 3u : 2u;
-    return false;
-  }
-  g_rule_file_v4_read_len = (uint32_t)read_len;
-  if (!rule_file_parse_v4(file_data, read_len, &rules) || !rule_file_v4_build_engine(&rules, &candidate)) {
-    g_rule_file_v4_load_result = 4u;
-    return false;
-  }
-  const uint32_t previous_generation = g_rule_task_config_generation;
-  g_rule_file_v4_current = rules;
-  g_rule_file_v4_pending = rules;
-  g_rule_file_v4_rule_count = (uint32_t)candidate.rule_count;
-  rule_task_request_engine_reload(&candidate);
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_task_config_generation != previous_generation &&
-        g_rule_task_engine_reload == 0u && g_rule_task_config_result == 0u) {
-      g_rule_file_v4_load_result = 0u;
-      return true;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1u));
-  }
-  g_rule_file_v4_load_result = 6u;
-  return false;
-}
-
-static bool rule_file_v2_load_from_tf(void)
-{
-  size_t file_size = 0u;
-  uint8_t file_data[RULE_FILE_V2_MAX_BYTES];
-  size_t read_len = 0u;
-  RuleEngine candidate;
-  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_V2_PATH, &file_size);
-
-  g_rule_file_v2_size = (uint32_t)file_size;
-  g_rule_file_v2_read_len = 0u;
-  g_rule_file_v2_created = 0u;
-  g_rule_file_v2_rule_count = 0u;
-  if (g_tf_card_bringup_status != 0) {
-    g_rule_file_v2_load_result = 5u;
-    return true;
-  }
-  if (size_result == FR_NO_FILE) {
-    if (stm32h750_tf_ensure_default_rule_file_v2() == 0) {
-      g_rule_file_v2_created = 1u;
-      g_rule_file_v2_load_result = 1u;
-    } else {
-      g_rule_file_v2_load_result = 2u;
-    }
-    return true;
-  }
-  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V2_MAX_BYTES ||
-      stm32h750_tf_read_file_locked(RULE_FILE_V2_PATH,
-                                     file_data,
-                                     file_size,
+  if (size_result != 0 || file_size == 0u ||
+      file_size > RULE_FILE_V5_MAX_BYTES ||
+      stm32h750_tf_read_file_locked(RULE_FILE_V5_PATH, file_data, file_size,
                                      &read_len) != 0 ||
       read_len != file_size) {
-    g_rule_file_v2_read_len = (uint32_t)read_len;
-    g_rule_file_v2_load_result = size_result == 0 && file_size > RULE_FILE_V2_MAX_BYTES ? 3u : 2u;
+    g_rule_file_v5_read_len = (uint32_t)read_len;
+    g_rule_file_v5_load_result =
+      size_result == 0 && file_size > RULE_FILE_V5_MAX_BYTES ? 3u : 2u;
     return false;
   }
-  g_rule_file_v2_read_len = (uint32_t)read_len;
-  if (!rule_file_parse_v2(file_data, read_len, &candidate)) {
-    g_rule_file_v2_load_result = 4u;
+  g_rule_file_v5_read_len = (uint32_t)read_len;
+  if (!rule_file_parse_v5(file_data, read_len, &rules) ||
+      !rule_file_v5_build_engine(&rules, &candidate)) {
+    g_rule_file_v5_load_result = 4u;
     return false;
   }
-
   const uint32_t previous_generation = g_rule_task_config_generation;
-  for (size_t slot = 0u; slot < RULE_FILE_V2_RULE_COUNT; ++slot) {
-    const Rule *rule = &candidate.rules[slot];
-    RuleFileV3Slot *target = &g_rule_file_v3_current.slots[slot];
-    target->enabled = rule->enabled;
-    target->relay = rule->relay;
-    target->threshold = (uint32_t)rule->threshold;
-    target->action_state = rule->action_state;
-    target->delay_ms = rule->delay_ms;
-    target->timeout_ms = rule->timeout_ms;
-    target->safe_state = rule->safe_state;
-    target->priority = rule->priority;
-  }
-  g_rule_file_v3_pending = g_rule_file_v3_current;
-  rule_file_v4_from_v3(&g_rule_file_v3_current, &g_rule_file_v4_current);
-  g_rule_file_v4_pending = g_rule_file_v4_current;
-  g_rule_file_v2_rule_count = (uint32_t)candidate.rule_count;
+  g_rule_file_v5_current = rules;
+  g_rule_file_v5_pending = rules;
+  g_rule_file_v5_rule_count = (uint32_t)candidate.rule_count;
   rule_task_request_engine_reload(&candidate);
   for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
     if (g_rule_task_config_generation != previous_generation &&
         g_rule_task_engine_reload == 0u && g_rule_task_config_result == 0u) {
-      g_rule_file_v2_load_result = 0u;
+      g_rule_file_v5_load_result = 0u;
       return true;
     }
     vTaskDelay(pdMS_TO_TICKS(1u));
   }
-  g_rule_file_v2_load_result = 6u;
-  return true;
-}
-
-static bool rule_file_v3_load_from_tf(void)
-{
-  size_t file_size = 0u;
-  uint8_t file_data[RULE_FILE_V3_MAX_BYTES];
-  size_t read_len = 0u;
-  RuleFileV3 rules;
-  RuleEngine candidate;
-  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_V3_PATH, &file_size);
-
-  g_rule_file_v3_size = (uint32_t)file_size;
-  g_rule_file_v3_read_len = 0u;
-  g_rule_file_v3_rule_count = 0u;
-  if (g_tf_card_bringup_status != 0) {
-    g_rule_file_v3_load_result = 5u;
-    return false;
-  }
-  if (size_result == FR_NO_FILE) {
-    g_rule_file_v3_load_result = 1u;
-    return false;
-  }
-  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V3_MAX_BYTES ||
-      stm32h750_tf_read_file_locked(RULE_FILE_V3_PATH, file_data, file_size, &read_len) != 0 ||
-      read_len != file_size) {
-    g_rule_file_v3_read_len = (uint32_t)read_len;
-    g_rule_file_v3_load_result = size_result == 0 && file_size > RULE_FILE_V3_MAX_BYTES ? 3u : 2u;
-    return false;
-  }
-  g_rule_file_v3_read_len = (uint32_t)read_len;
-  if (!rule_file_parse_v3(file_data, read_len, &rules) || !rule_file_v3_build_engine(&rules, &candidate)) {
-    g_rule_file_v3_load_result = 4u;
-    return false;
-  }
-  const uint32_t previous_generation = g_rule_task_config_generation;
-  g_rule_file_v3_current = rules;
-  g_rule_file_v3_pending = rules;
-  rule_file_v4_from_v3(&rules, &g_rule_file_v4_current);
-  g_rule_file_v4_pending = g_rule_file_v4_current;
-  g_rule_file_v3_rule_count = (uint32_t)candidate.rule_count;
-  rule_task_request_engine_reload(&candidate);
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_task_config_generation != previous_generation &&
-        g_rule_task_engine_reload == 0u && g_rule_task_config_result == 0u) {
-      g_rule_file_v3_load_result = 0u;
-      return true;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1u));
-  }
-  g_rule_file_v3_load_result = 6u;
+  g_rule_file_v5_load_result = 6u;
   return false;
 }
 
 static void rule_file_load_from_tf(void)
 {
-  size_t file_size = 0u;
-  uint8_t file_data[RULE_FILE_V1_MAX_BYTES];
-  size_t read_len = 0u;
-  RuleTaskConfig candidate;
-
-  if (rule_file_v4_load_from_tf()) {
-    return;
-  }
-  if (rule_file_v3_load_from_tf()) {
-    return;
-  }
-  if (rule_file_v2_load_from_tf()) {
-    if (g_rule_file_v2_load_result == 0u) {
-      return;
+  if (!rule_file_v5_load_from_tf()) {
+    if (g_rule_file_v5_load_result == 1u) {
+      static const char *const legacy_paths[] = {
+        RULE_FILE_PATH,
+        RULE_FILE_V2_PATH,
+        RULE_FILE_V3_PATH,
+        RULE_FILE_V4_PATH,
+      };
+      bool legacy_exists = false;
+      bool stat_failed = false;
+      for (size_t i = 0u; i < sizeof(legacy_paths) / sizeof(legacy_paths[0]);
+           ++i) {
+        size_t legacy_size = 0u;
+        const int result =
+          stm32h750_tf_file_size_locked(legacy_paths[i], &legacy_size);
+        if (result == 0) {
+          legacy_exists = true;
+        } else if (result != FR_NO_FILE) {
+          stat_failed = true;
+        }
+      }
+      if (legacy_exists) {
+        g_rule_file_v5_load_result = 7u;
+      } else if (stat_failed) {
+        g_rule_file_v5_load_result = 2u;
+      }
     }
+    rule_engine_init(&g_rule_file_v5_candidate_engine);
+    rule_task_request_engine_reload(&g_rule_file_v5_candidate_engine);
   }
-
-  const int size_result = stm32h750_tf_file_size_locked(RULE_FILE_PATH, &file_size);
-
-  g_rule_file_size = (uint32_t)file_size;
-  g_rule_file_read_len = 0u;
-  g_rule_file_created = 0u;
-  if (g_tf_card_bringup_status != 0) {
-    g_rule_file_load_result = 5u;
-    return;
-  }
-  if (size_result == FR_NO_FILE) {
-    if (stm32h750_tf_ensure_default_rule_file(g_rule_task_config_on_threshold,
-                                               g_rule_task_config_off_threshold,
-                                               g_rule_task_config_delay_ms,
-                                               g_rule_task_config_timeout_ms) == 0) {
-      g_rule_file_created = 1u;
-      g_rule_file_load_result = 1u;
-    } else {
-      g_rule_file_load_result = 2u;
-    }
-    return;
-  }
-  if (size_result != 0 || file_size == 0u || file_size > RULE_FILE_V1_MAX_BYTES ||
-      stm32h750_tf_read_file_locked(RULE_FILE_PATH,
-                                     file_data,
-                                     file_size,
-                                     &read_len) != 0 ||
-      read_len != file_size) {
-    g_rule_file_read_len = (uint32_t)read_len;
-    g_rule_file_load_result = size_result == 0 && file_size > RULE_FILE_V1_MAX_BYTES ? 3u : 2u;
-    return;
-  }
-  g_rule_file_read_len = (uint32_t)read_len;
-  if (!rule_file_parse_v1(file_data, read_len, &candidate)) {
-    g_rule_file_load_result = 4u;
-    return;
-  }
-
-  const uint32_t previous_generation = g_rule_task_config_generation;
-  g_rule_task_config_on_threshold = (uint32_t)candidate.on_threshold;
-  g_rule_task_config_off_threshold = (uint32_t)candidate.off_threshold;
-  g_rule_task_config_delay_ms = candidate.delay_ms;
-  g_rule_task_config_timeout_ms = candidate.timeout_ms;
-  g_rule_task_config_pending_on_threshold = g_rule_task_config_on_threshold;
-  g_rule_task_config_pending_off_threshold = g_rule_task_config_off_threshold;
-  g_rule_task_config_pending_delay_ms = g_rule_task_config_delay_ms;
-  g_rule_task_config_pending_timeout_ms = g_rule_task_config_timeout_ms;
-  g_rule_task_config_reload = 1u;
-  for (uint32_t wait_ms = 0u; wait_ms < 250u; ++wait_ms) {
-    if (g_rule_task_config_generation != previous_generation &&
-        g_rule_task_config_reload == 0u && g_rule_task_config_result == 0u) {
-      g_rule_file_load_result = 0u;
-      return;
-    }
-    vTaskDelay(pdMS_TO_TICKS(1u));
-  }
-  g_rule_file_load_result = 6u;
 }
 
 static void rule_task(void *argument)
@@ -982,17 +780,8 @@ static void rule_task(void *argument)
       (void)rule_task_load_config(&engine);
     }
 
-    uint32_t stale_after_ms = 0u;
-    for (size_t i = 0u; i < engine.rule_count; ++i) {
-      if (engine.rules[i].enabled && engine.rules[i].timeout_ms > stale_after_ms) {
-        stale_after_ms = engine.rules[i].timeout_ms;
-      }
-    }
-    if (stale_after_ms != 0u) {
-      g_can2_dbc_stale_mark_count +=
-        (uint32_t)can2_signal_cache_mark_stale(now_ms, stale_after_ms);
-    }
-    const size_t count = can2_signal_cache_export_rule_snapshots_for_engine(&engine, signals, 2u);
+    const size_t count =
+      w5500_http_selected_rule_snapshots(&engine, signals, 2u);
 
     g_rule_task_input_count = (uint32_t)count;
     rule_engine_set_manual(&engine, manual_enabled, manual_relays);
@@ -1038,6 +827,200 @@ static void rule_task(void *argument)
   }
 }
 
+typedef struct {
+  SignalLogBuffer buffer;
+  SelectedSignalLogIdentity identity;
+  SignalLogControl control;
+  size_t csv_size;
+  size_t meta_size;
+  uint32_t pending_rows;
+  uint32_t last_flush_ms;
+} SelectedLogTaskContext;
+
+static SelectedSignalLogState selected_log_state(void)
+{
+  SelectedSignalLogState state;
+  taskENTER_CRITICAL();
+  state = (SelectedSignalLogState)g_selected_signal_log_session.state;
+  taskEXIT_CRITICAL();
+  return state;
+}
+
+static void selected_log_start_snapshot(SelectedLogTaskContext *context)
+{
+  taskENTER_CRITICAL();
+  context->identity = g_selected_signal_log_session.identity;
+  context->control = g_signal_log_control;
+  taskEXIT_CRITICAL();
+}
+
+static void selected_log_counter_snapshot(SelectedSignalLogCounters *counters)
+{
+  taskENTER_CRITICAL();
+  *counters = g_selected_signal_log_session.counters;
+  taskEXIT_CRITICAL();
+}
+
+static bool selected_log_transition(SelectedSignalLogState next_state)
+{
+  bool ok;
+  taskENTER_CRITICAL();
+  ok = selected_signal_log_session_transition(
+         &g_selected_signal_log_session, next_state) ==
+       SELECTED_SIGNAL_LOG_OK;
+  taskEXIT_CRITICAL();
+  return ok;
+}
+
+static void selected_log_disable_control(void)
+{
+  taskENTER_CRITICAL();
+  g_signal_log_control.enabled = false;
+  taskEXIT_CRITICAL();
+}
+
+static bool selected_log_flush_buffer(SelectedLogTaskContext *context,
+                                      const char *path,
+                                      uint32_t now_ms,
+                                      bool csv_data)
+{
+  int result;
+  SignalLogBuffer *buffer;
+  size_t *file_size;
+  if (context == NULL || path == NULL) {
+    return false;
+  }
+  buffer = &context->buffer;
+  file_size = csv_data ? &context->csv_size : &context->meta_size;
+  if (buffer->length == 0u) {
+    return true;
+  }
+
+  if (csv_data) {
+    ++g_log_flush_count;
+    g_tf_csv_write_len = (uint32_t)buffer->length;
+  }
+  result = stm32h750_tf_append_file_locked(
+    path, (const uint8_t *)buffer->data, buffer->length, file_size);
+  g_log_last_result = (uint32_t)result;
+  if (csv_data) {
+    taskENTER_CRITICAL();
+    ++g_selected_signal_log_session.counters.flush_count;
+    if (result == 0) {
+      g_selected_signal_log_session.counters.rows_written +=
+        context->pending_rows;
+    }
+    taskEXIT_CRITICAL();
+    g_tf_csv_write_result = (uint32_t)result;
+    g_tf_csv_file_size = (uint32_t)*file_size;
+    g_log_active_file_size = (uint32_t)*file_size;
+    context->last_flush_ms = now_ms;
+  }
+  if (result != 0) {
+    return false;
+  }
+
+  if (csv_data) {
+    ++g_tf_csv_write_count;
+    ++g_log_write_count;
+  }
+  signal_log_buffer_clear(buffer);
+  context->pending_rows = 0u;
+  g_log_buffer_len = 0u;
+  g_log_buffer_samples = 0u;
+  return true;
+}
+
+static bool selected_log_append_fragment(SelectedLogTaskContext *context,
+                                         const char *fragment,
+                                         size_t fragment_length,
+                                         const char *path,
+                                         uint32_t now_ms,
+                                         bool csv_data,
+                                         bool is_row)
+{
+  SignalLogBuffer *buffer;
+  if (context == NULL) {
+    return false;
+  }
+  buffer = &context->buffer;
+  if (buffer == NULL || fragment == NULL || fragment_length == 0u ||
+      fragment_length >= buffer->capacity) {
+    return false;
+  }
+  if (fragment_length >= buffer->capacity - buffer->length &&
+      !selected_log_flush_buffer(context, path, now_ms, csv_data)) {
+    return false;
+  }
+  if (fragment_length >= buffer->capacity - buffer->length) {
+    return false;
+  }
+  memcpy(buffer->data + buffer->length, fragment, fragment_length);
+  buffer->length += fragment_length;
+  buffer->data[buffer->length] = '\0';
+  if (is_row) {
+    ++context->pending_rows;
+  }
+  g_log_buffer_len = (uint32_t)buffer->length;
+  g_log_buffer_samples = context->pending_rows;
+  return true;
+}
+
+static __attribute__((noinline)) bool selected_log_write_footer(
+  const SelectedSignalLogIdentity *identity,
+  uint64_t unix_ms,
+  bool clean_close,
+  SelectedLogTaskContext *context,
+  char *scratch,
+  uint32_t now_ms)
+{
+  SelectedSignalLogCounters counters;
+  size_t footer_length = 0u;
+  selected_log_counter_snapshot(&counters);
+  return identity != NULL && identity->meta_path[0] != '\0' &&
+         selected_signal_log_serialize_meta_footer(
+           unix_ms, clean_close, &counters, scratch,
+           SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES, &footer_length) ==
+           SELECTED_SIGNAL_LOG_OK &&
+         selected_log_append_fragment(context, scratch, footer_length,
+                                      identity->meta_path, now_ms, false,
+                                      false) &&
+         selected_log_flush_buffer(context, identity->meta_path, now_ms,
+                                   false);
+}
+
+static void selected_log_fail_session(
+  const SelectedSignalLogIdentity *identity,
+  uint64_t unix_ms,
+  SelectedLogTaskContext *context,
+  char *scratch,
+  uint32_t now_ms)
+{
+  const uint32_t dropped = context->pending_rows;
+  signal_log_buffer_clear(&context->buffer);
+  context->pending_rows = 0u;
+  g_log_buffer_len = 0u;
+  g_log_buffer_samples = 0u;
+  ++g_log_failure_count;
+  g_log_drop_count += dropped;
+  taskENTER_CRITICAL();
+  g_selected_signal_log_session.counters.rows_dropped += dropped;
+  ++g_selected_signal_log_session.counters.write_failures;
+  taskEXIT_CRITICAL();
+
+  if (!selected_log_write_footer(identity, unix_ms, false, context, scratch,
+                                 now_ms)) {
+    ++g_log_failure_count;
+    taskENTER_CRITICAL();
+    ++g_selected_signal_log_session.counters.write_failures;
+    taskEXIT_CRITICAL();
+  }
+  signal_log_buffer_clear(&context->buffer);
+  g_log_buffer_len = 0u;
+  (void)selected_log_transition(SELECTED_SIGNAL_LOG_FAILED);
+  selected_log_disable_control();
+}
+
 static void signal_log_task(void *argument)
 {
   enum {
@@ -1045,102 +1028,168 @@ static void signal_log_task(void *argument)
     LOG_FLUSH_THRESHOLD = 512u,
   };
   static char storage[768];
-  char active_path[SIGNAL_LOG_PATH_MAX];
-  SignalLogBuffer buffer;
+  char scratch[SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES];
+  SelectedLogTaskContext context;
   uint32_t last_sample_ms;
-  uint32_t last_flush_ms;
-  size_t file_size = 0u;
-  bool session_active = false;
 
   (void)argument;
-  active_path[0] = '\0';
   g_log_path_mode = 0xffffffffu;
-  signal_log_buffer_init(&buffer, storage, sizeof(storage));
+  memset(&context, 0, sizeof(context));
+  signal_log_buffer_init(&context.buffer, storage, sizeof(storage));
   last_sample_ms = HAL_GetTick();
-  last_flush_ms = last_sample_ms;
+  context.last_flush_ms = last_sample_ms;
   g_log_task_started = 1u;
 
   for (;;) {
     const uint32_t now_ms = HAL_GetTick();
-    SignalLogControl control;
+    const SelectedSignalLogState state = selected_log_state();
+    SelectedSignalLogIdentity *identity = &context.identity;
     uint64_t unix_ms = 0u;
+    bool ok = true;
 
-    taskENTER_CRITICAL();
-    control = g_signal_log_control;
-    taskEXIT_CRITICAL();
-    if (!control.enabled || !signal_log_control_unix_ms(&control, now_ms, &unix_ms)) {
-      signal_log_buffer_clear(&buffer);
+    if (state == SELECTED_SIGNAL_LOG_STOPPED ||
+        state == SELECTED_SIGNAL_LOG_FAILED) {
+      signal_log_buffer_clear(&context.buffer);
+      context.pending_rows = 0u;
       g_log_buffer_len = 0u;
       g_log_buffer_samples = 0u;
       last_sample_ms = now_ms;
-      session_active = false;
-    } else if (!session_active || strcmp(active_path, signal_log_control_session_path(&control)) != 0) {
-      int file_size_result;
-
-      signal_log_buffer_clear(&buffer);
-      file_size = 0u;
-      file_size_result = stm32h750_tf_file_size_locked(signal_log_control_session_path(&control), &file_size);
-      if (file_size_result == SIGNAL_LOG_FILE_NOT_FOUND) file_size = 0u;
+      context.last_flush_ms = now_ms;
+      context.csv_size = 0u;
+      context.meta_size = 0u;
+    } else if (state == SELECTED_SIGNAL_LOG_STARTING) {
+      selected_log_start_snapshot(&context);
+      identity = &context.identity;
+      if (!signal_log_control_unix_ms(&context.control, now_ms, &unix_ms)) {
+        selected_log_fail_session(identity, 0u, &context, scratch, now_ms);
+        ++g_log_task_loop_count;
+        vTaskDelay(pdMS_TO_TICKS(100u));
+        continue;
+      }
+      size_t existing_size = 0u;
+      const int csv_size_result = stm32h750_tf_file_size_locked(
+        identity->csv_path, &existing_size);
+      const int meta_size_result = stm32h750_tf_file_size_locked(
+        identity->meta_path, &existing_size);
+      signal_log_buffer_clear(&context.buffer);
+      context.pending_rows = 0u;
+      context.csv_size = 0u;
+      context.meta_size = 0u;
       g_log_path_mode = SIGNAL_LOG_PATH_DEFAULT;
-      g_log_active_file_size = (uint32_t)file_size;
-      g_tf_csv_file_size = (uint32_t)file_size;
-      g_log_last_result = (uint32_t)file_size_result;
-      strncpy(active_path, signal_log_control_session_path(&control), sizeof(active_path) - 1u);
-      active_path[sizeof(active_path) - 1u] = '\0';
-      session_active = file_size_result == 0 || file_size_result == SIGNAL_LOG_FILE_NOT_FOUND;
-      last_sample_ms = now_ms;
-      last_flush_ms = now_ms;
-    } else if ((uint32_t)(now_ms - last_sample_ms) >= control.sample_period_ms) {
-      SignalCacheEntry entries[2];
-      const size_t count = can2_signal_cache_copy(entries, 2u);
-      last_sample_ms = now_ms;
-      ++g_log_sample_count;
-      if (count == 0u) {
-        ++g_log_drop_count;
+      if (csv_size_result != SIGNAL_LOG_FILE_NOT_FOUND ||
+          meta_size_result != SIGNAL_LOG_FILE_NOT_FOUND) {
+        ok = false;
+      }
+
+      size_t fragment_length = 0u;
+      if (ok && selected_signal_log_serialize_meta_header(
+                  identity, scratch, sizeof(scratch), &fragment_length) ==
+                SELECTED_SIGNAL_LOG_OK) {
+        ok = selected_log_append_fragment(
+          &context, scratch, fragment_length, identity->meta_path, now_ms,
+          false, false);
       } else {
-        const SignalLogBufferResult result = signal_log_buffer_append_snapshot_v2(&buffer,
-                                                                                    entries,
-                                                                                    count,
-                                                                                    unix_ms,
-                                                                                    file_size == 0u && buffer.length == 0u);
-        if (result != SIGNAL_LOG_BUFFER_OK) {
-          if (result == SIGNAL_LOG_BUFFER_SERIALIZE_ERROR) {
-            ++g_log_failure_count;
-          }
-          ++g_log_drop_count;
-          g_log_last_result = (uint32_t)result + 2u;
+        ok = false;
+      }
+      for (uint16_t signal_index = 0u;
+           ok && signal_index < identity->selected_count; ++signal_index) {
+        DbcSelectedRuntimeSignal signal;
+        SignalValueSnapshot value;
+        if (w5500_http_selected_log_signal(
+              identity->active_generation, identity->selection_crc32,
+              signal_index, &signal, &value) != 0 ||
+            selected_signal_log_serialize_meta_signal(
+              &signal, scratch, sizeof(scratch), &fragment_length) !=
+              SELECTED_SIGNAL_LOG_OK) {
+          ok = false;
         } else {
-          ++g_log_buffer_samples;
-          g_log_buffer_len = (uint32_t)buffer.length;
+          ok = selected_log_append_fragment(
+            &context, scratch, fragment_length, identity->meta_path, now_ms,
+            false, false);
         }
       }
-    }
-
-    if (session_active && control.enabled && control.time_synced && signal_log_buffer_should_flush(&buffer,
-                                       LOG_FLUSH_THRESHOLD,
-                                       last_flush_ms,
-                                       now_ms,
-                                       LOG_FLUSH_MS)) {
-      ++g_log_flush_count;
-      g_tf_csv_write_len = (uint32_t)buffer.length;
-      g_tf_csv_write_result = (uint32_t)stm32h750_tf_append_file_locked(active_path,
-                                                                          (const uint8_t *)buffer.data,
-                                                                          buffer.length,
-                                                                          &file_size);
-      g_tf_csv_file_size = (uint32_t)file_size;
-      g_log_active_file_size = (uint32_t)file_size;
-      g_log_last_result = g_tf_csv_write_result;
-      last_flush_ms = now_ms;
-      if (g_tf_csv_write_result == 0u) {
-        ++g_tf_csv_write_count;
-        ++g_log_write_count;
-      } else {
-        ++g_log_failure_count;
-        g_log_drop_count += g_log_buffer_samples;
+      if (ok) {
+        ok = selected_log_flush_buffer(&context, identity->meta_path, now_ms,
+                                       false);
       }
-      signal_log_buffer_clear(&buffer);
-      g_log_buffer_len = 0u;
-      g_log_buffer_samples = 0u;
+      if (ok && selected_signal_log_serialize_csv_header(
+                  scratch, sizeof(scratch), &fragment_length) ==
+                SELECTED_SIGNAL_LOG_OK) {
+        ok = selected_log_append_fragment(
+          &context, scratch, fragment_length, identity->csv_path, now_ms,
+          true, false) &&
+             selected_log_flush_buffer(&context, identity->csv_path, now_ms,
+                                       true);
+      } else {
+        ok = false;
+      }
+      if (ok && selected_log_transition(SELECTED_SIGNAL_LOG_ACTIVE)) {
+        last_sample_ms = now_ms;
+        context.last_flush_ms = now_ms;
+        g_log_last_result = 0u;
+      } else {
+        selected_log_fail_session(identity, unix_ms, &context, scratch,
+                                  now_ms);
+      }
+    } else if (!signal_log_control_unix_ms(&context.control, now_ms,
+                                           &unix_ms)) {
+      selected_log_fail_session(identity, 0u, &context, scratch, now_ms);
+    } else if (state == SELECTED_SIGNAL_LOG_ACTIVE) {
+      if ((uint32_t)(now_ms - last_sample_ms) >=
+          identity->sample_period_ms) {
+        size_t fragment_length = 0u;
+        const uint32_t elapsed_ms = (uint32_t)(now_ms - last_sample_ms);
+        const uint32_t elapsed_periods =
+          elapsed_ms / identity->sample_period_ms;
+        if (elapsed_periods > 1u) {
+          taskENTER_CRITICAL();
+          g_selected_signal_log_session.counters.late_samples +=
+            (uint64_t)elapsed_periods - 1u;
+          taskEXIT_CRITICAL();
+        }
+        last_sample_ms += elapsed_periods * identity->sample_period_ms;
+        ++g_log_sample_count;
+        for (uint16_t signal_index = 0u;
+             ok && signal_index < identity->selected_count; ++signal_index) {
+          DbcSelectedRuntimeSignal signal;
+          SignalValueSnapshot value;
+          if (w5500_http_selected_log_signal(
+                identity->active_generation, identity->selection_crc32,
+                signal_index, &signal, &value) != 0 ||
+              selected_signal_log_serialize_csv_row(
+                unix_ms, now_ms, &signal, &value, scratch, sizeof(scratch),
+                &fragment_length) != SELECTED_SIGNAL_LOG_OK) {
+            ok = false;
+          } else {
+            ok = selected_log_append_fragment(
+              &context, scratch, fragment_length, identity->csv_path, now_ms,
+              true, true);
+          }
+        }
+      }
+      if (ok && signal_log_buffer_should_flush(
+                  &context.buffer, LOG_FLUSH_THRESHOLD,
+                  context.last_flush_ms, now_ms,
+                  LOG_FLUSH_MS)) {
+        ok = selected_log_flush_buffer(&context, identity->csv_path, now_ms,
+                                       true);
+      }
+      if (!ok) {
+        selected_log_fail_session(identity, unix_ms, &context, scratch,
+                                  now_ms);
+      }
+    } else if (state == SELECTED_SIGNAL_LOG_STOPPING) {
+      ok = selected_log_flush_buffer(&context, identity->csv_path, now_ms,
+                                     true);
+      ok = ok && selected_log_write_footer(identity, unix_ms, true, &context,
+                                           scratch, now_ms);
+      if (ok && selected_log_transition(SELECTED_SIGNAL_LOG_STOPPED)) {
+        selected_log_disable_control();
+        g_log_last_result = 0u;
+      } else {
+        selected_log_fail_session(identity, unix_ms, &context, scratch,
+                                  now_ms);
+      }
     }
 
     ++g_log_task_loop_count;
@@ -1387,29 +1436,15 @@ static int config_queue_enqueue_pending(void)
     ++g_config_queue_enqueue_count;
   }
 
-  if (g_rule_task_config_save_request != 0u) {
-    command.type = CONFIG_COMMAND_RULE_SAVE;
-    command.on_threshold = g_rule_task_config_pending_on_threshold;
-    command.off_threshold = g_rule_task_config_pending_off_threshold;
-    command.delay_ms = g_rule_task_config_pending_delay_ms;
-    command.timeout_ms = g_rule_task_config_pending_timeout_ms;
-    if (xQueueSend(g_config_command_queue, &command, 0u) != pdPASS) {
-      ++g_config_queue_drop_count;
-      return 1;
-    }
-    g_rule_task_config_save_request = 0u;
-    ++g_config_queue_enqueue_count;
-  }
-
-  if (g_rule_file_v4_save_request != 0u) {
-    command.type = CONFIG_COMMAND_RULE_FILE_V4_SAVE;
-    command.rule_file_v4 = g_rule_file_v4_pending;
+  if (g_rule_file_v5_save_request != 0u) {
+    command.type = CONFIG_COMMAND_RULE_FILE_V5_SAVE;
+    command.rule_file_v5 = g_rule_file_v5_pending;
     if (xQueueSend(g_config_command_queue, &command, 0u) != pdPASS) {
       ++g_config_queue_drop_count;
       return 1;
     }
     ++g_config_queue_enqueue_count;
-    g_rule_file_v4_save_request = 0u;
+    g_rule_file_v5_save_request = 0u;
   }
 
   return 0;
@@ -1432,41 +1467,32 @@ static void config_task(void *argument)
         g_w25q128_diagnostic_result = (uint32_t)w25q128_diagnostic_run();
         ++g_w25q128_diagnostic_count;
         bringup_print_status("w25q128_diag");
-      } else if (command.type == CONFIG_COMMAND_RULE_SAVE) {
-        const int save_result = w25q128_rule_config_save(command.on_threshold,
-                                                          command.off_threshold,
-                                                          command.delay_ms,
-                                                          command.timeout_ms);
-        if (save_result == 0) {
-          g_rule_task_config_on_threshold = command.on_threshold;
-          g_rule_task_config_off_threshold = command.off_threshold;
-          g_rule_task_config_delay_ms = command.delay_ms;
-          g_rule_task_config_timeout_ms = command.timeout_ms;
-          g_rule_task_config_reload = 1u;
-        }
-        bringup_print_status("rule_config_save");
-      } else if (command.type == CONFIG_COMMAND_RULE_FILE_V4_SAVE) {
-        const size_t text_len = rule_file_format_v4(&command.rule_file_v4,
-                                                     g_rule_file_v4_text,
-                                                     sizeof(g_rule_file_v4_text));
-        if (text_len == 0u || !rule_file_v4_build_engine(&command.rule_file_v4,
-                                                          &g_rule_file_v4_candidate_engine)) {
-          g_rule_file_v4_save_result = 1u;
+      } else if (command.type == CONFIG_COMMAND_RULE_FILE_V5_SAVE) {
+        const size_t text_len = rule_file_format_v5(&command.rule_file_v5,
+                                                     g_rule_file_v5_text,
+                                                     sizeof(g_rule_file_v5_text));
+        if (text_len == 0u ||
+            !rule_file_v5_build_engine(&command.rule_file_v5,
+                                       &g_rule_file_v5_candidate_engine)) {
+          g_rule_file_v5_save_result = 1u;
         } else {
-          g_rule_file_v4_save_result = (uint32_t)stm32h750_tf_replace_file_with_backup_locked(
-            "/config/rules-v4.tmp", RULE_FILE_V4_PATH, "/config/rules-v4.prev",
-            (const uint8_t *)g_rule_file_v4_text, text_len);
-          if (g_rule_file_v4_save_result == 0u) {
-            g_rule_file_v4_current = command.rule_file_v4;
-            g_rule_file_v4_pending = command.rule_file_v4;
-            g_rule_file_v4_load_result = 0u;
-            g_rule_file_v4_size = (uint32_t)text_len;
-            g_rule_file_v4_read_len = (uint32_t)text_len;
-            g_rule_file_v4_rule_count = (uint32_t)g_rule_file_v4_candidate_engine.rule_count;
-            rule_task_request_engine_reload(&g_rule_file_v4_candidate_engine);
+          g_rule_file_v5_save_result =
+            (uint32_t)stm32h750_tf_replace_file_with_backup_locked(
+              "/config/rules-v5.tmp", RULE_FILE_V5_PATH,
+              "/config/rules-v5.prev",
+              (const uint8_t *)g_rule_file_v5_text, text_len);
+          if (g_rule_file_v5_save_result == 0u) {
+            g_rule_file_v5_current = command.rule_file_v5;
+            g_rule_file_v5_pending = command.rule_file_v5;
+            g_rule_file_v5_load_result = 0u;
+            g_rule_file_v5_size = (uint32_t)text_len;
+            g_rule_file_v5_read_len = (uint32_t)text_len;
+            g_rule_file_v5_rule_count =
+              (uint32_t)g_rule_file_v5_candidate_engine.rule_count;
+            rule_task_request_engine_reload(&g_rule_file_v5_candidate_engine);
           }
         }
-        bringup_print_status("rule_file_v4_save");
+        bringup_print_status("rule_file_v5_save");
       }
     }
     ++g_config_task_loop_count;
@@ -1531,7 +1557,6 @@ static void bringup_default_task(void *argument)
     Error_Handler();
   }
   (void)w5500_http_recover_large_dbc_candidate();
-  (void)w5500_http_load_active_dbc();
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;
 
@@ -1634,6 +1659,7 @@ static void bringup_default_task(void *argument)
     Error_Handler();
   }
   rule_file_load_from_tf();
+  (void)w5500_http_recover_large_dbc_active();
   if (watchdog_start() != 0) {
     Error_Handler();
   }
@@ -1682,6 +1708,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   (void)stm32h750_fs_mutex_init();
   signal_log_control_init(&g_signal_log_control);
+  selected_signal_log_session_init(&g_selected_signal_log_session);
   bringup_uart_write("\r\n[bringup] boot stm32h750 rtos=freertos usart2=115200 sd_detect=skip lan=removed w5500=spi2 qspi=w25q128 can=fdcan1-loopback cext=fdcan1-external-loopback can2=pb5pb6-analyzer\r\n");
   if (xTaskCreate(bringup_default_task,
                   "bringup",

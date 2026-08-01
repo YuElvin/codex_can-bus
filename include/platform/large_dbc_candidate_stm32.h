@@ -6,6 +6,8 @@
 
 #include "dbc_candidate_catalog.h"
 #include "dbc_candidate_commit.h"
+#include "dbc_active_commit.h"
+#include "dbc_selected_runtime.h"
 
 typedef enum {
   LARGE_DBC_CANDIDATE_IO_OPEN = 0,
@@ -57,6 +59,43 @@ typedef struct {
   DbcCandidateCatalogPage page;
 } LargeDbcCandidateCatalogResult;
 
+typedef enum {
+  LARGE_DBC_ACTIVE_STM32_OK = 0,
+  LARGE_DBC_ACTIVE_STM32_INVALID_ARGUMENT,
+  LARGE_DBC_ACTIVE_STM32_LOCK_FAILED,
+  LARGE_DBC_ACTIVE_STM32_NOT_FOUND,
+  LARGE_DBC_ACTIVE_STM32_VERIFY_FAILED,
+  LARGE_DBC_ACTIVE_STM32_GENERATION_EXHAUSTED,
+  LARGE_DBC_ACTIVE_STM32_LOGGING_ACTIVE,
+  LARGE_DBC_ACTIVE_STM32_RULE_KEY_MISSING,
+  LARGE_DBC_ACTIVE_STM32_RULE_DEFINITION_CONFLICT,
+  LARGE_DBC_ACTIVE_STM32_RUNTIME_FAILED,
+  LARGE_DBC_ACTIVE_STM32_COLLISION,
+  LARGE_DBC_ACTIVE_STM32_IO_FAILED,
+  LARGE_DBC_ACTIVE_STM32_MANIFEST_FAILED
+} LargeDbcActiveStm32Status;
+
+typedef DbcSelectedRuntimeStatus (*LargeDbcActivePublishCallback)(
+  void *context,
+  DbcSelectedRuntimeSnapshot *runtime_snapshot,
+  const DbcActiveDescriptor *active,
+  uint8_t prepared_slot);
+
+typedef struct {
+  uint64_t active_generation;
+  bool writes_blocked;
+  const DbcSelectedRuleRequirement *rules;
+  size_t rule_count;
+  DbcSelectedRuntimeSnapshot *runtime_snapshot;
+  LargeDbcActivePublishCallback publish;
+  void *publish_context;
+} LargeDbcActiveRequest;
+
+typedef struct {
+  DbcActiveDescriptor active;
+  uint8_t runtime_slot;
+} LargeDbcActiveResult;
+
 /*
  * Synchronous DbcTask backend.  The progress callback runs after every FatFs
  * call and must not perform filesystem I/O.  Completion publishes only the
@@ -101,6 +140,32 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_update_selection(
   LargeDbcCandidateProgressCallback progress,
   void *progress_context,
   LargeDbcCandidateSnapshot *published_candidate);
+
+/*
+ * DbcTask-only active transaction.  All FatFs work completes before publish
+ * is called; publish must only perform the short RTOS runtime/manifest flip.
+ */
+LargeDbcActiveStm32Status stm32h750_large_dbc_active_commit(
+  const LargeDbcActiveRequest *request,
+  LargeDbcCandidateProgressCallback progress,
+  void *progress_context,
+  LargeDbcActiveResult *result);
+
+/* current is preferred; previous is used only when current is invalid. */
+LargeDbcActiveStm32Status stm32h750_large_dbc_active_recover(
+  const DbcSelectedRuleRequirement *rules,
+  size_t rule_count,
+  DbcSelectedRuntimeSnapshot *runtime_snapshot,
+  LargeDbcActivePublishCallback publish,
+  void *publish_context,
+  LargeDbcCandidateProgressCallback progress,
+  void *progress_context,
+  bool *available,
+  LargeDbcActiveResult *result,
+  uint64_t *next_generation);
+
+const char *stm32h750_large_dbc_active_status_string(
+  LargeDbcActiveStm32Status status);
 
 const char *stm32h750_large_dbc_candidate_status_string(
   LargeDbcCandidateStm32Status status);

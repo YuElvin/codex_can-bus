@@ -270,6 +270,12 @@ static bool test_selected_only_and_publish(void) {
                 DBC_SELECTED_RUNTIME_OK);
   const DbcSelectedRuntime *active = dbc_selected_runtime_active(&g_snapshot);
   ASSERT_TRUE(active != NULL && active->runtime_generation == 100u);
+  SignalValueSnapshot value;
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 0u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_MISSING &&
+              value.raw == 0 && value.value == 0.0 &&
+              value.updated_ms == 0u && value.update_seq == 0u);
+  ASSERT_TRUE(!dbc_selected_runtime_copy_active_value(&g_snapshot, 2u, &value));
   const DbcSelectedRuleRequirement matching_rule = {
     .enabled = true,
     .key = "M000.S1",
@@ -285,6 +291,9 @@ static bool test_selected_only_and_publish(void) {
   ASSERT_STATUS(dbc_selected_runtime_publish_prepared(&g_snapshot),
                 DBC_SELECTED_RUNTIME_OK);
   ASSERT_TRUE(dbc_selected_runtime_active(&g_snapshot)->runtime_generation == 101u);
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 1u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_MISSING &&
+              value.update_seq == 0u);
   request.selection_crc32 ^= 1u;
   ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
                 DBC_SELECTED_RUNTIME_INVALID_SELECTION);
@@ -373,11 +382,130 @@ static bool test_128_signals_64_messages(void) {
               runtime->message_count == 64u);
   ASSERT_TRUE(runtime->signals[127].value_state_index == 127u &&
               runtime->signals[127].definition_hash != 0u);
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared(&g_snapshot),
+                DBC_SELECTED_RUNTIME_OK);
+  SignalValueSnapshot value;
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 127u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_MISSING &&
+              value.update_seq == 0u);
   selection.selected_count = 129u;
   selection.bitmap[16] |= 1u;
   request = build_request(&summary, &selection, 301u, NULL, 0u);
   ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
                 DBC_SELECTED_RUNTIME_INVALID_SELECTION);
+  return true;
+}
+
+static bool test_extended_fd_metadata_preserved(void) {
+  ASSERT_TRUE(begin_index());
+  const DbcCatalogIndexMessageInput message = {
+    .normalized_id = 0x18ff50e5u,
+    .source_line = 2u,
+    .declared_payload_length = 12u,
+    .ide = true
+  };
+  ASSERT_STATUS(dbc_catalog_index_builder_begin_message(&g_index_builder,
+                                                         &message),
+                DBC_CATALOG_INDEX_OK);
+  DbcCatalogIndexSignalInput signal =
+    signal_input(&message, "FdMessage.value", 0u, 1.0);
+  ASSERT_STATUS(dbc_catalog_index_builder_add_signal(&g_index_builder, &signal),
+                DBC_CATALOG_INDEX_OK);
+  DbcCatalogIndexSummary summary;
+  ASSERT_TRUE(finish_index(&summary));
+  const uint16_t ordinal = 0u;
+  DbcSelectionV1 selection;
+  ASSERT_TRUE(selection_from_ordinals(&selection, 1u, &ordinal, 1u, 22u));
+  dbc_selected_runtime_snapshot_init(&g_snapshot);
+  const DbcSelectedRuntimeBuildRequest request =
+    build_request(&summary, &selection, 304u, NULL, 0u);
+  ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
+                DBC_SELECTED_RUNTIME_OK);
+  const DbcSelectedRuntime *runtime =
+    dbc_selected_runtime_prepared(&g_snapshot);
+  const uint8_t identity_flags =
+    LARGE_DBC_SIGNAL_FLAG_IDE | LARGE_DBC_SIGNAL_FLAG_FD_REQUIRED;
+  ASSERT_TRUE(runtime != NULL && runtime->message_count == 1u &&
+              runtime->signal_count == 1u);
+  ASSERT_TRUE(runtime->messages[0].normalized_id == 0x18ff50e5u &&
+              runtime->messages[0].declared_payload_length == 12u &&
+              runtime->messages[0].flags == identity_flags);
+  ASSERT_TRUE(runtime->signals[0].normalized_id == 0x18ff50e5u &&
+              runtime->signals[0].declared_payload_length == 12u &&
+              (runtime->signals[0].flags & identity_flags) == identity_flags);
+  return true;
+}
+
+static bool test_checked_publish_and_discard_preserve_active(void) {
+  DbcCatalogIndexSummary summary;
+  DbcSelectionV1 selection;
+  ASSERT_TRUE(build_single_signal_catalog(1.0, &summary, &selection));
+  dbc_selected_runtime_snapshot_init(&g_snapshot);
+  DbcSelectedRuntimeBuildRequest request =
+    build_request(&summary, &selection, 500u, NULL, 0u);
+  ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
+                DBC_SELECTED_RUNTIME_OK);
+  const uint8_t first_slot = g_snapshot.prepared_slot;
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared_checked(
+                  &g_snapshot, 500u, first_slot),
+                DBC_SELECTED_RUNTIME_OK);
+
+  SignalValueState *active_values =
+    dbc_selected_runtime_active_value_slots(&g_snapshot);
+  ASSERT_TRUE(active_values != NULL);
+  active_values[0].update_seq = 1u;
+  active_values[0].value = 33.0;
+  active_values[0].raw = 33;
+  active_values[0].updated_ms = 700u;
+  active_values[0].quality = SIGNAL_VALUE_QUALITY_GOOD;
+  active_values[0].update_seq = 2u;
+  g_saved_active = *dbc_selected_runtime_active(&g_snapshot);
+
+  request.runtime_generation = 501u;
+  ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
+                DBC_SELECTED_RUNTIME_OK);
+  const uint8_t prepared_slot = g_snapshot.prepared_slot;
+  ASSERT_TRUE(prepared_slot != g_snapshot.active_slot);
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared_checked(
+                  &g_snapshot, 502u, prepared_slot),
+                DBC_SELECTED_RUNTIME_PREPARED_GENERATION_MISMATCH);
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared_checked(
+                  &g_snapshot, 501u, g_snapshot.active_slot),
+                DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH);
+  ASSERT_TRUE(dbc_selected_runtime_prepared(&g_snapshot) != NULL);
+  ASSERT_TRUE(memcmp(dbc_selected_runtime_active(&g_snapshot),
+                     &g_saved_active, sizeof(g_saved_active)) == 0);
+  SignalValueSnapshot value;
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 0u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_GOOD &&
+              value.raw == 33 && value.value == 33.0 &&
+              value.updated_ms == 700u && value.update_seq == 2u);
+
+  ASSERT_STATUS(dbc_selected_runtime_discard_prepared(&g_snapshot),
+                DBC_SELECTED_RUNTIME_OK);
+  ASSERT_TRUE(dbc_selected_runtime_prepared(&g_snapshot) == NULL);
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared_checked(
+                  &g_snapshot, 501u, prepared_slot),
+                DBC_SELECTED_RUNTIME_NOT_PREPARED);
+  ASSERT_STATUS(dbc_selected_runtime_discard_prepared(&g_snapshot),
+                DBC_SELECTED_RUNTIME_NOT_PREPARED);
+  ASSERT_TRUE(memcmp(dbc_selected_runtime_active(&g_snapshot),
+                     &g_saved_active, sizeof(g_saved_active)) == 0);
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 0u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_GOOD &&
+              value.raw == 33 && value.update_seq == 2u);
+
+  request.runtime_generation = 502u;
+  ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
+                DBC_SELECTED_RUNTIME_OK);
+  ASSERT_STATUS(dbc_selected_runtime_publish_prepared_checked(
+                  &g_snapshot, 502u, g_snapshot.prepared_slot),
+                DBC_SELECTED_RUNTIME_OK);
+  ASSERT_TRUE(dbc_selected_runtime_active(&g_snapshot)->runtime_generation ==
+              502u);
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 0u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_MISSING &&
+              value.update_seq == 0u);
   return true;
 }
 
@@ -441,6 +569,15 @@ static bool test_index_io_failure_preserves_active(void) {
   ASSERT_STATUS(dbc_selected_runtime_publish_prepared(&g_snapshot),
                 DBC_SELECTED_RUNTIME_OK);
   g_saved_active = *dbc_selected_runtime_active(&g_snapshot);
+  SignalValueState *active_values =
+    dbc_selected_runtime_active_value_slots(&g_snapshot);
+  ASSERT_TRUE(active_values != NULL);
+  active_values[0].update_seq = 1u;
+  active_values[0].value = 77.0;
+  active_values[0].raw = 77;
+  active_values[0].updated_ms = 900u;
+  active_values[0].quality = SIGNAL_VALUE_QUALITY_GOOD;
+  active_values[0].update_seq = 2u;
   g_index_file.fail_reads = true;
   request.runtime_generation = 401u;
   ASSERT_STATUS(dbc_selected_runtime_build_inactive(&g_snapshot, &request),
@@ -448,17 +585,26 @@ static bool test_index_io_failure_preserves_active(void) {
   ASSERT_TRUE(memcmp(dbc_selected_runtime_active(&g_snapshot),
                      &g_saved_active,
                      sizeof(g_saved_active)) == 0);
+  SignalValueSnapshot value;
+  ASSERT_TRUE(dbc_selected_runtime_copy_active_value(&g_snapshot, 0u, &value));
+  ASSERT_TRUE(value.quality == SIGNAL_VALUE_QUALITY_GOOD &&
+              value.raw == 77 && value.value == 77.0 &&
+              value.updated_ms == 900u && value.update_seq == 2u);
   g_index_file.fail_reads = false;
   return true;
 }
 
 int main(void) {
-  ASSERT_TRUE(sizeof(DbcSelectedRuntimeSnapshot) <= 48u * 1024u);
-  ASSERT_TRUE(test_selected_only_and_publish());
-  ASSERT_TRUE(test_rule_conflict_preserves_active());
-  ASSERT_TRUE(test_128_signals_64_messages());
-  ASSERT_TRUE(test_65_message_and_empty_rejection());
-  ASSERT_TRUE(test_index_io_failure_preserves_active());
+  if (sizeof(DbcSelectedRuntimeSnapshot) > LARGE_DBC_STATIC_RAM_BUDGET_BYTES ||
+      !test_selected_only_and_publish() ||
+      !test_rule_conflict_preserves_active() ||
+      !test_128_signals_64_messages() ||
+      !test_extended_fd_metadata_preserved() ||
+      !test_checked_publish_and_discard_preserve_active() ||
+      !test_65_message_and_empty_rejection() ||
+      !test_index_io_failure_preserves_active()) {
+    return 1;
+  }
   puts("DBC selected-only runtime tests passed");
   return 0;
 }

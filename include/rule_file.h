@@ -11,10 +11,12 @@
 #define RULE_FILE_V2_PATH "/config/rules-v2.conf"
 #define RULE_FILE_V3_PATH "/config/rules-v3.conf"
 #define RULE_FILE_V4_PATH "/config/rules-v4.conf"
+#define RULE_FILE_V5_PATH "/config/rules-v5.conf"
 #define RULE_FILE_V1_MAX_BYTES 256u
 #define RULE_FILE_V2_MAX_BYTES 512u
 #define RULE_FILE_V3_MAX_BYTES 640u
 #define RULE_FILE_V4_MAX_BYTES 768u
+#define RULE_FILE_V5_MAX_BYTES 896u
 #define RULE_FILE_V2_RULE_COUNT 2u
 
 typedef struct {
@@ -48,6 +50,30 @@ typedef struct {
   RuleFileV4Slot slots[RULE_FILE_V2_RULE_COUNT];
 } RuleFileV4;
 
+typedef struct {
+  bool enabled;
+  uint8_t relay;
+  char signal_key[RULE_SIGNAL_KEY_MAX];
+  double threshold;
+  RelayState action_state;
+  uint32_t delay_ms;
+  uint32_t timeout_ms;
+  RelayState safe_state;
+  uint8_t priority;
+  uint64_t definition_hash;
+} RuleFileV5Slot;
+
+typedef struct {
+  RuleFileV5Slot slots[RULE_FILE_V2_RULE_COUNT];
+} RuleFileV5;
+
+typedef enum {
+  RULE_FILE_V5_MIGRATION_OK = 0,
+  RULE_FILE_V5_MIGRATION_INVALID_ARGUMENT,
+  RULE_FILE_V5_MIGRATION_INVALID_V4,
+  RULE_FILE_V5_MIGRATION_ENABLED_RULE_REQUIRES_DEFINITION_HASH,
+} RuleFileV5MigrationStatus;
+
 bool rule_file_parse_v1(const uint8_t *data, size_t len, RuleTaskConfig *out_config);
 bool rule_file_parse_v2(const uint8_t *data, size_t len, RuleEngine *out_engine);
 bool rule_file_parse_v3(const uint8_t *data, size_t len, RuleFileV3 *out_rules);
@@ -58,5 +84,17 @@ size_t rule_file_format_decimal(double value, char *out_text, size_t out_capacit
 bool rule_file_parse_v4(const uint8_t *data, size_t len, RuleFileV4 *out_rules);
 bool rule_file_v4_build_engine(const RuleFileV4 *rules, RuleEngine *out_engine);
 size_t rule_file_format_v4(const RuleFileV4 *rules, char *out_text, size_t out_capacity);
+bool rule_file_parse_v5(const uint8_t *data, size_t len, RuleFileV5 *out_rules);
+bool rule_file_v5_build_engine(const RuleFileV5 *rules, RuleEngine *out_engine);
+size_t rule_file_format_v5(const RuleFileV5 *rules, char *out_text, size_t out_capacity);
+
+/*
+ * V4 has no definition hash. Migration is therefore explicit and succeeds
+ * only when every V4 slot is disabled. All slot definitions are preserved and
+ * their V5 definition hashes are set to zero; no rule is deleted or enabled.
+ */
+RuleFileV5MigrationStatus rule_file_v5_migrate_disabled_v4(
+  const RuleFileV4 *v4,
+  RuleFileV5 *out_v5);
 
 #endif
