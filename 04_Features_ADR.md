@@ -355,3 +355,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 当前实板合同是Classic CAN、标准11-bit ID、DLC=8；双ID外部输入期间，RX计数、selected runtime更新和`/api/signals`的8项`GOOD`相互一致，硬件快照记录`ID=0x110`、`DLC=8`、首字节`0x01`，DBC matched last ID为`0x100`。
 - 决策：该证据只关闭外部Classic CAN正向RX与selected-only decode；TX self-test不计入RX证据。必须先取得“停止`0x100`、继续`0x110`”的人工确认，才能记录STALE/隔离；CAN-FD实板继续标记`[未验证]`。
+
+### ADR-038：未选消息隔离与STALE实板证据（2026-08-01）
+
+- 用户停止`0x100`、保持`0x110`后，CAN RX仍由`8034`增长至`8140`，但8个selected slot的raw/value和`updatedMs`保持不变，quality全部为`STALE`且无CAN错误。
+- 决策：该样本关闭未选消息对ActiveRuntime、SignalCache和`/api/signals`的刷新路径；日志实体内容、TF持久化和掉电恢复仍须独立取卡验证，不由API freshness替代。

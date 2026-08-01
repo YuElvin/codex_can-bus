@@ -121,3 +121,8 @@
 - 用户确认外部设备正在发送标准Classic CAN `0x100`与`0x110`。不暂停目标的HTTP样本显示`rx=665→770`、`errors=0`、`busOff=0`、`tec=0`、`rec=0`；8个selected信号全部`GOOD`，raw/value为`12000/1200`、`-250/-25`、`3300/3.3`、`80/0`、`2/2`、`3/3`、`10/10`、`1/1`，与`0x100` payload=`E0 2E 06 FF E4 0C A5 69`一致；page1 ordinal8..15仍未选且未进入API。
 - 受控ST-Link/OpenOCD读取后均执行`monitor resume`、`detach`并关闭调试服务。读数为`g_can2_rx_count=3967`、`g_can2_dbc_rx_frame_count=3967`、`g_can2_dbc_matched_frame_count=1927`、`g_can2_dbc_signal_update_count=15416`、`g_can2_dbc_cache_count=8`、`g_can2_dbc_last_message_id=0x100`、`g_can2_dbc_decode_error_count=0`、`g_can2_dbc_stale_mark_count=0`；最近硬件RX快照为`ID=0x110`、`DLC=8`、首字节=`0x01`。这证明外部Classic RX、selected-only decode和无错误计数，不把TX self-test当作RX证据。
 - 当前隔离动作尚未完成：需用户停止`0x100`、保留`0x110`后再判定STALE；实体v3 CSV/meta、TF写失败与物理掉电恢复仍`[待确认]`，CAN-FD实板仍`[未验证]`。
+
+## 2026-08-01 F反向隔离与STALE门禁通过
+
+- 用户确认已停止`0x100`并继续发送未选`0x110`。样本A/B间隔约11 s，CAN RX=`8034→8140`，errors/Bus-Off/TEC/REC均为0；`/api/signals?page=0`的8个selected项两次均保留raw/value=`12000/-250/3300/80/2/3/10/1`，`updatedMs=847693`不变，quality全部为`STALE`。
+- 该结果关闭selected-only反向隔离和GOOD→STALE门禁：未选消息仍可进入CAN接收计数，但不更新ActiveRuntime/SignalCache/API selected slots。下一步恢复双ID后验证日志会话及TF上的CSV/.meta实体内容。

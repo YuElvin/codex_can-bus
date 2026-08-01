@@ -282,3 +282,8 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 用户确认双ID外部输入已发送。连续HTTP快照中`/api/can/status`的RX由`665`增至`770`，错误、Bus-Off、TEC、REC均为0；`/api/signals?page=0`的8个selected项均为`GOOD`，raw/value与`0x100`的`E0 2E 06 FF E4 0C A5 69`一致，page1 ordinal8..15未选项未暴露。
 - 两次受控GDB/OpenOCD读数后均显式恢复目标再关闭调试服务。最终读数`g_can2_rx_count=3967`、DBC RX=`3967`、matched=`1927`、updates=`15416`、cache=`8`、last matched ID=`0x100`、decode errors=`0`、stale marks=`0`；通用RX寄存器快照为`ID=0x110`、`DLC=8`、首字节`0x01`。F正向外部Classic RX与selected-only decode已具备证据。
 - 反向隔离尚待人工切换：停止`0x100`、保持`0x110`后验证selected值保持且quality进入`STALE`；CSV/meta实体读取和TF异常路径仍未验证。
+
+## 2026-08-01 新映像反向隔离/STALE实板证据
+
+- 用户确认停止`0x100`、仅保留`0x110`。约11 s间隔的两个只读样本中CAN RX=`8034→8140`，错误、Bus-Off、TEC、REC均为0；selected 8项 raw/value不变、`updatedMs=847693`不变，quality全部由此前GOOD状态进入并保持`STALE`。
+- 因此未选消息到达不会刷新selected runtime、SignalCache或`/api/signals`；当前仍需恢复双ID取得GOOD后启动日志，并从TF实体只读核验CSV/meta与clean footer。

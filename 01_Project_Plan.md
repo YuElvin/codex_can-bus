@@ -122,3 +122,8 @@
 
 - 双ID外部发送期间，板端RX和DBC计数持续增长且无错误：`g_can2_rx_count/dbc_rx=3967`、`matched=1927`、`signal_update=15416`、`cache=8`、`decode_error=0`；硬件最后帧快照为标准`ID=0x110`、`DLC=8`，API selected page0的8项全部`GOOD`并与`0x100` payload解码一致，未选page1保持未选。
 - 因此F的“外部标准Classic CAN RX→selected runtime→API”正向链路已关闭；不得据此扩写为反向隔离、STALE、CSV介质或掉电恢复。下一门禁是用户停止`0x100`仅保留`0x110`，再执行G日志实体核验。
+
+## 2026-08-01 F反向隔离与STALE已通过
+
+- 停止`0x100`而保持`0x110`期间，RX继续增长`8034→8140`，selected 8项的raw/value和`updatedMs`保持不变，quality全部为`STALE`，错误/Bus-Off/TEC/REC均为0。
+- 这关闭了“未选消息不得污染selected runtime/API”的实板门禁。G剩余只包含恢复GOOD后的选择性CSV/meta实体核验及TF写失败/掉电异常路径；CAN-FD实板仍`[未验证]`。
