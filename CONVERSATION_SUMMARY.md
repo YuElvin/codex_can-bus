@@ -4018,3 +4018,11 @@
 - 独立Terra-high审查确认五点时序和rollback不二次注入正确，同时发现CMake未强制P0/H1互斥及runtime publish使用裸`UINT32_MAX`。主线增加配置期`FATAL_ERROR`和具名`LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH`；both-ON配置实测按预期失败。
 - 默认OFF `./scripts/verify.sh`通过CTest=`34/34`；最终正式ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`，text/data/bss=`121384/444/196292`且`nm`无H1符号。
 - H1 ON/P0 OFF独立ARM构建成功，ELF/HEX SHA-256=`09d0f2509290d9c66fa4c06c38a6ca77c7cd466140400810e032a6007213f0a1`/`f5afdef4149945e8c51611d145c1e89b6dcd271dc3f5cf08b94b19cfe88c4cbf`，text/data/bss=`121624/444/196316`。helper=`0x080119A4`，五个globals=`0x240268FC..0x2402690C`，P0 symbol不存在；objdump统计helper调用恰为5并显示point/operation/result常量。尚未烧录或写硬件。
+## 2026-08-09 阶段17 H1实板完成、回归缺陷修复与正式映像恢复
+
+- 目标：关闭Large DBC H剩余的目标板TF写失败、active reload/publish失败保持旧状态门禁；假设为candidate2/active1、`100071 B/4B88D9CE`、selection=`E5CB6C8F`、8 selected/1 message、日志STOPPED。禁止扩大为热插拔、生产调试HTTP、CAN-FD实板或多socket。
+- H1 point1已实际触发`LOG_APPEND_SYNC`，专用诊断为fire1/point1/SYNC/`FR_DISK_ERR`；日志FAILED、write failure1/drop7，旧runtime保持，冷启动后重新日志会话正常。point2触发tmp写失败，HTTP507/`MANIFEST_FAILED`、fire1/WRITE/`FR_DISK_ERR`且即时不变量和冷启动通过。
+- point3首轮HTTP507及即时不变量正确，但冷启动runtime长期`loaded=false`，没有被误报为通过。只读审计定位：`restore_previous_active_manifest()`为验证旧manifest改写`g_active_paths`，而cleanup仍按新generation owned flags删除旧active对象。最小补丁保存/读回后恢复transaction `CandidatePaths`；`./scripts/verify.sh`=34/34，默认STM32链接text/data/bss=`121384/444/196300`，H1反汇编显示`792 B`路径副本。
+- 由于旧active对象已被首轮缺陷删掉，未伪造恢复：从仍存在的真实candidate2正常`POST /api/dbc/active`重建active1，HTTP200并验证8个external Classic CAN `GOOD`信号。修复后重跑point3、point4（readback）均HTTP507/`MANIFEST_FAILED`、point5（runtime publish）HTTP422/`RUNTIME_FAILED`；每点fire count=1、专用operation/result匹配，旧runtime/API、规则禁用、继电器关闭、日志STOPPED、CAN零错误和每点后的`reset run`冷启动均通过。
+- 最终正式默认OFF ELF/HEX=`6314d51141317f5073459d874b3c9655b0897b86916b2aeadcce41ffa2c7aea1`/`dcf50fa599f90d671addcef65a00d26e393d14dfcca8f93ae30741a5ba2267fb`；`nm`确认无H1符号。OpenOCD实际`Programming Finished/Verified OK/Resetting Target`，正式`/api/dbc/runtime`=active1/candidate2/8 signals，外部`0x100`解码GOOD，CAN errors/Bus-Off/TEC/REC=0，规则/继电器/日志API烟测均通过。
+- 结论：阶段17 A0-H在Classic CAN范围完成；CAN-FD数据模型/合同仍存在但实板路径`[未验证]`，不写成通过。下一步仅为提交、推送并保持当前正式映像，不再执行H1实验。

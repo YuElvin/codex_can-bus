@@ -1820,6 +1820,13 @@ static bool restore_previous_active_manifest(void) {
   if (!g_active_previous_rotated) {
     return !g_active_manifest_published;
   }
+  /*
+   * read_active_manifest_with_references() rebuilds g_active_paths from the
+   * restored manifest generation.  Keep the failed transaction's paths for
+   * cleanup: its ownership flags still describe the staged generation, not
+   * the restored active generation.
+   */
+  const CandidatePaths transaction_paths = g_active_paths;
   if (g_active_manifest_published) {
     const FRESULT removed_current = io_unlink(g_active_paths.current);
     if (removed_current != FR_OK && removed_current != FR_NO_FILE) {
@@ -1833,9 +1840,11 @@ static bool restore_previous_active_manifest(void) {
   g_active_previous_rotated = false;
   DbcManifestV1 restored;
   DbcManifestReferenceFacts restored_facts;
-  return read_active_manifest_with_references(g_active_paths.current,
-                                              g_current_manifest_bytes,
-                                              &restored, &restored_facts);
+  const bool restored_ok = read_active_manifest_with_references(
+    g_active_paths.current, g_current_manifest_bytes, &restored,
+    &restored_facts);
+  g_active_paths = transaction_paths;
+  return restored_ok;
 }
 
 static bool publish_active_manifest(const DbcManifestV1 *manifest) {

@@ -55,3 +55,11 @@ point 3/4/5的回滚I/O不得再次被注入，因为arm在返回失败前已经
 - 注入通过只证明上层收到`f_sync`/write/rename/readback/publish失败后的状态机与回滚；不冒充真实介质电气故障。
 - 已完成的活动日志物理掉电、只读FAT/CSV检查与同卡冷启动恢复是独立证据，继续保留。
 - host mock与源码分支用于支持定位，不能替代本文件要求的目标板fire count、HTTP/API和重启读数。
+
+## 2026-08-09 实板结果与回归修复
+
+- H1 ON/P0 OFF修复后实验ELF/HEX SHA-256=`f1618f7ca9b2f363cfbecdd0a593d768fbe5713d6d3c444cdfd7a56d5722fc98`/`0ca87b7347ee702b33f032e400fee6b9b082e16093a303b1003d598c435def30`，text/data/bss=`121624/444/196316`。five globals为`0x240268FC..0x2402690C`，helper=`0x080119A4`；反汇编在rollback函数中显示验证前保存并验证后恢复`792 B CandidatePaths`。
+- point1：`fire=1/point=1/operation=SYNC/result=FR_DISK_ERR`，CSV日志FAILED、write failure=`1`、drop=`7`，随后冷启动恢复并可新建/停止日志。point2：HTTP507、`WRITE/FR_DISK_ERR`、transaction=`MANIFEST_FAILED`。point3：HTTP507、`RENAME/FR_DISK_ERR`。point4：HTTP507、`READ/FR_DISK_ERR`。point5：HTTP422、operation=`0xFFFFFFFF`（具名runtime publish sentinel）、result=`12`、transaction=`RUNTIME_FAILED`。
+- 每个active point即时读取均为active1/candidate2/selection CRC=`E5CB6C8F`、slot0、8 signals；selected八项仍与外部标准Classic `0x100=E0 2E 06 FF E4 0C A5 69`解码一致，规则均disabled、手动继电器输出0、日志STOPPED、CAN errors/Bus-Off/TEC/REC均0。point3/4/5各自`reset run`后均恢复同一runtime身份。
+- point3首轮曾使冷启动`loaded=false`，不得计为通过。现场与源码共同定位为rollback验证将`g_active_paths`改为旧generation，cleanup错误删除旧对象；修复并从保留的真实candidate2重新正常激活后，重跑point3–5全部通过。
+- 最后已重烧默认OFF正式ELF/HEX SHA-256=`6314d51141317f5073459d874b3c9655b0897b86916b2aeadcce41ffa2c7aea1`/`dcf50fa599f90d671addcef65a00d26e393d14dfcca8f93ae30741a5ba2267fb`，OpenOCD=`Programming Finished/Verified OK/Resetting Target`，`nm`无`large_dbc_h1_fault`符号；正式映像runtime/API/CAN外部解码烟测通过。

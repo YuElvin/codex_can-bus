@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-08-09（大 DBC selected-only 阶段17 A0-G与H物理掉电恢复通过）
+更新时间：2026-08-09（大 DBC selected-only 阶段17 A0-H Classic CAN闭环通过）
 
 ## 当前仓库
 
@@ -12,7 +12,7 @@
 
 阶段17当前真实链为candidate generation2、active generation1、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、selected-only 8项/1消息。A0-G已经通过：100KB流式上传/candidate/index/selection/active、外部标准Classic CAN `0x100`正向解码、未选`0x110`隔离、STALE、分页API、选择性v3 CSV/meta、日志吞吐/会话锁与TF实体只读一致性均有当前固件现场证据。
 
-H物理掉电恢复也已关闭：活动v3日志与外部CAN持续时整板掉电，取卡后两次`fsck_msdos -n` exit0，708条CSV数据无撕裂行且meta `cleanClose=false`；同卡重新插回断电板上电后，runtime身份、8项selected `GOOD`与新日志`ACTIVE→STOPPED`全部恢复。当前H仅剩可控TF写失败及active reload/publish失败保持旧runtime两项目标板注入；host mock、HTTP前置409/400、504或热拔卡均不能替代。CAN-FD实板保持`[未验证]`，不扩写为Classic CAN本轮阻断。
+H物理掉电恢复已关闭：活动v3日志与外部CAN持续时整板掉电，取卡后两次`fsck_msdos -n` exit0，708条CSV数据无撕裂行且meta `cleanClose=false`；同卡重新插回断电板上电后，runtime身份、8项selected `GOOD`与新日志`ACTIVE→STOPPED`全部恢复。H1可控实验也已关闭：日志sync point1使日志FAILED而旧runtime保持；active point2/3/4返回HTTP507、point5返回HTTP422，均保持旧active/runtime、selected值、规则、继电器与日志状态，且每点后冷启动恢复。point3首轮发现回滚验证改写`g_active_paths`后清理误删旧generation对象，已最小修复并重做point3–5通过。CAN-FD实板保持`[未验证]`，不扩写为Classic CAN本轮阻断。
 
 | 模块 | 状态 | 证据摘要 |
 | --- | --- | --- |
@@ -318,4 +318,11 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 ## 2026-08-09 H1实现/静态验证状态
 
 - H1默认OFF实现已完成并经独立审查修正；统一verify 34/34，正式ELF/HEX哈希与尺寸不变且无H1符号。ON实验映像为ELF `09d0f250...`/HEX `f5afdef4...`、text/data/bss=`121624/444/196316`，H1=ON/P0=OFF且五个consume调用均在最终反汇编。
-- CMake已实际拒绝P0/H1同时ON；实验diagnostic普通BSS地址`0x240268FC..0x2402690C`，重启自动清零。尚未烧录实验映像；现场不变量和恢复仍待执行。
+- CMake已实际拒绝P0/H1同时ON；实验diagnostic普通BSS地址`0x240268FC..0x2402690C`，重启自动清零。该静态门禁已被后续板端五点实验和正式映像重烧取代。
+
+## 2026-08-09 H1五点实板完成与正式恢复
+
+- H1 point1 `LOG_APPEND_SYNC`：fire=`1`、operation=`SYNC`、`FR_DISK_ERR`；日志FAILED，write failure=`1`/drop=`7`，旧runtime保持，冷启动后可新建并正常停止日志。
+- H1 point2 `ACTIVE_CURRENT_WRITE`：HTTP507、transaction=`MANIFEST_FAILED`、fire=`1`/point=`2`/operation=`WRITE`/`FR_DISK_ERR`；point3 `ACTIVE_CURRENT_RENAME`、point4 `ACTIVE_CURRENT_READBACK`分别为HTTP507和`RENAME`/`READ`、`FR_DISK_ERR`；point5为HTTP422、operation=`0xFFFFFFFF`（具名runtime publish sentinel）、result=`12`、transaction=`RUNTIME_FAILED`。每点即时和冷启动后均为active1/candidate2/`E5CB6C8F`/8 selected，规则禁用、继电器关闭、日志STOPPED、CAN错误0。
+- point3首轮使冷启动`loaded=false`，并非通过：已确认是`restore_previous_active_manifest()`读回旧manifest改写全局路径，后续新generation owned标志错误清理旧active对象。保存并恢复failed transaction的`CandidatePaths`后，默认`verify.sh`为34/34，H1反汇编确认`792 B`路径副本在验证前后复制；真实candidate重新激活后重跑point3–5和冷启动全部通过。
+- 当前板已重烧默认OFF正式HEX，OpenOCD=`Programming Finished/Verified OK/Resetting Target`，正式ELF/HEX SHA-256=`6314d51141317f5073459d874b3c9655b0897b86916b2aeadcce41ffa2c7aea1`/`dcf50fa599f90d671addcef65a00d26e393d14dfcca8f93ae30741a5ba2267fb`，text/data/bss=`121384/444/196300`；`nm`无H1符号，外部0x100解码与现有API烟测通过。

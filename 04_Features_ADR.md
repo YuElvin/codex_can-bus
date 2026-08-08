@@ -17,7 +17,7 @@
 | F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
 | F-012 | 网页 CAN 发送控制 | [客观通过] | classic CAN窄合同：`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，标准ID、DLC、8字节HEX、`100..10000 ms`；TX self-test/RX缓存独立。用户已部署网页上电，浏览器实测状态灯、TX/RX累计、默认折叠和CANoe式TX/RX DBC表；最终`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms已应用result=0，自动刷新和两次reload均无连接拒绝。CANtest外部输入由用户确认且RX表增长；未直接读取CANtest接收显示，不能声称外部接收器逐帧确认新TX帧 |
 | F-013 | 网页手动 TX 与 DBC `signalKey` 两槽规则 | [最终现场验收完成] | 根目录新网页下自动刷新 TX/RX=`55/364→576/5540`，两次刷新期间编辑均保留并提交，最终 TX `sequence=256`，warn/error为空。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX为 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时manual `relay1Output=0`与高优先级off一致；此前构建、反汇编、烧录已实际完成 |
-| F-014 | 大 DBC selected-only事务闭环 | [A0-G与H物理掉电恢复通过；H故障注入剩余] | 当前candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体与活动日志物理掉电冷启动恢复通过；目标板可控TF写失败和active reload/publish失败保旧仍`[未验证]`，CAN-FD实板`[未验证]`。 |
+| F-014 | 大 DBC selected-only事务闭环 | [Classic CAN通过；CAN-FD实板未验证] | candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体、物理掉电恢复与H1可控TF sync/active失败保持旧状态均通过；默认OFF正式映像已回刷，CAN-FD实板`[未验证]`。 |
 
 ## ADR 索引
 
@@ -390,3 +390,9 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - CMake强制P0 watchdog与H1不能同时ON；H1 runtime非FatFs诊断使用具名`UINT32_MAX` sentinel。默认OFF最终ELF与既有正式映像逐字哈希一致且`nm`无H1符号，证明生产行为/预算未改变。
 - H1 ON/P0 OFF实验ELF比正式text/bss增加240/24 B，五个BSS globals与helper可见，最终反汇编恰有五个调用点。该ADR只关闭实现/构建隔离，不声明任何板端故障点通过。
+
+### ADR-045：H1实板回归发现并修复active rollback路径归属污染（2026-08-09）
+
+- point3实板首轮证明旧manifest指针虽立即恢复，但冷启动无法加载。根因是恢复读回旧manifest会重建全局`g_active_paths`为旧generation，而失败交易的owned/renamed标志仍表示新generation；随后清理误删旧active的source/index/selection。
+- 最小修复是在`restore_previous_active_manifest()`保存本次交易`CandidatePaths`，完成旧manifest验证后无条件恢复，令cleanup继续只针对失败的新generation。未改HTTP、TF格式、CAN、日志或事务顺序。
+- 修复后H1 point3/4/5逐点HTTP、故障锁存、旧runtime不变量及冷启动恢复全部重跑通过；最后重烧默认OFF正式映像并由`nm`证明无H1符号。该决定同时覆盖readback和runtime-publish回滚，因为二者也经过同一恢复与清理路径。

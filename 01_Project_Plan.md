@@ -34,7 +34,7 @@
 | 14 | 网页手动 TX 与两槽 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录新网页后，自动刷新 TX/RX=`55/364→576/5540`，两次编辑 TX 分别在`1800/1300 ms`后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX解析 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时 manual `relay1Output=0`与高优先级 off 一致；warn/error为空。此前构建、反汇编和烧录证据已实际完成。 |
 | 15 | 安全审查 P0 可靠性整改 | [已验证] | IWDG任务卡死复位、Crash Dump保持、DBC边界、SignalCache stale、FDCAN外部高负载和TF持续写入物理断电均完成源码与现场验收。TF首次断电失败后最小修复`CTRL_SYNC`及scratch写路径的卡ready等待；最终CTest=`20/20`、固件构建/反汇编/烧录通过。干净FAT32介质复测中断电后CSV为399223 B/4159行、无撕裂尾行，`fsck_msdos -n`退出0；重新上电后TF/DBC/网络/CAN恢复，新日志文件与write/flush继续增长且failure/drop=0。结论不扩大为FAT32任意掉电时刻的原子保证。 |
 | 16 | HTTP零数据连接回收 | [客观已验证] | 原始TCP连接不发数据可稳定复现唯一socket永久`ESTABLISHED`；只增加100 ms空连接计时并复用既有graceful `DISCON`，不改ACK/recovery/API或业务语义。CTest=`20/20`、最终ELF text/data/bss=`112828/768/243948`、定向反汇编、ST-Link烧录通过；10轮空连接在`110.4..146.3 ms`被回收且后续HTTP均成功，浏览器5次新页面、4次manual提交、最终9 API和ping均通过。 |
-| 17 | 大 DBC selected-only 闭环（A0-H） | [A0-G与H物理掉电恢复通过；H故障注入剩余] | 当前candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体与活动日志物理掉电冷启动恢复通过；尚缺目标板可控TF写失败及active reload/publish失败保旧。CAN-FD实板`[未验证]`。 |
+| 17 | 大 DBC selected-only 闭环（A0-H） | [Classic CAN通过；CAN-FD实板未验证] | candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体、物理掉电恢复及H1可控TF sync/active write/rename/readback/runtime-publish失败保持旧状态均通过；正式默认OFF映像已回刷。CAN-FD实板`[未验证]`。 |
 
 ## 阶段 C 当前状态
 
@@ -157,4 +157,10 @@
 ## 2026-08-09 H1进入目标板实验
 
 - 默认OFF和H1 ON两套构建门禁通过：正式哈希不变/无H1符号，实验映像五点符号与反汇编存在，P0/H1互斥可执行。下一步只允许烧录实验HEX并按1→5逐点验证，不再修改合同或增加故障点。
+
+## 2026-08-09 阶段17 H门禁关闭（Classic CAN）
+
+- point1实际触发CSV sync失败并使日志FAILED；point2/3/4分别触发active tmp write、promote rename、current readback失败，HTTP均为507；point5 runtime publish前失败为HTTP422。所有active点均以fire count、专用operation/result、transaction result、前后API和冷启动证明旧active/runtime、SignalCache、规则、继电器和日志不被破坏。
+- point3第一次实验揭露了rollback readback污染可变路径并误删旧active generation对象；已用保存/恢复transaction `CandidatePaths`的最小补丁修复，重新构建、重烧、重建真实candidate/active基线，并重跑point3/4/5及冷启动全部通过。
+- 正式默认OFF映像已重烧、`nm`无H1符号、外部Classic CAN `0x100`解码/API/CAN零错误烟测通过。阶段17至此完成；CAN-FD仅保留数据模型/源码合同支持，实板路径明确`[未验证]`。
 - 每个active点必须独立记录HTTP、专用诊断、runtime/selected/规则/继电器前后与冷启动；最后强制重烧正式`c3d0608e...`HEX并做Classic CAN烟雾。
