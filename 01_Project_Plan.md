@@ -148,3 +148,8 @@
 
 - TF重新插回断电目标并上电后，W5500/TF/QSPI、同一large-DBC runtime身份、外部selected Classic CAN解码均恢复；掉电日志未锁死控制面，新v3日志可再次进入ACTIVE并正常STOPPED，板端写入/flush增长且failure/drop/sync正常。
 - H计划剩余范围严格收敛为两项test-only可控失败：TF写失败与active reload/publish失败时旧active/runtime不受破坏。不得以热拔卡、HTTP 409前置门禁、HTTP 504或host mock冒充目标板失败注入。
+
+## 2026-08-09 H1可控故障实验门禁
+
+- 先以`docs/LARGE_DBC_H1_FAULT_INJECTION.md`冻结默认OFF、OpenOCD fail-once与正式映像恢复合同，再允许最小源码实现。五点覆盖日志持久化与active写/rename/readback/publish失败，不扩展生产API或通用故障框架。
+- 实现后的顺序固定为verify/符号/反汇编、实验映像烧录、逐点即时与冷启动对照、重烧正式映像、Classic CAN/runtime烟雾。任一生产符号泄漏、旧identity变化或回滚失败立即停止。

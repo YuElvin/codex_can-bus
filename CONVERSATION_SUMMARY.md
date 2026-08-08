@@ -4005,3 +4005,9 @@
 - 启动新`/log/20260809_002203000_signal-v3.csv`后进入ACTIVE。首次停止仅发送`enabled=0`违反接口“enabled和samplePeriodMs必填”合同，返回HTTP400且会话保持ACTIVE；补发`enabled=0&samplePeriodMs=1000`后`STOPPING→STOPPED`。OpenOCD计数为write/flush=`24/24`、fileSize/activeSize=`15402/15402 B`、failure/drop=`0/0`、sync result0，随后恢复运行并shutdown。
 - 当前已同时关闭物理掉电的介质完整性与冷启动板端恢复；H仅余可控TF写失败及active reload/publish失败保持旧runtime的板端注入。此轮未改固件源码，未重新编译、反汇编或烧录。
 - 同步纠正`CURRENT_TASK.md`、`03_Context.md`、`01_Project_Plan.md`和`04_Features_ADR.md`顶部仍停留在8月1日“G收口中/阻断”的状态索引；历史过程保留，当前索引统一为A0-G与H物理掉电恢复通过、H仅余两项目标板可控失败注入。
+
+## 2026-08-09 H1可控故障注入合同冻结
+
+- 主线复核guide阶段H明确包含断电恢复、active reload失败和日志写失败；两份GPT-5.6-Terra high只读审计一致要求独立默认OFF开关，不复用`CAN_BUS_P0_FAULT_INJECTION`，不新增HTTP调试入口，由OpenOCD写RAM一次性触发并以fire count证明。
+- 新增`docs/LARGE_DBC_H1_FAULT_INJECTION.md`冻结五点：日志append sync、active current tmp写入、tmp→current rename、new current读回、runtime publish前失败。每点先清零arm再返回失败，确保rollback I/O不被二次注入；现场必须核对旧runtime/selected/规则/继电器、冷启动恢复，最后重烧默认OFF正式映像并证明H1符号消失。
+- 本阶段门禁提交仅修改治理文档，尚未修改源码、构建、反汇编或烧录，五点板端状态保持`[未验证]`。

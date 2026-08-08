@@ -380,3 +380,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 同一TF重新插回断电目标并上电后，HTTP确认active generation1/candidate2/selection CRC=`E5CB6C8F`、100071 B selected-only runtime slot0、1 message/8 signals完整恢复；日志控制恢复为`STOPPED`，外部标准Classic CAN `0x100`使8个selected全部`GOOD`，未选`0x110`不改变暴露集合。
 - 新v3日志可重新`ACTIVE→STOPPED`，OpenOCD计数证明write/flush=`24/24`、fileSize=`15402 B`、failure/drop=`0/0`、sync0；每次短暂停读后均已`resume`并`shutdown`。由此关闭本轮物理掉电恢复，但不扩展为任意事务时刻原子性，也不替代TF write或active publish fail-once验证。
+
+### ADR-043：H1使用默认OFF的OpenOCD fail-once实验合同（2026-08-09）
+
+- H剩余失败路径采用独立`CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION`，默认OFF且不复用watchdog的P0开关。实验构建仅由OpenOCD写RAM arm，生产不增加HTTP入口；正式ELF必须由`nm`证明完全不存在H1符号。
+- 冻结五点为日志append sync、active current tmp写入、current promote rename、new current读回和runtime publish前失败。每点消费前先清零arm，保证rollback I/O不被二次注入；验收要求旧runtime/selected/规则/继电器不变、重启恢复并最终重烧正式映像。完整矩阵见`docs/LARGE_DBC_H1_FAULT_INJECTION.md`。

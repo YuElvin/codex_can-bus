@@ -309,3 +309,8 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - TF插回断电板并上电后，板端在`192.168.1.88`恢复ping与HTTP；W5500/TF/QSPI正常。runtime保持active generation1/candidate2/selection CRC=`E5CB6C8F`、100071 B、slot0、1 message/8 signals，日志从掉电会话恢复为`STOPPED`。
 - 外部`0x100`已知payload与未选`0x110`同时持续发送时，CAN RX增长且无错误，8个selected均`GOOD`并给出预期值。随后新v3会话可正常ACTIVE并STOPPED；板端计数write/flush=`24/24`、15402 B、failure/drop=`0/0`、sync0。
 - 物理掉电的介质侧与冷启动板端恢复均通过。H当前只剩TF写失败及active reload/publish失败的可控板端注入；CAN-FD实板继续标记`[未验证]`。
+
+## 2026-08-09 H1故障注入合同状态
+
+- H1冻结为独立默认OFF实验构建与五个OpenOCD fail-once点：日志sync、active current tmp写、promote rename、new current读回、runtime publish。生产无调试API且`nm`必须无H1符号；每点完成即时不变量、冷启动恢复后，最终重烧正式映像。
+- 当前仅完成合同与只读审计，尚未修改源码、构建或烧录；因此五点目标板证据仍`[未验证]`。

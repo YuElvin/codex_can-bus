@@ -157,3 +157,8 @@
 - 用户同时发送标准Classic CAN DLC8：`0x100=E0 2E 06 FF E4 0C A5 69`和未选`0x110=01 23 45 67 89 AB CD EF`。FDCAN2 RX增长、errors/Bus-Off/TEC/REC=`0/0/0/0`，8个selected均为`GOOD`并恢复已知解码值`1200/-25/3.3/0/2/3/10/1`。
 - 新建`/log/20260809_002203000_signal-v3.csv`后状态`STARTING→ACTIVE→STOPPING→STOPPED`，身份仍锁定generation1/`E5CB6C8F`/8。OpenOCD短暂停读后已`resume`并`shutdown`：write/flush=`24/24`、fileSize=`15402 B`、failure/drop=`0/0`、sync result=`0`。物理掉电恢复门禁关闭；H仅余可控TF写失败和active reload/publish失败板端注入。
 - 本段未修改固件源码，未重新编译、反汇编或烧录；使用的仍是已记录ELF/HEX映像。
+
+## 2026-08-09 H1可控失败合同冻结
+
+- 两份Terra-high只读审计与主线源码/guide复核一致：独立默认OFF的`CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION`，不复用watchdog P0开关、不新增HTTP API，只由OpenOCD写一次性RAM arm。
+- 冻结`LOG_APPEND_SYNC`、`ACTIVE_CURRENT_WRITE`、`ACTIVE_CURRENT_RENAME`、`ACTIVE_CURRENT_READBACK`、`ACTIVE_RUNTIME_PUBLISH`五点；每点必须只消费一次，并验证旧runtime identity/selected/规则/继电器不变、重启恢复和正式映像复原。合同见`docs/LARGE_DBC_H1_FAULT_INJECTION.md`；合同提交前不改源码。
