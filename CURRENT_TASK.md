@@ -1,6 +1,6 @@
 # 当前任务
 
-更新时间：2026-08-01
+更新时间：2026-08-09
 
 ## 项目目标
 
@@ -8,6 +8,7 @@
 
 ## 当前阶段
 
+- 2026-08-09阶段17“大 DBC selected-only闭环”A0-G与H物理掉电恢复已通过。当前真实链为candidate generation2、active generation1、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、8个selected/1个消息；外部标准Classic CAN正向解码、未选隔离、STALE、分页API、选择性v3 CSV/meta、日志锁/吞吐、实体FAT只读一致性及活动日志物理掉电后的同卡冷启动恢复均有现场证据。H只剩目标板可控TF写失败和active reload/publish失败保持旧runtime两项`[未验证]`；现有生产入口不能安全确定触发，运行中拔卡禁止。CAN-FD实板保持`[未验证]`且不阻断本轮Classic CAN完成边界。
 - 2026-08-01阶段17“大 DBC selected-only闭环”A0-F门禁客观通过，G源码、host、最终固件与实板收口正在进行。恢复双ID外部输入后，最终固件总RX=`2826→3098`、selected matched=`1413→1549`、updates=`11304→12392`，准确满足总RX增量272、selected增量136、updates=`136×8`；page0八项为预期raw/value且`GOOD`、page1仍全`MISSING`。v3日志已在这些`GOOD`值下进入ACTIVE，锁定active generation7、selection CRC=`62BA0D66`、count128和`/log/20260801_175230000_signal-v3.csv`。下一动作需要用户停止`0x100`、保持`0x110`，取得超过3000 ms的STALE和值保持证据；随后停止会话、取卡只读核验CSV/meta。此前MISSING/分页/过滤/400、128项/1000 ms=`422 rate_limit`和日志期间写操作409均已实测。最终`./scripts/verify.sh`为CTest=`34/34`，Flash=`121708 B`、RAM_D1=`196664 B`，ELF `text/data/bss=121256/444/196284`，ELF/HEX SHA-256=`97cd14af626ecb7951f1f012148819f922c688b339b1f9185d66fbd630afc10b`/`963fa24f74a9808bc0687ab2ab4e5cd7ba2e7d3c5d1b912ae5794c08816e5b7d`；H和CAN-FD实板仍`[未验证]`。
 - 2026-08-01新增P0审计修正尚未烧录：发现生产active manifest旋转在`tmp→current`或短临界publish失败时只依赖下次previous恢复，不满足即时保留旧current。现已增加同一TF锁内的previous→current回滚；新候选`verify.sh`为CTest=`34/34`、Flash=`121836 B`、RAM_D1=`196664 B`、ELF/HEX SHA-256=`b77fc9de42ef3257b3155ea4f12d942d1903395671bd22c4c2173b04322aae09`/`1ca3ac65704aae4116a77c0ed90e22a46de970b36e0b038758dae0815dd800dd`。当前板仍为先前G映像并有ACTIVE日志；必须先取得STALE/介质证据并正常停日志，才允许烧录新候选并重做必要active/外部CAN回归。
 - 2026-08-01旧G映像日志收口：用户停止`0x100`且保持`0x110`后，RX=`13257→13357`仍增长，page0八项保留GOOD末值/raw并全部转为`STALE`，完成最终映像的GOOD→STALE与未选流量隔离。v3会话已`STOPPING→STOPPED`，路径仍为`/log/20260801_175230000_signal-v3.csv`。下一外部动作是用户下电取卡插入Mac；主会话将只读核验CSV/.meta、`fsck_msdos -n`，并在同一次取卡窗口部署当前`www/index.html`。完成后才烧录P0回滚候选并重做active/Classic CAN最小回归。
@@ -140,3 +141,19 @@
 - 同名`.meta`为1034 B、SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`；最终字段`cleanClose=true`、`rowsWritten=288`、`rowsDropped=0`、`lateSamples=0`、`writeFailures=0`、`flushCount=49`，身份为active generation1/candidate generation2/sourceSize100071/sourceCrc32=`4B88D9CE`/selectionCrc32=`E5CB6C8F`/selectedCount8。
 - TF上的candidate current/previous与active current manifest CRC均有效；`dbc_index_dump verify`对三个index均返回`ok source_size=100071 source_crc32=4B88D9CE messages=112 signals=896 total=145232`；selection header/bitmap CRC、popcount=8及manifest引用交叉验证通过。G实体CSV/meta、FAT一致性和selected-only介质集合已关闭。
 - H剩余：TF写失败注入、当前大DBC映像的物理掉电/active reload失败路径仍`[未验证]`；CAN-FD实板仍`[未验证]`。不得把既有旧路径或正常STOPPED会话替代这些异常证据。
+
+## 2026-08-09 H当前大DBC映像物理掉电介质侧通过，重启恢复待确认
+
+- 用户将TF插回上电后，冷启动恢复窗口约15 s，最终runtime回到active generation1/candidate2/selection CRC=`E5CB6C8F`/100071 B/1 message/8 signals；外部Classic CAN RX持续增长且8项selected为`GOOD`。以1000 ms启动`/log/20260809_000843000_signal-v3.csv`，日志`ACTIVE`且锁定同一identity。
+- 非停机OpenOCD `mdw`两次样本中write/flush=`63→67`、文件size=`41211→43866 B`、failure=`0`，TF open/write/close/sync结果均0；调试日志无halt，服务shutdown后HTTP仍`ACTIVE`。用户随后保持CAN和日志活动直接切断整板/ST-Link电源，ping=`0/2`且port80超时确认目标离线。
+- 掉电取卡后两次`fsck_msdos -n`均exit=`0`。断电CSV为78368 B、708数据行，全部8列、单一header、时间单调、仅含8个selected key、末尾换行；最后批次完整写到ordinal3，各key计数`89/89/89/89/88/88/88/88`，属于完整行的部分batch而非撕裂行。meta保持预期`cleanClose=false`。
+- active/candidate manifest与selection哈希、格式CRC均与断电前一致，三个index继续由host verifier通过，100071 B source CRC32仍`4B88D9CE`。TF已二次只读校验并安全弹出；必须插回板端上电并验证同一runtime与新日志能力后，才能关闭物理掉电恢复。
+- H仍缺可控TF写失败和active reload/publish失败板端注入。Terra只读审计确认当前生产HTTP/固件无安全确定性入口；运行中拔卡明确禁止，日志ACTIVE的409仅证明前置门禁。新增test-only fail-once hook属于需单独实施/验证的候选，尚未授权为已完成。
+
+## 2026-08-09 H物理掉电冷启动恢复通过
+
+- 用户将已只读校验并安全弹出的TF插回断电开发板后上电。当前固件静态IP经源码与现场确认是`192.168.1.88`；ping=`2/2`，`/api/status`显示W5500/TF/QSPI status=`0/0/0`、link=`1`、version=`4`。
+- `/api/dbc/runtime`恢复同一active generation1/candidate2/selection CRC=`E5CB6C8F`、sourceSize=`100071`、selected-only runtime slot0、1 message/8 signals；旧掉电日志没有保持ACTIVE，`/api/log/control`为`STOPPED`。
+- 用户同时发送标准Classic CAN DLC8：`0x100=E0 2E 06 FF E4 0C A5 69`和未选`0x110=01 23 45 67 89 AB CD EF`。FDCAN2 RX增长、errors/Bus-Off/TEC/REC=`0/0/0/0`，8个selected均为`GOOD`并恢复已知解码值`1200/-25/3.3/0/2/3/10/1`。
+- 新建`/log/20260809_002203000_signal-v3.csv`后状态`STARTING→ACTIVE→STOPPING→STOPPED`，身份仍锁定generation1/`E5CB6C8F`/8。OpenOCD短暂停读后已`resume`并`shutdown`：write/flush=`24/24`、fileSize=`15402 B`、failure/drop=`0/0`、sync result=`0`。物理掉电恢复门禁关闭；H仅余可控TF写失败和active reload/publish失败板端注入。
+- 本段未修改固件源码，未重新编译、反汇编或烧录；使用的仍是已记录ELF/HEX映像。

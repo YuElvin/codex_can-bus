@@ -119,3 +119,5 @@
 - L-115：STALE隔离验收需要在用户明确停止selected消息后，证明未选消息仍让CAN RX增长、selected raw/value和`updatedMs`保持、quality超过阈值进入`STALE`。仅看总RX或单个MISSING不能证明未选消息未污染SignalCache。
 - L-116：选择性日志的HTTP `ACTIVE/STOPPED`只证明控制面状态机和会话锁，不能证明TF文件实体可读或clean footer。必须记录日志路径、active generation、selection CRC、selected count、锁定期间写请求409，并在下电取卡后以只读文件/行列/哈希/FAT证据关闭介质门禁。
 - L-117：TF日志实体验收必须用标准CSV解析而不是`wc`或肉眼抽样：先以meta的signal ordinal/key集合建立白名单，再检查header/列数、每key行数、quality、rowsWritten/drop/failure、cleanClose和FAT链。两次`fsck_msdos -n`与只读挂载/安全弹出共同证明介质一致；可见文件名或HTTP STOPPED不能替代。
+- L-118：物理掉电CSV不应以“最后batch不足selectedCount行”直接判定撕裂。必须区分批次级部分保留与行级撕裂：本轮末batch只写ordinal0..3，但708行全部8列、末尾换行、时间单调、key白名单与FAT链均有效，meta保持`cleanClose=false`。完成结论仍必须补板端重启恢复，不能只停在介质可读。
+- L-119：掉电介质可读后必须把同一TF插回断电目标，分别核对网络/TF、active runtime身份、selected外部RX、旧日志锁状态和新日志写入能力，才能关闭冷启动恢复。现场目标地址必须由当前源码或板端配置复核；本轮固件静态IP为`192.168.1.88`，沿用旧地址会制造假网络故障。

@@ -34,7 +34,7 @@
 | 14 | 网页手动 TX 与两槽 DBC `signalKey` 规则 | [最终现场验收完成] | 正确部署根目录新网页后，自动刷新 TX/RX=`55/364→576/5540`，两次编辑 TX 分别在`1800/1300 ms`后仍保留并提交，最终 TX DBC `sequence=256`。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX解析 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时 manual `relay1Output=0`与高优先级 off 一致；warn/error为空。此前构建、反汇编和烧录证据已实际完成。 |
 | 15 | 安全审查 P0 可靠性整改 | [已验证] | IWDG任务卡死复位、Crash Dump保持、DBC边界、SignalCache stale、FDCAN外部高负载和TF持续写入物理断电均完成源码与现场验收。TF首次断电失败后最小修复`CTRL_SYNC`及scratch写路径的卡ready等待；最终CTest=`20/20`、固件构建/反汇编/烧录通过。干净FAT32介质复测中断电后CSV为399223 B/4159行、无撕裂尾行，`fsck_msdos -n`退出0；重新上电后TF/DBC/网络/CAN恢复，新日志文件与write/flush继续增长且failure/drop=0。结论不扩大为FAT32任意掉电时刻的原子保证。 |
 | 16 | HTTP零数据连接回收 | [客观已验证] | 原始TCP连接不发数据可稳定复现唯一socket永久`ESTABLISHED`；只增加100 ms空连接计时并复用既有graceful `DISCON`，不改ACK/recovery/API或业务语义。CTest=`20/20`、最终ELF text/data/bss=`112828/768/243948`、定向反汇编、ST-Link烧录通过；10轮空连接在`110.4..146.3 ms`被回收且后续HTTP均成功，浏览器5次新页面、4次manual提交、最终9 API和ping均通过。 |
-| 17 | 大 DBC selected-only 闭环（A0-H） | [A0-F通过，G实板收口中] | candidate9/active7为128项16消息；最终G映像在`0x100+0x110`下RX增量272、matched增量136、updates增量`136×8`且page0八项GOOD/page1 MISSING，selected-only外部隔离通过。6400 ms v3会话已在GOOD输入ACTIVE并锁定generation7/CRC/count；STALE与TF内CSV/meta仍`[待确认]`。生产固件V5-only fail-closed，host保留V1-V4解析测试；H与CAN-FD实板仍`[未验证]`。 |
+| 17 | 大 DBC selected-only 闭环（A0-H） | [A0-G与H物理掉电恢复通过；H故障注入剩余] | 当前candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体与活动日志物理掉电冷启动恢复通过；尚缺目标板可控TF写失败及active reload/publish失败保旧。CAN-FD实板`[未验证]`。 |
 
 ## 阶段 C 当前状态
 
@@ -138,3 +138,13 @@
 - 下电取卡后，`fsck_msdos -n`两次 exit=`0`，只读挂载读取并安全弹出；CSV 288行数据严格只有8个selected key（每key36行），meta `cleanClose=true`、rowsWritten=`288`、drop/late/writeFailure=`0/0/0`，身份 generation=`1/2`、CRC=`4B88D9CE/E5CB6C8F`一致。
 - 通过host `dbc_index_dump verify`的candidate1/candidate2/active1 index以及Python交叉解析的manifest/selection CRC、size、count、source fingerprint，证明实体TF链与HTTP/runtime身份一致。G完成标准（API freshness、日志锁、选择性CSV/meta、FAT只读一致性）已关闭。
 - H仍需单独证据：当前大DBC映像的TF写失败注入、物理掉电期间的恢复和active reload失败不破坏旧runtime；CAN-FD实板仍`[未验证]`。不复用旧v2日志路径或正常会话替代这些异常路径。
+
+## 2026-08-09 H物理掉电已完成介质侧，等待板端恢复
+
+- 当前large-DBC v3日志在外部CAN与实际写入增长期间物理断电；掉电后FAT只读检查exit0，708条CSV数据全部完整8列、只含selected集合且末尾换行，meta `cleanClose=false`，active/candidate generation对象及manifest/selection/index引用保持完整。
+- 物理掉电的介质侧通过；完成恢复还需TF插回板端上电后确认runtime generation1/candidate2/selection CRC=`E5CB6C8F`、selected RX和新日志均可继续。TF写失败和active publish/reload失败需要独立可控fail-once实验入口，现有HTTP门禁与host mock不能替代。
+
+## 2026-08-09 H物理掉电恢复门禁关闭
+
+- TF重新插回断电目标并上电后，W5500/TF/QSPI、同一large-DBC runtime身份、外部selected Classic CAN解码均恢复；掉电日志未锁死控制面，新v3日志可再次进入ACTIVE并正常STOPPED，板端写入/flush增长且failure/drop/sync正常。
+- H计划剩余范围严格收敛为两项test-only可控失败：TF写失败与active reload/publish失败时旧active/runtime不受破坏。不得以热拔卡、HTTP 409前置门禁、HTTP 504或host mock冒充目标板失败注入。

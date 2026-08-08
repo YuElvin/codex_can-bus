@@ -3988,3 +3988,20 @@
 ## 2026-08-01 H异常路径host回归复核
 
 - 在`. ./env.sh`后针对性运行`ctest --test-dir build/host --output-on-failure -R 'dbc_(active_commit|candidate_commit|candidate_format|selected_runtime)|tf_card_port|selected_signal_log|signal_log_(control|buffer)'`，8/8通过；覆盖manifest/candidate I/O失败保旧、selection/runtime边界、日志控制/缓冲及TF port模拟错误。该证据不替代当前映像上的TF写失败注入、物理掉电或active reload失败现场读数。
+
+## 2026-08-09 H当前large-DBC映像物理掉电介质侧通过
+
+- 用户将TF插回上电后，冷启动恢复窗口约15 s，runtime最终恢复active generation1/candidate2/selection CRC=`E5CB6C8F`、100071 B/1 message/8 signals。外部CAN RX=`911→1240→1567`增长、错误/Bus-Off/TEC/REC均0；8项selected为`GOOD`，本轮实际payload为全零，温度因offset解码为`-40`。
+- 以1000 ms启动`/log/20260809_000843000_signal-v3.csv`并进入ACTIVE。非停机OpenOCD `mdw`两次读取write/flush=`63→67`、文件size=`41211→43866 B`、failure0，TF open/write/close/sync结果均0；日志未出现halt，shutdown后HTTP仍ACTIVE。用户随后保持CAN和日志活动直接切断整板/ST-Link电源，10 s后ping0/2、HTTP port80超时确认离线。
+- 掉电取卡后`/dev/disk4s1`两次`fsck_msdos -n`均exit0。断电CSV为78368 B、708数据行，标准CSV解析全部8列、无重复header、时间单调、无未知key、8个selected key均存在，末字节为换行；各key计数`89/89/89/89/88/88/88/88`，最后batch仅完成ordinal0..3但没有撕裂行。quality=`GOOD 636/STALE 72`，CSV SHA-256=`0752a113cd750e5d098b199c4e9ae9e9cac5b2f6f69ed41ea32049293a914620`。
+- meta为920 B、SHA-256=`77222d843c0a918b4da2cca568f02cca00fa7a993797a419469204f28fa4da9d`，保留active/candidate=`1/2`、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、selectedCount8与预期`cleanClose=false`。active/candidate manifest与selection哈希/CRC均与断电前一致，三个index继续verify通过，TF二次校验后安全弹出。
+- 当前只关闭掉电介质侧；需用户插回板端上电，验证同一runtime/selected RX和新日志能力。用户指定子智能体首选GPT-5.6-Luna、次选GPT-5.6-Terra；当前工具未提供Luna，已停止误用Sol的任务并以Terra high重派。Terra审计确认生产路径没有安全确定性的TF写失败或active reload/publish fail-once入口，host mock与日志409不能替代；运行中拔卡禁止。
+
+## 2026-08-09 H物理掉电冷启动恢复通过
+
+- 用户确认TF已插回断电板并上电，询问外部帧内容；要求同时以100 ms周期发送标准Classic CAN DLC8 `0x100=E0 2E 06 FF E4 0C A5 69`与未选`0x110=01 23 45 67 89 AB CD EF`。最初沿用了错误地址`192.168.1.50`导致约90 s ping/HTTP无响应；主机`en2=192.168.1.100/24`且100baseTX链路正常。源码复核确认当前静态IP实际为`192.168.1.88`，该地址ping=`2/2`。
+- 在改用正确地址前，OpenOCD短暂停读已证明MCU/RTOS运行、TF mount0、W5500 status0/link1/version4、runtime valid generation1/candidate2/selection CRC=`E5CB6C8F`/100071 B/1 message/8 signals；CAN2 RX队列增长、last ID=`0x100`、DLC8、首字节`E0`、错误0。所有读取后均执行`resume`和`shutdown`，无调试监听残留。
+- `GET /api/status`为HTTP200，W5500/TF/QSPI status=`0/0/0`；`GET /api/dbc/runtime`保持active generation1、candidate2、selection CRC=`E5CB6C8F`、selectedOnly、slot0、1 message/8 signals；掉电日志控制为`STOPPED`。CAN RX=`2375`且errors/Bus-Off/TEC/REC全0；8项selected均为`GOOD`，值恢复为`1200/-25/3.3/0/2/3/10/1`。
+- 启动新`/log/20260809_002203000_signal-v3.csv`后进入ACTIVE。首次停止仅发送`enabled=0`违反接口“enabled和samplePeriodMs必填”合同，返回HTTP400且会话保持ACTIVE；补发`enabled=0&samplePeriodMs=1000`后`STOPPING→STOPPED`。OpenOCD计数为write/flush=`24/24`、fileSize/activeSize=`15402/15402 B`、failure/drop=`0/0`、sync result0，随后恢复运行并shutdown。
+- 当前已同时关闭物理掉电的介质完整性与冷启动板端恢复；H仅余可控TF写失败及active reload/publish失败保持旧runtime的板端注入。此轮未改固件源码，未重新编译、反汇编或烧录。
+- 同步纠正`CURRENT_TASK.md`、`03_Context.md`、`01_Project_Plan.md`和`04_Features_ADR.md`顶部仍停留在8月1日“G收口中/阻断”的状态索引；历史过程保留，当前索引统一为A0-G与H物理掉电恢复通过、H仅余两项目标板可控失败注入。

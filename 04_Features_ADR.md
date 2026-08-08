@@ -17,7 +17,7 @@
 | F-011 | TF RuleFile v1 单规则启动加载 | [客观已验证；非法板端输入未注入] | `/config/rule.conf` 固定 256 字节上限；有效 v1 已在板端覆盖非默认 QSPI 参数，缺失文件已创建且不覆盖；非法文件由主机纯解析测试覆盖，板端未注入；仅表达已有单规则四参数 |
 | F-012 | 网页 CAN 发送控制 | [客观通过] | classic CAN窄合同：`GET/POST /api/can/tx`和`GET /api/can/tx/signals`，标准ID、DLC、8字节HEX、`100..10000 ms`；TX self-test/RX缓存独立。用户已部署网页上电，浏览器实测状态灯、TX/RX累计、默认折叠和CANoe式TX/RX DBC表；最终`0x321`/DLC4/`C2 A5 34 12 00 00 00 00`/1000ms已应用result=0，自动刷新和两次reload均无连接拒绝。CANtest外部输入由用户确认且RX表增长；未直接读取CANtest接收显示，不能声称外部接收器逐帧确认新TX帧 |
 | F-013 | 网页手动 TX 与 DBC `signalKey` 两槽规则 | [最终现场验收完成] | 根目录新网页下自动刷新 TX/RX=`55/364→576/5540`，两次刷新期间编辑均保留并提交，最终 TX `sequence=256`，warn/error为空。候选 DBC获用户授权激活，runtime=`loaded=true/generation=1/bytes=151/messages=1/signals=2`；TX/RX为 marker=`42434`、sequence=`256/4660`。slot1 V4回读`Can2Data.sequence/4660/priority20/action off`，外部 RX sequence=`4660`时manual `relay1Output=0`与高优先级off一致；此前构建、反汇编、烧录已实际完成 |
-| F-014 | 大 DBC selected-only事务闭环 | [A0-F通过，G实板收口中] | active generation7为128项/16消息；最终G映像双ID输入下总RX+272、matched+136、updates+`136×8`，page0八项GOOD与page1 MISSING，证明只更新selected；停`0x100`保留`0x110`后RX仍增长且page0八项STALE/末值保持。v3会话已正常STOPPED；实体CSV/meta仍`[待确认]`，CAN-FD实板`[未验证]`。 |
+| F-014 | 大 DBC selected-only事务闭环 | [A0-G与H物理掉电恢复通过；H故障注入剩余] | 当前candidate2/active1、source=`100071/4B88D9CE`、selection=`E5CB6C8F`、8项/1消息。外部Classic CAN正向/未选隔离/STALE、分页API、选择性CSV/meta、日志锁/吞吐、FAT实体与活动日志物理掉电冷启动恢复通过；目标板可控TF写失败和active reload/publish失败保旧仍`[未验证]`，CAN-FD实板`[未验证]`。 |
 
 ## ADR 索引
 
@@ -40,9 +40,9 @@
 | ADR-029 | 网页 CAN 发送控制保持经典 CAN 窄合同与 TX/RX 证据分离 | 已接受并完成本轮网页现场验收；外部接收器逐帧读回仍非本轮证据 |
 | ADR-031 | 规则选择绑定活动 DBC `signalKey`，但保留两槽与旧 v3 `marker` 回退 | 已接受并完成最终现场验收 |
 | ADR-032 | 大 DBC active采用generation/manifest、prepared selected-only双槽与V5 definition hash | 已接受；A0-E实板门禁通过 |
-| ADR-033 | selected实时质量与G日志合同 | 已接受；G实板收口中 |
+| ADR-033 | selected实时质量与G日志合同 | 已接受；G实板与实体TF验收通过 |
 | ADR-034 | 生产固件仅加载RuleFile V5并对legacy/损坏输入fail-closed | 已接受；用于满足A0 Flash预算，host保留V1-V4解析测试 |
-| ADR-035 | active manifest轮转失败必须同步回滚旧current | 已接受；新候选已构建，待烧录回归 |
+| ADR-035 | active manifest轮转失败必须同步回滚旧current | 已接受；当前固件正向回归与host失败测试通过，目标板fail-once注入待验 |
 
 ## 决策记录摘要
 
@@ -370,3 +370,13 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 本次会话`/log/20260801_191151000_signal-v3.csv`实体为288行、8个selected key且每key36行；meta最终`cleanClose=true`、rowsWritten=`288`、rowsDropped/lateSamples/writeFailures=`0/0/0`，active/candidate=`1/2`、source CRC=`4B88D9CE`、selection CRC=`E5CB6C8F`。CSV中包含GOOD与STALE状态，但没有未选key。
 - TF卸载后的两次`fsck_msdos -n`均exit0，只读挂载/读取/卸载/弹出完成；candidate/active manifest、index、selection的固定尺寸和CRC引用均交叉通过。该ADR关闭正常v3实体持久化，不承诺FAT32任意掉电时刻原子性；写失败注入和当前映像物理掉电仍`[未验证]`。
+
+### ADR-041：当前large-DBC v3日志物理掉电的介质侧证据（2026-08-09）
+
+- 在外部selected CAN与日志实际write/flush增长期间直接切断整板/ST-Link电源。掉电后FAT两次只读检查exit0；CSV 708数据行全部8列、单一header、只含8个selected key、时间单调且末尾换行。最后batch仅完成ordinal0..3，但每行完整；meta `cleanClose=false`符合非正常停止。
+- active/candidate manifest与selection哈希/CRC未变，index和100071 B source fingerprint均通过。该证据只关闭介质侧完整性；板端冷启动恢复尚待确认，且不替代可控TF写失败或active reload/publish失败注入。运行中拔卡继续禁止。
+
+### ADR-042：当前large-DBC物理掉电冷启动恢复通过（2026-08-09）
+
+- 同一TF重新插回断电目标并上电后，HTTP确认active generation1/candidate2/selection CRC=`E5CB6C8F`、100071 B selected-only runtime slot0、1 message/8 signals完整恢复；日志控制恢复为`STOPPED`，外部标准Classic CAN `0x100`使8个selected全部`GOOD`，未选`0x110`不改变暴露集合。
+- 新v3日志可重新`ACTIVE→STOPPED`，OpenOCD计数证明write/flush=`24/24`、fileSize=`15402 B`、failure/drop=`0/0`、sync0；每次短暂停读后均已`resume`并`shutdown`。由此关闭本轮物理掉电恢复，但不扩展为任意事务时刻原子性，也不替代TF write或active publish fail-once验证。

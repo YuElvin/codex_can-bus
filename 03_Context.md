@@ -1,6 +1,6 @@
 # 当前上下文
 
-更新时间：2026-08-01（大 DBC selected-only 阶段17 A0-F通过，G实体TF证据阻断）
+更新时间：2026-08-09（大 DBC selected-only 阶段17 A0-G与H物理掉电恢复通过）
 
 ## 当前仓库
 
@@ -10,11 +10,9 @@
 
 ## 已验证状态
 
-阶段17 A0-F已客观通过，current candidate generation9、active generation7为selected-only 128项/16消息。G已完成selected-only实时API、v3 CSV/meta、吞吐准入与会话锁的源码、CTest=`34/34`、最终固件构建/反汇编、烧录和部分实板验证；最终固件Flash=`121708 B`，低于A0上限5268 B。恢复外部`0x100+0x110`后，RX=`2826→3098`，matched=`1413→1549`且updates=`11304→12392=136×8`；page0八项为预期GOOD，page1保持MISSING，证明最终G映像只更新被选的`0x100`槽位。随后停`0x100`、保持`0x110`使RX=`13257→13357`增长而page0八项保留值/raw并全STALE，API门禁通过。可是取卡后的只读FAT校验退出`206`，current v3 CSV/meta的FAT链与文件长度相互矛盾且卷无法只读复挂载，故G的实体CSV/meta、clean footer与TF持久化为`[阻断]`，不能由可见文件名或hash替代。H与CAN-FD实板仍`[未验证]`。
+阶段17当前真实链为candidate generation2、active generation1、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、selected-only 8项/1消息。A0-G已经通过：100KB流式上传/candidate/index/selection/active、外部标准Classic CAN `0x100`正向解码、未选`0x110`隔离、STALE、分页API、选择性v3 CSV/meta、日志吞吐/会话锁与TF实体只读一致性均有当前固件现场证据。
 
-P0审计随后发现active manifest旋转的即时回滚缺口，故已在工作树修正但尚未烧录；新候选为CTest=`34/34`、FLASH=`121836 B`、RAM_D1=`196664 B`、ELF/HEX SHA-256=`b77fc9de42ef3257b3155ea4f12d942d1903395671bd22c4c2173b04322aae09`/`1ca3ac65704aae4116a77c0ed90e22a46de970b36e0b038758dae0815dd800dd`。当前ACTIVE日志和GOOD证据对应旧G映像，不能冒充新候选实板通过；应先收口日志与TF介质，再烧录新候选并重做最小active/Classic RX回归。
-
-旧G映像已在停止`0x100`、保持`0x110`时得到STALE：RX=`13257→13357`继续增长，page0八项保留末值/raw且全部STALE；但其v3会话实体介质已由`fsck_msdos` exit=`206`判为损坏，永久不得作为CSV/manifest通过证据。用户随后明确允许丢弃该会话，主机已对外置`/dev/disk4`重建MBR+FAT32、部署静态网页/151 B active+candidate DBC及空`/log /config /sys`，卸载后的`fsck_msdos -n` exit=`0`、只读重挂载后`cmp`通过并再次卸载。介质恢复消除了“不能写卡”的操作阻断，但新的large-DBC candidate/active、v3实体日志和未烧录P0回滚候选的最小实板回归均为`[待确认]`，需要插回板端上电后从零取得。
+H物理掉电恢复也已关闭：活动v3日志与外部CAN持续时整板掉电，取卡后两次`fsck_msdos -n` exit0，708条CSV数据无撕裂行且meta `cleanClose=false`；同卡重新插回断电板上电后，runtime身份、8项selected `GOOD`与新日志`ACTIVE→STOPPED`全部恢复。当前H仅剩可控TF写失败及active reload/publish失败保持旧runtime两项目标板注入；host mock、HTTP前置409/400、504或热拔卡均不能替代。CAN-FD实板保持`[未验证]`，不扩写为Classic CAN本轮阻断。
 
 | 模块 | 状态 | 证据摘要 |
 | --- | --- | --- |
@@ -299,3 +297,15 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - CSV解析结果：8列header，288数据行，唯一key恰为selected ordinal0..7，每key36行，无非selected key；quality计数`GOOD=253/STALE=35`，CSV 32850 B，SHA-256=`c947eac1f1af9a485393dbaf7fb97ccd334635e41c1b7e07f7ca8d068fb8da05`。
 - meta最终`cleanClose=true`、rowsWritten/dropped/late/writeFailures=`288/0/0/0`、flushCount=`49`，active/candidate generation=`1/2`、source size/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、selectedCount=`8`；meta SHA-256=`5fadf433ddabf198b1614a6949635ef8684df3d3823904c880244a0c5a755dfd`。
 - 三个大DBC index由host `dbc_index_dump verify`通过，manifest/index/selection源指纹、CRC、计数与当前链路交叉验证通过。G实体门禁关闭；H异常介质/掉电/active reload失败仍未验证。
+
+## 2026-08-09 H物理掉电介质侧状态
+
+- 当前large-DBC映像在active日志与外部selected CAN持续时被用户直接切断整板/ST-Link电源；断电前write/flush=`63→67`、文件=`41211→43866 B`、failure=0，TF底层open/write/close/sync均0，断电后ping0/2且HTTP超时。
+- TF只读检查两次`fsck_msdos -n` exit0；断电CSV 78368 B/708数据行全部8列、仅8个selected key、时间单调、末尾换行，最后batch只完成ordinal0..3但无撕裂行；meta为预期`cleanClose=false`。active/candidate manifest/selection哈希与CRC未变，index与source fingerprint通过。
+- TF已安全弹出，板端重启恢复尚`[待确认]`；TF写失败与active reload/publish失败没有生产入口，仍需独立test-only故障注入或明确保持`[未验证]`。
+
+## 2026-08-09 H物理掉电冷启动恢复状态
+
+- TF插回断电板并上电后，板端在`192.168.1.88`恢复ping与HTTP；W5500/TF/QSPI正常。runtime保持active generation1/candidate2/selection CRC=`E5CB6C8F`、100071 B、slot0、1 message/8 signals，日志从掉电会话恢复为`STOPPED`。
+- 外部`0x100`已知payload与未选`0x110`同时持续发送时，CAN RX增长且无错误，8个selected均`GOOD`并给出预期值。随后新v3会话可正常ACTIVE并STOPPED；板端计数write/flush=`24/24`、15402 B、failure/drop=`0/0`、sync0。
+- 物理掉电的介质侧与冷启动板端恢复均通过。H当前只剩TF写失败及active reload/publish失败的可控板端注入；CAN-FD实板继续标记`[未验证]`。
