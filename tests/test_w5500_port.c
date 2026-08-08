@@ -29,6 +29,8 @@ typedef struct {
   bool write;
   bool reset_high;
   uint32_t delays;
+  uint32_t reset_writes;
+  size_t register_write_bytes;
 } FakeW5500;
 
 static void fake_select(void *ctx) {
@@ -42,7 +44,9 @@ static void fake_deselect(void *ctx) {
 }
 
 static void fake_reset_write(void *ctx, bool level_high) {
-  ((FakeW5500 *)ctx)->reset_high = level_high;
+  FakeW5500 *fake = (FakeW5500 *)ctx;
+  fake->reset_high = level_high;
+  ++fake->reset_writes;
 }
 
 static void fake_delay_ms(void *ctx, uint32_t ms) {
@@ -71,6 +75,7 @@ static W5500Result fake_transfer(void *ctx, uint8_t tx, uint8_t *rx) {
   }
   if (fake->write) {
     fake->regs[fake->block][fake->address++] = tx;
+    ++fake->register_write_bytes;
   } else {
     *rx = fake->regs[fake->block][fake->address++];
   }
@@ -152,6 +157,42 @@ static int supports_non_common_blocks(void) {
   return 0;
 }
 
+static int network_config_integrity_check_and_repair(void) {
+  FakeW5500 fake = {0};
+  W5500Port port;
+  w5500_port_bind(&port, &fake, &fake_ops);
+
+  const W5500Config config = {
+    .mac = {0x02u, 0x00u, 0x00u, 0x12u, 0x34u, 0x56u},
+    .ip = {192u, 168u, 1u, 88u},
+    .netmask = {255u, 255u, 255u, 0u},
+    .gateway = {192u, 168u, 1u, 1u},
+  };
+  memcpy(&fake.regs[0][W5500_REG_GAR], config.gateway, sizeof(config.gateway));
+  memcpy(&fake.regs[0][W5500_REG_SUBR], config.netmask, sizeof(config.netmask));
+  memcpy(&fake.regs[0][W5500_REG_SHAR], config.mac, sizeof(config.mac));
+  memcpy(&fake.regs[0][W5500_REG_SIPR], config.ip, sizeof(config.ip));
+
+  bool repaired = true;
+  ASSERT_TRUE(w5500_port_ensure_network_config(&port, &config, &repaired) == W5500_OK);
+  ASSERT_TRUE(!repaired);
+  ASSERT_TRUE(fake.register_write_bytes == 0u);
+  ASSERT_TRUE(fake.reset_writes == 0u);
+
+  fake.regs[0][W5500_REG_GAR] = 0u;
+  fake.regs[0][W5500_REG_SIPR + 1u] = 0u;
+  fake.regs[0][W5500_REG_SIPR + 2u] = 0u;
+  ASSERT_TRUE(w5500_port_ensure_network_config(&port, &config, &repaired) == W5500_OK);
+  ASSERT_TRUE(repaired);
+  ASSERT_TRUE(fake.register_write_bytes == 18u);
+  ASSERT_TRUE(fake.reset_writes == 0u);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_GAR], config.gateway, sizeof(config.gateway)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SUBR], config.netmask, sizeof(config.netmask)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SHAR], config.mac, sizeof(config.mac)) == 0);
+  ASSERT_TRUE(memcmp(&fake.regs[0][W5500_REG_SIPR], config.ip, sizeof(config.ip)) == 0);
+  return 0;
+}
+
 int main(void) {
   if (init_writes_and_verifies_network_registers() != 0) {
     return 1;
@@ -160,6 +201,9 @@ int main(void) {
     return 1;
   }
   if (supports_non_common_blocks() != 0) {
+    return 1;
+  }
+  if (network_config_integrity_check_and_repair() != 0) {
     return 1;
   }
   return 0;

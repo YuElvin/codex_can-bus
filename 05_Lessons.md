@@ -128,3 +128,10 @@
 - `read_active_manifest_with_references()`会为被验证manifest重建全局`CandidatePaths`。若回滚时验证的是旧generation，而后续cleanup仍根据新generation的owned/renamed标志使用该可变全局路径，就会删除刚恢复旧manifest所引用的对象，HTTP即时状态可保持正常但冷启动失败。
 - 对带“对象归属标志 + 可变路径缓存”的事务，回滚读回后必须恢复失败交易路径，或让cleanup接收显式owned路径；验证至少应包含失败后冷启动，不能只看同一运行期的HTTP/runtime快照。
 - L-121：单socket HTTP关闭问题必须同时看pcap和板端业务状态。客户端可能已完整ACK上一响应，却在下一连接中出现“请求已被MCU应用、W5500两次SEND已完成、线上仍无ACK/响应”；因此业务副作用、SEND_OK、HTTP响应和下一次listener可用性是四个不同证据。无收益的超时、合包、轮询和关闭实验应逐项撤销，最终只保留能追溯到已验证基线的最小差异；正常网页/串行通过也不能扩写为零间隔短连接压力通过。
+- L-122：单socket断开超时不应默认升级为W5500全芯片复位。`w5500_port_init()`会操作RSTn并重写公共网络寄存器，可能把单连接故障扩大为ping和HTTP同时失联；恢复必须先以`CLOSE->CLOSED->OPEN->INIT->LISTEN->LISTEN`重建目标socket，并用命令序列、阶段SR、后续连接和“未触发RSTn”共同验证，只有重建失败才允许全芯片fallback。
+
+- W5500显示`LISTEN`、PHY link正常仍不能证明公共网络配置完整；GAR/SUBR/SHAR/SIPR必须作为同一运行时不变量读回。MCU软件复位也不等于TF卡物理掉电复位，若静态页和active runtime同时消失，应先区分介质供电状态，不能据此宣称文件已损坏。
+
+- W5500公共配置可在listener建立命令之后损坏；若只在OPEN前检查会留下窗口。对已冻结的单socket建监听器序列，至少在`LISTEN`状态读回成功后再做一次配置不变量检查。
+
+- 大静态HTML响应与随后立即短连接必须作为同一交接场景验证；“静态文件最终完整返回”与“下一API立即可达”是不同证据。若只能在约3 s后恢复，网页功能可记录为带恢复窗口可用，但HTTP稳定性不得关闭。

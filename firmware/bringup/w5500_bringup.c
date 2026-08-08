@@ -39,6 +39,9 @@ volatile uint32_t g_w5500_http_error_count = 0u;
 volatile uint32_t g_w5500_http_last_nonclosed_close = 0u;
 volatile uint32_t g_w5500_http_recovery_count = 0u;
 volatile uint32_t g_w5500_http_recovery_last_sr = 0xffffffffu;
+volatile uint32_t g_w5500_http_network_repair_count = 0u;
+volatile uint32_t g_w5500_http_network_repair_failure_count = 0u;
+volatile uint32_t g_w5500_http_network_repair_result = 0xffffffffu;
 volatile uint32_t g_w5500_http_ack_wait_pending = 0u;
 volatile uint32_t g_w5500_http_ack_wait_count = 0u;
 volatile uint32_t g_w5500_http_ack_wait_initial_fsr = 0xffffffffu;
@@ -300,6 +303,14 @@ typedef struct {
 
 static Stm32W5500Context g_w5500_ctx;
 static W5500Port g_w5500_port;
+static const W5500Config g_w5500_config = {
+  .mac = {0x02u, 0x00u, 0x00u, 0x12u, 0x34u, 0x56u},
+  .ip = {192u, 168u, 1u, 88u},
+  .netmask = {255u, 255u, 255u, 0u},
+  .gateway = {192u, 168u, 1u, 1u},
+  .retry_time_100us = 2000u,
+  .retry_count = 8u,
+};
 static uint8_t g_w5500_bound;
 static SemaphoreHandle_t g_w5500_dbc_mutex;
 static QueueHandle_t g_w5500_dbc_reload_queue;
@@ -737,16 +748,38 @@ static int http_finish_response_send(void) {
   return 0;
 }
 
+static int http_ensure_network_config(void) {
+  bool repaired = false;
+  const W5500Result result =
+    w5500_port_ensure_network_config(&g_w5500_port, &g_w5500_config, &repaired);
+  g_w5500_http_network_repair_result = (uint32_t)result;
+  if (result != W5500_OK) {
+    ++g_w5500_http_network_repair_failure_count;
+    return 1;
+  }
+  if (repaired) {
+    ++g_w5500_http_network_repair_count;
+  }
+  return 0;
+}
+
 static int http_open_listener(void) {
   uint8_t sr = 0u;
   if (s0_read_u8(W5500_S0_SR, &sr) == W5500_OK &&
       (sr == W5500_S0_SR_LISTEN || sr == W5500_S0_SR_SYNRECV ||
        sr == W5500_S0_SR_ESTABLISHED)) {
+    if (http_ensure_network_config() != 0) {
+      g_w5500_http_status = 2u;
+      ++g_w5500_http_error_count;
+      (void)http_close_socket(4u);
+      return 1;
+    }
     g_w5500_http_socket_sr = sr;
     g_w5500_http_status = 0u;
     return 0;
   }
   if (http_close_socket(1u) != 0 ||
+      http_ensure_network_config() != 0 ||
       s0_write_u8(W5500_S0_MR, W5500_S0_MR_TCP) != W5500_OK ||
       s0_write_u16(W5500_S0_PORT, W5500_HTTP_PORT) != W5500_OK ||
       s0_command(W5500_S0_CR_OPEN) != W5500_OK ||
@@ -754,7 +787,8 @@ static int http_open_listener(void) {
       sr != W5500_S0_SR_INIT ||
       s0_command(W5500_S0_CR_LISTEN) != W5500_OK ||
       s0_read_u8(W5500_S0_SR, &sr) != W5500_OK ||
-      sr != W5500_S0_SR_LISTEN) {
+      sr != W5500_S0_SR_LISTEN ||
+      http_ensure_network_config() != 0) {
     g_w5500_http_status = 2u;
     g_w5500_http_error_count++;
     return 1;
@@ -3955,15 +3989,6 @@ static void w5500_capture_status(W5500Port *port) {
 }
 
 int w5500_bringup_run(void) {
-  const W5500Config config = {
-    .mac = {0x02u, 0x00u, 0x00u, 0x12u, 0x34u, 0x56u},
-    .ip = {192u, 168u, 1u, 88u},
-    .netmask = {255u, 255u, 255u, 0u},
-    .gateway = {192u, 168u, 1u, 1u},
-    .retry_time_100us = 2000u,
-    .retry_count = 8u,
-  };
-
   stm32h750_w5500_bind(&g_w5500_port,
                        &g_w5500_ctx,
                        &hspi2,
@@ -3973,7 +3998,7 @@ int w5500_bringup_run(void) {
                        W5500_RST_Pin);
   g_w5500_bound = 1u;
 
-  const W5500Result result = w5500_port_init(&g_w5500_port, &config);
+  const W5500Result result = w5500_port_init(&g_w5500_port, &g_w5500_config);
   g_w5500_init_result = (uint32_t)result;
   if (g_w5500_dbc_mutex == NULL) {
     g_w5500_dbc_mutex = xSemaphoreCreateMutex();
@@ -4139,6 +4164,15 @@ int w5500_http_status_poll(void) {
     return http_open_listener();
   }
   if (sr == W5500_S0_SR_LISTEN) {
+    /* A listener can remain locally healthy while the common network
+     * registers are corrupted between connections. Check the frozen
+     * configuration before accepting the next SYN; the port helper writes
+     * nothing when every field already matches. */
+    if (http_ensure_network_config() != 0) {
+      g_w5500_http_status = 2u;
+      ++g_w5500_http_error_count;
+      return 1;
+    }
     g_w5500_http_status = 0u;
     return 0;
   }

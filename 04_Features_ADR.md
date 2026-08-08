@@ -402,3 +402,18 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 - 新pcap证明`SEND_OK`、业务应用与线上响应交付不是同一边界：第二POST已被MCU应用并执行两次SEND，但线上没有ACK/HTTP响应。ADR-036中“SEND_OK即可立即收口”的实现假设由本ADR修正。
 - 决策仅恢复`aff4cc5`之前的ACK wait：最终SEND后若`TX_FSR=2048`才进入既有graceful DISCON，否则置ACK pending并由现有500 ms恢复状态机处理。不增加socket、并发、keep-alive、网页重试或API。
 - 最终网页manual开/关与外部selected CAN通过，关闭网页后七个独立串行API和ping再次通过。零间隔独立curl短连接仍为`[未验证/未关闭风险]`，不得由本ADR宣称已解决。
+
+### ADR-047：断开恢复优先重建socket0，禁止常规超时直接全芯片复位（2026-08-09）
+
+- 冷启动网页串行操作再次复现“业务已应用但响应失败，随后ping/HTTP整体失联”，且软件`reset run`未恢复。现有disconnect pending超时直接调用`w5500_bringup_run()`会拉W5500 RSTn并重写公共网络配置，影响范围超过单连接恢复。
+- 决策为保持500 ms现有边界，但超时先强制socket0 `CLOSE/OPEN/LISTEN`，分别读回`CLOSED/INIT/LISTEN`；只有任一步失败才允许执行原全芯片复位。增加的诊断仅为volatile/ST-Link读数，不新增HTTP端点。
+- host测试约束成功路径命令顺序且RSTn计数为0，并覆盖OPEN不进入INIT的失败；最终ELF反汇编确认fallback只在reopen失败后可达。该ADR当前仅完成源码/构建门禁，实板响应交付、后续连接恢复与fallback计数仍`[未验证]`。
+
+## 2026-08-09 ADR补充：W5500公共网络配置运行时不变量
+
+- 现场已证明失联状态不是仅由socket状态解释：GAR/SIPR字节损坏，且无W5500复位地精确恢复四组冻结配置即可恢复网络。因此监听器建立/复用前必须校验GAR/SUBR/SHAR/SIPR；一致时禁止写入，不一致时只重写这18字节并读回确认。
+- 修复不得借机引入多socket、keep-alive、API重试或网页状态机；读回/修复失败沿现有socket关闭和恢复语义处理。当前候选host/构建/烧录已通过，完整网页与退出后二次实板门禁仍`[待确认]`。
+
+- 补充执行点：当`OPEN→INIT→LISTEN`后读回`LISTEN`成功，立即再次校验公共配置，覆盖命令本身后的损坏窗口；仅此增加，不扩大恢复策略。
+
+- 最新实板显示该守护可支持带约3 s恢复窗口的网页写入与退出后串行API回归，但不能消除大静态响应后立即短连接失败；该限制保留为未关闭风险，禁止写成完全稳定。

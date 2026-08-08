@@ -168,6 +168,43 @@ W5500Result w5500_port_init(W5500Port *port, const W5500Config *config) {
   return W5500_OK;
 }
 
+W5500Result w5500_port_ensure_network_config(W5500Port *port,
+                                              const W5500Config *config,
+                                              bool *repaired) {
+  if (!has_required_ops(port) || config == NULL || repaired == NULL) {
+    return W5500_ERROR;
+  }
+
+  if (same_bytes(port, W5500_REG_GAR, config->gateway, sizeof(config->gateway)) &&
+      same_bytes(port, W5500_REG_SUBR, config->netmask, sizeof(config->netmask)) &&
+      same_bytes(port, W5500_REG_SHAR, config->mac, sizeof(config->mac)) &&
+      same_bytes(port, W5500_REG_SIPR, config->ip, sizeof(config->ip))) {
+    *repaired = false;
+    port->status.network_configured = true;
+    return W5500_OK;
+  }
+
+  *repaired = true;
+  if (w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_GAR,
+                              config->gateway, sizeof(config->gateway)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SUBR,
+                              config->netmask, sizeof(config->netmask)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SHAR,
+                              config->mac, sizeof(config->mac)) != W5500_OK ||
+      w5500_port_write_block(port, W5500_BLOCK_COMMON, W5500_REG_SIPR,
+                              config->ip, sizeof(config->ip)) != W5500_OK ||
+      !same_bytes(port, W5500_REG_GAR, config->gateway, sizeof(config->gateway)) ||
+      !same_bytes(port, W5500_REG_SUBR, config->netmask, sizeof(config->netmask)) ||
+      !same_bytes(port, W5500_REG_SHAR, config->mac, sizeof(config->mac)) ||
+      !same_bytes(port, W5500_REG_SIPR, config->ip, sizeof(config->ip))) {
+    port->status.network_configured = false;
+    return W5500_ERROR;
+  }
+
+  port->status.network_configured = true;
+  return W5500_OK;
+}
+
 W5500Result w5500_port_get_status(W5500Port *port, W5500Status *status) {
   if (!has_required_ops(port) || status == NULL) {
     return W5500_ERROR;

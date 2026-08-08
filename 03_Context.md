@@ -332,6 +332,12 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 当前正式映像的DBC/CAN/selected signals、候选分页/搜索、时间同步、日志启停、TX提交和规则只读均取得页面或独立HTTP证据；退出网页后的串行API链全部恢复正常。candidate精确搜索为显著长事务，本轮耗时`23.235752 s`，20 s客户端上限会误判超时。
 - `[阻断]` 网页全功能稳定性不能判通过：两轮均在manual enabled/relay1=1成功后，关闭覆盖提交未生效并使port80不可访问，关闭页面也不释放，只能`reset run`恢复。复位后最终安全态为manual disabled/outputs0、log STOPPED、runtime active1/candidate2/8 signals。下一步应以只读HTTP trace/socket诊断定位“第二次manual POST响应/断连后socket不恢复”，未获修复授权前不改固件。
 
+## 2026-08-09 当前HTTP恢复候选状态
+
+- 先前一次网页退出后二次验证成功不能覆盖本次冷启动后的失败：manual关闭已经由实体继电器断开证明生效，但浏览器未获响应，随后ping/HTTP同时失联；软件`reset run`也未恢复。当前网页全功能门禁重新判为未通过。
+- 当前工作树候选仅将disconnect超时恢复从“直接全芯片W5500复位”降为“先强制重建socket0，失败才全芯片复位”，并增加ST-Link可读的reopen计数/result/阶段SR。host 34/34、目标链接和反汇编通过，尚未烧录。
+- 下一步固定为：用户物理重上电后烧录候选；先只读核对runtime/manual安全态，再以输出全0的manual快照做有界回归并记录reopen/fallback计数；通过后才恢复网页剩余功能及退出网页后二次验证。
+
 ## 2026-08-09 HTTP稳定性修复尝试与当前阻断
 
 - 恢复F-76的ACK wait后，页面首轮manual开启/关闭完整成功；页面随后已关闭，console warn/error为空。但独立curl第二轮仍复现0字节响应和网络失联，故用户要求的“退出网页后二次验证”判定失败。
@@ -346,3 +352,15 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 无收益的2 s ACK、合包SEND、动态1 ms轮询、同步20 ms交接和替代关闭分支均已撤销。当前唯一源码差异为精确恢复`aff4cc5`之前的ACK wait；最终构建CTest=`34/34`，ELF/HEX=`d377d652...59cb`/`46fbd06a...4f0b`，已烧录并Verified OK。
 - 网页实测manual开启/关闭请求均由RuleTask确认，最终disabled且两路输出0；8个selected Classic CAN信号持续GOOD，console为空。网页已关闭；随后七个独立串行API全部HTTP200，runtime identity、selected集合、规则、日志STOPPED和CAN零错误均保持，ping3/3。
 - 当前结论：用户指定的“网页验证→退出网页→独立二次验证”通过；阶段17 Classic CAN完成状态保持。零间隔独立curl短连接仍可能失败，单独列为`[未验证/未关闭风险]`，不冒充已解决。
+
+## 2026-08-09 HTTP稳定性当前现场
+
+- 已由直接W5500寄存器读写证明失联时GAR/SIPR损坏，单独恢复冻结18字节即可恢复ping/HTTP；socket0重建候选已撤销。
+- 配置不变量修复候选完成host 34/34、构建、反汇编和烧录。物理冷启动后外部Classic selected解码、manual 0/0切换、等待后HTTP/ping首轮通过；repair/failure=`0x311/0`且未触发ACK timeout或全芯片恢复。
+- 当前因一次不安全的暂停上下文SPI调试调用而执行了MCU `reset run`；网络API恢复，但TF未掉电复位，静态页404、runtime unloaded。需要整板物理重上电后继续网页与退出后二次验收，修复状态仍为`[待确认]`。
+
+- 最新映像将同一配置检查加入`LISTEN`确认后，默认构建/反汇编/烧录通过。当前烧录reset后的静态页404是TF未掉电状态，等待物理重启后再验证，不能作为功能失败证据。
+
+- 物理重启后新映像恢复了网页、runtime及外部Classic解码。大静态页后立即下一连接仍可能失败，但等待约3 s后网页日志/规则/candidate读回成功；此延迟依赖不能作为HTTP稳定性关闭证据。
+
+- 已在网页实际提交TX、同步时间、manual 0/0启停和选择性日志启停，均由独立API读回；关闭网页后八项串行API及ping通过。立即连续请求风险未关闭，当前不提交/推送为“稳定性修复完成”。

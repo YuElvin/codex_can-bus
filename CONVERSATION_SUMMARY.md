@@ -4050,3 +4050,42 @@
 - 浏览器打开`http://192.168.1.88/`：页面显示外部Classic CAN 8个selected均GOOD；manual读取为disabled/两路断开，提交请求1后enabled+relay1闭合，提交请求2后disabled+两路断开；CAN RX=`1198→1569`，console logs为空。随后关闭唯一页面标签并finalize，tabs列表为空。
 - 退出网页后等待2 s，以独立curl每项间隔2 s读取status/runtime/signals/manual/rules/log/CAN，七项均HTTP200：active1/candidate2/selection CRC=`E5CB6C8F`、8/8 GOOD，manual request/applied=`2/2`且输出0/0，规则两槽disabled，日志STOPPED，CAN rx=`2363`且errors/Bus-Off/TEC/REC=`0/0/0/0`；ping3/3，OpenOCD/GDB/tcpdump及调试端口无残留。
 - 用户指定的“网页验证完成后退出网页再做二次验证”已通过。零间隔独立curl进程仍可能在第二请求RST/0字节超时，明确保留为`[未验证/未关闭风险]`，不纳入本次正常串行通过结论。
+
+## 2026-08-09 冷启动网页复发与socket优先恢复候选
+
+- 用户重新上电后，网页概览、CAN自动刷新、TX提交和外部Classic `0x100`的8项selected GOOD先通过；manual开启relay1由request/applied与页面闭合状态确认。随后关闭覆盖提交未返回、页面`Failed to fetch`，后端/实物最终已关闭，但ping全丢包、HTTP000，证明业务应用不等于响应交付。
+- 故障现场OpenOCD两次识别ST-Link/目标电压约3.26 V，但`halt`均为`target was in unknown state`且无可信RAM读数；命令均结束于`resume`或`reset run`。软件复位后连续10秒HTTP仍不可用，已要求用户物理断电5秒再上电，并禁止再次提交继电器操作。
+- 子智能体只读审计与主线源码确认disconnect pending满500 ms会直接调用`w5500_bringup_run()`，后者执行W5500 RSTn与公共网络配置重写。当前最小候选新增`w5500_port_force_tcp_listener()`：仅对socket0执行`CLOSE/OPEN/LISTEN`并读回`CLOSED/INIT/LISTEN`；成功立即返回，失败才进入原全芯片fallback。保留既有CLOSE_WAIT处理，不改网页、HTTP API、manual/CAN/DBC/TF语义。
+- 新host测试覆盖成功命令顺序且`reset_writes=0`、OPEN阶段不进入INIT时明确失败。`git diff --check`和`./scripts/verify.sh`通过，CTest=`34/34`；ELF text/data/bss=`121848/468/196308`，ELF/HEX SHA-256=`a0a33082306720165bb211a2baa139a287c5f08de5267b0dd3c4aa917fdf9973`/`dea2a74b91f1781ad51c7bdbfb5f7a95300a2a6c565c8b2f36cfcf298b366825`。反汇编确认500 ms后先执行socket命令及三阶段SR检查，reopen失败才调用`w5500_bringup_run()`；尚未烧录，实板结论`[未验证]`。
+
+## 2026-08-09 W5500公共网络配置损坏根因与修复候选实板首轮
+
+- 上述socket0重建候选烧录后仍复现网络失联；现场计数显示socket reopen/recovery均未触发。暂停状态下直接读取W5500公共寄存器发现GAR由`C0 A8 01 01`变为`00 A8 01 01`、SIPR由`C0 A8 01 58`变为`C0 00 00 58`，SUBR/SHAR/RTR/RCR、VERSIONR和PHYCFGR保持正确。仅重写冻结的GAR/SUBR/SHAR/SIPR共18字节后，不复位W5500即恢复ping与HTTP，构成配置损坏导致失联的直接证据。
+- 撤销未命中的socket重建候选，新增`w5500_port_ensure_network_config()`：先逐项读回四组冻结配置，完全一致时零写入；不一致时仅重写18字节并再次逐项读回。`http_open_listener()`的既有listener fast path与close后的OPEN/LISTEN路径均执行该不变量检查，不新增socket/API/网页语义。
+- host测试覆盖完整配置零写入与GAR/SIPR精确损坏后18字节修复且无RSTn；`git diff --check`、`./scripts/verify.sh`和CTest=`34/34`通过。最终ELF/HEX SHA-256=`8a9c6f9bec1fd7b3d9b1f6ef946440ab75287ac939359198efb63605462bb1a6`/`4442d69ad4fbaef735759444913f7861fd436da7fe8771614079f00dcd7caa82`，text/data/bss=`121752/448/196308`，OpenOCD烧录为`Programming Finished/Verified OK/Resetting Target`、电压3.259100 V。
+- 物理冷启动后runtime恢复active1/candidate2/selection CRC=`E5CB6C8F`，外部`0x100`使8项selected全部GOOD。网页以relay1/2均0切换manual enabled，等待超过6 s后request/applied=`1/1`、HTTP连续200、ping3/3；恢复manual disabled后两路仍断开。调试前只读计数为network repair=`0x311`、failure=`0`、ACK timeout=`0`、full recovery=`0`，说明修复路径实际接管且未升级为复位。
+- 随后尝试从暂停上下文调用已优化的底层SPI读取函数未安全完成，已终止GDB并明确执行`reset run`；该调用结果作废。MCU软件复位后API恢复，但TF未随之掉电，静态`/`与`/index.html`为404且runtime `loaded=false`。当前网页闭环需整板物理掉电重上电后继续；此状态不误写为修复失败或TF文件损坏。
+
+## 2026-08-09 LISTEN后配置校验候选
+
+- 用户物理重上电后，`/`与runtime恢复，active1/candidate2/8 selected正常；网页候选页0/页1及规则/继电器只读均正常。外部CAN尚未恢复发送时RX为0、8项为MISSING，未误报外部RX通过。
+- 候选精确查询在网页连接失败后，独立HTTP以约22 s返回唯一ordinal72；随后的ping/HTTP恢复，表明现有“建监听器前”校验没有覆盖LISTEN命令后的配置损坏窗口。
+- 最小代码补丁将`http_ensure_network_config()`加入`OPEN→INIT→LISTEN→LISTEN`读回成功之后；不改任何API、业务或socket拓扑。`git diff --check`、`./scripts/verify.sh`和CTest=`34/34`通过；text/data/bss=`121752/448/196308`，ELF/HEX SHA-256=`08e0f1101e74b4175fd63c514cba02ca7bd0e4253f1295ef2bc291c718bdd684`/`9eeecd6fae5340caf68ff4ca08487d64f2d2e3cfb12efd0521a568ab771eb4d5`。objdump确认三个检查点：已有fast path、OPEN前及LISTEN确认后。
+- OpenOCD实际烧录为`Programming Finished/Verified OK/Resetting Target`、电压3.260712 V。烧录reset不使TF掉电，约4 s后API恢复但静态页404；需用户再次整板物理断电重上电，才可开始该候选实板网页闭环。
+
+## 2026-08-09 LISTEN空闲轮询配置校验候选
+
+- 用户物理重上电后，TF/runtime恢复active1/candidate2/8 selected，但只读候选查询期间出现HTTP000后自行恢复；独立精确查询仍返回ordinal72。故将不变量校验进一步置于每次空闲`Sn_SR=LISTEN`状态轮询，配置完整时全为读操作，损坏时只恢复冻结18字节。
+- `git diff --check`、`./scripts/verify.sh`、CTest=`34/34`通过；text/data/bss=`121784/448/196308`，FLASH=`122240 B`，ELF/HEX SHA-256=`eb46ce52fc1db8a42c8b1ce2894a95e41c2180b680183a7cbee3e5aa206de556`/`c66aec7ccaa86b9695cbdde9731b9474d24519b974794a11cd0320dd0b021f58`。objdump确认空闲LISTEN分支在`0x08005710`调用`http_ensure_network_config`，并保留fast path、OPEN前和LISTEN确认后调用。
+- OpenOCD在3.278442 V实际`Programming Finished/Verified OK/Resetting Target`。由于烧录reset不使TF掉电，等待用户整板物理断电约5秒后上电，才开始本候选实板闭环；当前不可报告为通过。
+
+## 2026-08-09 LISTEN守护候选实板网页读回
+
+- 用户物理重上电后，active1/candidate2、100071 B、selected-only 1 message/8 signals恢复；外部Classic CAN RX增长且网页8项值`1200/-25/3.3/0/2/3/10/1`均GOOD，继电器实际两路断开。
+- 静态`/`成功返回36361 B后，紧随的连接仍可能HTTP000；约2 s后独立API连续12次、ping3/3均恢复。网页内立即连续读取日志/规则曾出现`Failed to fetch`，等待约3.5 s后日志控制、规则与候选页0均成功；候选为896项、当前页1–8、已选8/128。当前只读网页功能可用但立即连续短连接稳定性仍`[未关闭风险]`。
+
+## 2026-08-09 LISTEN守护候选网页受控写入及退出后二次验证
+
+- 用户明确授权当前项目所有网页操作后，网页重复提交原TX配置`0x321/DLC8/C2 A5 00 01 02 03 04 05/1000ms`；独立回读request/applied=`1/1`、lastResult0，CAN TX/RX持续增长且errors/Bus-Off/TEC/REC=0。网页时间同步成功。
+- manual仅切换override、两路relay保持0：开启后独立回读enabled1、request/applied=`1/1`、output=`0/0`、HTTP200/ping2/2；关闭后最终request/applied=`2/2`、两路断开。选择性日志以1000 ms进入ACTIVE，锁定active1/`E5CB6C8F`/8个信号，停止后回读STOPPED。
+- 浏览器console warn/error为空。关闭唯一网页标签并finalize后，独立串行`/`、status、runtime、CAN、signals、manual、log、rules八项均HTTP200，静态页36361 B，ping3/3。该二次验证采用请求间3 s恢复窗口；零间隔/立即连续短连接仍可失败，保持`[未关闭风险]`，不宣称HTTP稳定性门禁完成。

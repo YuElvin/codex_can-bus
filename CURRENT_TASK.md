@@ -186,3 +186,26 @@
 - 网页验收：外部Classic CAN的8项selected持续GOOD；manual请求1使relay1闭合，请求2关闭覆盖并使两路断开；CAN RX=`1198→1569`，console无warn/error。网页标签随后已关闭并finalize。
 - 退出网页后的独立二次验证：status/runtime/signals/manual/rules/log/CAN七个请求均HTTP200，active1/candidate2/selection CRC=`E5CB6C8F`，8/8 selected全部GOOD；manual disabled、request/applied=`2/2`、两路输出0，日志STOPPED，CAN rx=`2363`且errors/Bus-Off/TEC/REC=`0/0/0/0`，ping=`3/3`。正常网页与独立串行二次门禁通过。
 - 边界：无等待的独立curl进程压力仍可在第二请求出现RST/0字节超时，保持`[未验证/未关闭风险]`；本次不把正常串行通过扩写为任意零间隔连接稳定性，也不再叠加无证据状态机实验。
+
+## 2026-08-09 冷启动网页回归重新打开HTTP稳定性门禁
+
+- 用户重新上电后，网页概览、CAN/TX/RX和8个selected信号先正常；manual开启relay1后，关闭覆盖请求未返回，页面显示`Failed to fetch`，随后ping全丢包、HTTP=`000`。接口恢复后为manual disabled/output0，用户独立确认实体继电器已经断开；业务副作用与HTTP交付继续分开判定。
+- 故障现场两次OpenOCD `halt`均报告`target was in unknown state when halt was requested`，未取得RAM诊断；每次命令均以`resume`或`reset run`收尾。软件`reset run`后10秒仍无法恢复网络，当前需要物理断电重上电，且禁止继续提交继电器操作。
+- 当前未烧录候选把disconnect pending的500 ms超时恢复改为：先强制socket0 `CLOSE->CLOSED->OPEN->INIT->LISTEN->LISTEN`，仅失败才调用原`w5500_bringup_run()`全芯片复位；不改HTTP/API、manual、CAN、DBC、TF或网页语义。
+- `git diff --check`与`./scripts/verify.sh`已通过，CTest=`34/34`；ELF text/data/bss=`121848/468/196308`，ELF/HEX SHA-256=`a0a33082306720165bb211a2baa139a287c5f08de5267b0dd3c4aa917fdf9973`/`dea2a74b91f1781ad51c7bdbfb5f7a95300a2a6c565c8b2f36cfcf298b366825`。反汇编确认socket重建成功分支先返回，失败分支才调用`w5500_bringup_run()`。实板状态仍`[未验证]`，不得写成修复完成。
+
+## 2026-08-09 当前阻断：物理重上电后续验配置修复候选
+
+- socket重建候选实板未命中并已撤销。直接W5500 SPI证据已定位GAR/SIPR损坏；仅重写冻结GAR/SUBR/SHAR/SIPR 18字节即可在无复位条件恢复网络。
+- 当前候选实现配置读回/不一致时18字节修复，host 34/34、构建/反汇编及烧录通过。物理冷启动后的manual安全切换与等待后HTTP/ping首轮通过；network repair/failure=`0x311/0`，ACK timeout/full recovery=`0/0`。
+- 调试调用底层SPI函数后已执行`reset run`恢复目标，但该软件复位未给TF卡断电，现为API可达、静态页404、runtime unloaded。`[阻断]`：需整板物理断电重上电，随后继续网页全功能、退出网页后的独立二次验证；当前不得提交/推送为完成修复。
+
+## 2026-08-09 最新候选待物理冷启动
+
+- 已补齐`LISTEN`读回成功后的公共网络配置校验，host 34/34、反汇编、烧录均通过；候选尚无有效实板网页结果。
+- `[阻断]` 烧录reset不重置TF卡供电，网页文件为404。需整板断电约5秒再上电；随后恢复外部0x100/0x110发送并继续受控网页操作。不得把当前API可达/静态页404误报为修复失败或TF介质损坏。
+
+## 2026-08-09 当前候选：空闲LISTEN配置守护
+
+- 已把配置不变量校验扩展到空闲LISTEN轮询；host、构建、反汇编和烧录均通过，尚无本候选实板验收。
+- `[阻断]` 再次烧录后的MCU reset不重置TF供电，需整板物理重启后验证；外部CAN发送和受控网页提交仍待用户确认。

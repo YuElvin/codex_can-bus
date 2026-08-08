@@ -49,5 +49,8 @@ W5500Result w5500_port_write_block(W5500Port *port, uint8_t block, uint16_t addr
 W5500Result w5500_port_read_reg(W5500Port *port, uint16_t address, uint8_t *value);
 W5500Result w5500_port_write_reg(W5500Port *port, uint16_t address, uint8_t value);
 W5500Result w5500_port_get_status(W5500Port *port, W5500Status *status);
+W5500Result w5500_port_ensure_network_config(W5500Port *port,
+                                              const W5500Config *config,
+                                              bool *repaired);
 
 #endif
