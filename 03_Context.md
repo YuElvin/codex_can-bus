@@ -326,3 +326,23 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - H1 point2 `ACTIVE_CURRENT_WRITE`：HTTP507、transaction=`MANIFEST_FAILED`、fire=`1`/point=`2`/operation=`WRITE`/`FR_DISK_ERR`；point3 `ACTIVE_CURRENT_RENAME`、point4 `ACTIVE_CURRENT_READBACK`分别为HTTP507和`RENAME`/`READ`、`FR_DISK_ERR`；point5为HTTP422、operation=`0xFFFFFFFF`（具名runtime publish sentinel）、result=`12`、transaction=`RUNTIME_FAILED`。每点即时和冷启动后均为active1/candidate2/`E5CB6C8F`/8 selected，规则禁用、继电器关闭、日志STOPPED、CAN错误0。
 - point3首轮使冷启动`loaded=false`，并非通过：已确认是`restore_previous_active_manifest()`读回旧manifest改写全局路径，后续新generation owned标志错误清理旧active对象。保存并恢复failed transaction的`CandidatePaths`后，默认`verify.sh`为34/34，H1反汇编确认`792 B`路径副本在验证前后复制；真实candidate重新激活后重跑point3–5和冷启动全部通过。
 - 当前板已重烧默认OFF正式HEX，OpenOCD=`Programming Finished/Verified OK/Resetting Target`，正式ELF/HEX SHA-256=`6314d51141317f5073459d874b3c9655b0897b86916b2aeadcce41ffa2c7aea1`/`dcf50fa599f90d671addcef65a00d26e393d14dfcca8f93ae30741a5ba2267fb`，text/data/bss=`121384/444/196300`；`nm`无H1符号，外部0x100解码与现有API烟测通过。
+
+## 2026-08-09 当前网页双轮回归状态
+
+- 当前正式映像的DBC/CAN/selected signals、候选分页/搜索、时间同步、日志启停、TX提交和规则只读均取得页面或独立HTTP证据；退出网页后的串行API链全部恢复正常。candidate精确搜索为显著长事务，本轮耗时`23.235752 s`，20 s客户端上限会误判超时。
+- `[阻断]` 网页全功能稳定性不能判通过：两轮均在manual enabled/relay1=1成功后，关闭覆盖提交未生效并使port80不可访问，关闭页面也不释放，只能`reset run`恢复。复位后最终安全态为manual disabled/outputs0、log STOPPED、runtime active1/candidate2/8 signals。下一步应以只读HTTP trace/socket诊断定位“第二次manual POST响应/断连后socket不恢复”，未获修复授权前不改固件。
+
+## 2026-08-09 HTTP稳定性修复尝试与当前阻断
+
+- 恢复F-76的ACK wait后，页面首轮manual开启/关闭完整成功；页面随后已关闭，console warn/error为空。但独立curl第二轮仍复现0字节响应和网络失联，故用户要求的“退出网页后二次验证”判定失败。
+- 失败请求已执行到manual request/applied；W5500诊断命中ACK timeout，随后在`FIN_WAIT(0x18)`触发recovery。延长ACK至2 s和合并JSON首个SEND均未改变故障，已撤销。`relay1=relay2=0`的无物理线圈切换同样可复现，排除线圈动作是必要条件。
+- 当前烧录候选只恢复ACK等待，并把disconnect pending遇到CLOSE_WAIT恢复为强制socket重建；`verify.sh`34/34，ELF/HEX SHA-256=`18017321c3924b7c2069f02690f9b02758977d715044bdeb59860656a51785fe`/`2f0406b19f5ad52cb9856cb4316e59d12669eca0c1e113ecdabdc62e6414dad1`，FLASH/RAM_D1=`121932/196680 B`。它仍属未验收诊断候选，不得提交为修复完成。
+- 下一步需要同一失败连接的pcap；在取得客户端请求、板端payload/重传、ACK/FIN/RST顺序前，HTTP全功能稳定性保持`[阻断]`，阶段17完成结论不扩展到该新增回归。
+- 本轮为验证与治理记录，未修改固件或网页源码，未重新构建、反汇编或烧录；CAN-FD实板仍`[未验证]`。
+
+## 2026-08-09 网页与退出网页后二次回归状态
+
+- 已封存失败pcap并证明：首响应完整ACK，客户端FIN后13 ms的新SYN被RST；后续重试连接中业务可应用而响应没有上网。该证据否定“HTTP200/业务应用即可代表响应交付”。
+- 无收益的2 s ACK、合包SEND、动态1 ms轮询、同步20 ms交接和替代关闭分支均已撤销。当前唯一源码差异为精确恢复`aff4cc5`之前的ACK wait；最终构建CTest=`34/34`，ELF/HEX=`d377d652...59cb`/`46fbd06a...4f0b`，已烧录并Verified OK。
+- 网页实测manual开启/关闭请求均由RuleTask确认，最终disabled且两路输出0；8个selected Classic CAN信号持续GOOD，console为空。网页已关闭；随后七个独立串行API全部HTTP200，runtime identity、selected集合、规则、日志STOPPED和CAN零错误均保持，ping3/3。
+- 当前结论：用户指定的“网页验证→退出网页→独立二次验证”通过；阶段17 Classic CAN完成状态保持。零间隔独立curl短连接仍可能失败，单独列为`[未验证/未关闭风险]`，不冒充已解决。

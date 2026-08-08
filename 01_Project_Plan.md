@@ -164,3 +164,8 @@
 - point3第一次实验揭露了rollback readback污染可变路径并误删旧active generation对象；已用保存/恢复transaction `CandidatePaths`的最小补丁修复，重新构建、重烧、重建真实candidate/active基线，并重跑point3/4/5及冷启动全部通过。
 - 正式默认OFF映像已重烧、`nm`无H1符号、外部Classic CAN `0x100`解码/API/CAN零错误烟测通过。阶段17至此完成；CAN-FD仅保留数据模型/源码合同支持，实板路径明确`[未验证]`。
 - 每个active点必须独立记录HTTP、专用诊断、runtime/selected/规则/继电器前后与冷启动；最后强制重烧正式`c3d0608e...`HEX并做Classic CAN烟雾。
+
+## 2026-08-09 阶段17网页退出前后回归补验
+
+- 对manual失败抓包后，最终只恢复历史ACK wait最小差异；34/34测试、目标链接、定向反汇编和ST-Link烧录校验通过。网页manual开/关、外部8项selected GOOD与console检查通过，关闭网页后七个独立串行API和ping再次通过，未改变阶段17 Classic CAN完成判定。
+- 零间隔独立curl短连接压力仍可复现第二连接RST/无响应，单列为`[未验证/未关闭风险]`；不扩写为完成标准的一部分，也不以客户端延时、重试、多socket或keep-alive扩大本轮范围。CAN-FD实板继续`[未验证]`。

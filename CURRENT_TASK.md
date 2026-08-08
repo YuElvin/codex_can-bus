@@ -8,6 +8,7 @@
 
 ## 当前阶段
 
+- 2026-08-09当前网页退出前后双轮回归未能全通过：DBC/CAN/selected signals、candidate分页/搜索、时间、日志、TX和规则只读均通过，但两轮均在manual开启成功后复现关闭提交不生效且port80卡死，必须`reset run`恢复。最终板端已恢复manual disabled/两路0、log STOPPED、runtime active1/candidate2/8 signals；退出网页后的独立串行API均HTTP200。当前下一项为诊断该重复HTTP/socket失败，不能用复位后成功覆盖失败窗口。
 - 2026-08-09阶段17“大 DBC selected-only闭环”A0-H（Classic CAN范围）已通过。真实链为candidate generation2、active generation1、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、8个selected/1个消息；外部标准Classic CAN正向解码、未选隔离、STALE、分页API、选择性v3 CSV/meta、日志锁/吞吐、实体FAT只读一致性、活动日志物理掉电恢复、可控TF sync失败及active write/rename/readback/runtime-publish失败保持旧runtime均有现场证据。H1 point3首轮暴露并修复了rollback路径归属污染，修复后point3–5均冷启动恢复；正式默认OFF映像已重烧并烟测。CAN-FD实板保持`[未验证]`，不伪造为已通过且不阻断本轮Classic CAN完成边界。
 - 2026-08-01阶段17“大 DBC selected-only闭环”A0-F门禁客观通过，G源码、host、最终固件与实板收口正在进行。恢复双ID外部输入后，最终固件总RX=`2826→3098`、selected matched=`1413→1549`、updates=`11304→12392`，准确满足总RX增量272、selected增量136、updates=`136×8`；page0八项为预期raw/value且`GOOD`、page1仍全`MISSING`。v3日志已在这些`GOOD`值下进入ACTIVE，锁定active generation7、selection CRC=`62BA0D66`、count128和`/log/20260801_175230000_signal-v3.csv`。下一动作需要用户停止`0x100`、保持`0x110`，取得超过3000 ms的STALE和值保持证据；随后停止会话、取卡只读核验CSV/meta。此前MISSING/分页/过滤/400、128项/1000 ms=`422 rate_limit`和日志期间写操作409均已实测。最终`./scripts/verify.sh`为CTest=`34/34`，Flash=`121708 B`、RAM_D1=`196664 B`，ELF `text/data/bss=121256/444/196284`，ELF/HEX SHA-256=`97cd14af626ecb7951f1f012148819f922c688b339b1f9185d66fbd630afc10b`/`963fa24f74a9808bc0687ab2ab4e5cd7ba2e7d3c5d1b912ae5794c08816e5b7d`；H和CAN-FD实板仍`[未验证]`。
 - 2026-08-01新增P0审计修正尚未烧录：发现生产active manifest旋转在`tmp→current`或短临界publish失败时只依赖下次previous恢复，不满足即时保留旧current。现已增加同一TF锁内的previous→current回滚；新候选`verify.sh`为CTest=`34/34`、Flash=`121836 B`、RAM_D1=`196664 B`、ELF/HEX SHA-256=`b77fc9de42ef3257b3155ea4f12d942d1903395671bd22c4c2173b04322aae09`/`1ca3ac65704aae4116a77c0ed90e22a46de970b36e0b038758dae0815dd800dd`。当前板仍为先前G映像并有ACTIVE日志；必须先取得STALE/介质证据并正常停日志，才允许烧录新候选并重做必要active/外部CAN回归。
@@ -103,6 +104,14 @@
 - 每个子任务必须写明固定阶段、唯一明确目标、成功标准、证据要求和禁止范围。
 - 子任务不得自行选择、切换或扩大阶段；未获主会话明确派发时不得实施功能修改。
 
+## 2026-08-09 网页HTTP回归诊断续行
+
+- 当前结论仍为`[阻断]`：恢复历史ACK wait与CLOSE_WAIT收尾后，网页首轮的manual开启/关闭均成功且console无warn/error；按用户要求退出网页后，独立curl第二轮仍出现业务已应用但响应0字节、随后port80/ping失联，不能判修复通过。
+- 精确板端证据：失败窗口命中`ack_wait_timeout_count=1`，随后`recovery_count=1/recovery_last_sr=0x18(FIN_WAIT)`；成功窗口最终response为2次SEND、209 B、FSR=1930、ACK wait约50 ms。把ACK门槛延至2 s、以及把JSON header/body合并为单次首段SEND，均在首个POST再次失败，已撤销；不把两项实验写成修复。
+- 排除继电器线圈瞬态：仅在`relay1=relay2=0`下切换manual enabled，前三次HTTP200，第四次仍0字节超时并使网络失联。故问题属于W5500 TCP响应/关闭数据面，不是实际继电器动作的必要条件。
+- 当前工作树仅保留两个最小源码差异：恢复`http_begin_ack_wait()`/`http_finish_response_send()`的TX_FSR门禁；`disconnect_pending + CLOSE_WAIT`恢复为结束trace并强制close/open/listen。最终`verify.sh`为34/34，text/data/bss=`121480/444/196300`，ELF/HEX=`18017321...85fe`/`2f0406b1...fe`；该映像已`Verified OK`烧录并复位至安全态，但稳定性门禁仍未通过。
+- 下一唯一证据门槛：在Mac `en2`对`192.168.1.88:80`抓取同一次失败POST的pcap，和现有`Sn_SR/IR/TX_FSR/RX_RSR`、ACK/recovery计数对齐；无包序证据前不再猜测性修改发送或关闭状态机。
+
 ## 2026-08-01 大 DBC P0 提交回滚与 TF 错误传播静态闭环
 
 - 新干净TF的主机只读`fsck_msdos -n`已通过，但卡已安全弹出，尚待重新插板上电；旧损坏卡上的generation、规则与v3 CSV/meta不恢复也不作为通过依据。
@@ -168,3 +177,12 @@
 - 仅修改`CMakeLists.txt`、H1平台header、large-DBC STM32 active实现和TF append实现；默认OFF分支无符号/行为，ON实验分支包含五点fail-once。独立Terra-high审查发现P0/H1可同时开启和runtime operation sentinel未命名，已分别用CMake配置期`FATAL_ERROR`和`LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH`修正。
 - 默认OFF执行`./scripts/verify.sh`为CTest=`34/34`，ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`，text/data/bss=`121384/444/196292`，`nm`无H1符号。
 - 独立`build/stm32h750-h1fi`以ARM GCC、H1=ON/P0=OFF构建成功；ELF/HEX SHA-256=`09d0f2509290d9c66fa4c06c38a6ca77c7cd466140400810e032a6007213f0a1`/`f5afdef4149945e8c51611d145c1e89b6dcd271dc3f5cf08b94b19cfe88c4cbf`，text/data/bss=`121624/444/196316`。五个diagnostic地址为`0x240268FC..0x2402690C`，helper=`0x080119A4`，反汇编consume调用数精确为5；P0 symbol不存在。当前尚未烧录或触发，板端五点仍`[未验证]`。
+
+## 2026-08-09 网页退出前后回归完成
+
+- pcap `/tmp/can_bus_http_fix.pcap` 已在用户停止抓包后封存：3331 B，SHA-256=`b8799800836afb2a9aaae80dc0efb1bc4cd246d272861229a979ce65e4b62c1a`。首连接的91 B header与118 B body均被ACK，客户端FIN后约13 ms发起下一SYN并收到RST；1 s重试握手成功，但第二POST后线上没有ACK/HTTP响应。同步板端却已应用请求并完成两次SEND，证明业务应用与响应交付必须分开判定。
+- 多项候选实验均未改善零间隔独立短连接，已全部撤销。最终源码只精确恢复`aff4cc5`之前已验证的ACK wait：最终SEND后仅在`TX_FSR=2048`时进入graceful DISCON，否则保持有界ACK pending；没有多socket、keep-alive、重试、动态轮询或网页改动。
+- 最终`git diff --check`与`./scripts/verify.sh`通过，CTest=`34/34`；text/data/bss=`121512/444/196300`，FLASH/RAM_D1=`121964/196680 B`，ELF/HEX SHA-256=`d377d652b833805735977382503392dee6cba82521c6a40579d63ca0599259cb`/`46fbd06a21bb890cf00c49e3a7a2fb44cbdb85e9c3506da88c611b3e569c4f0b`。反汇编确认FSR门禁、ACK pending与500 ms恢复路径进入最终ELF；OpenOCD实际`Programming Finished/Verified OK/Resetting Target`，3.254728 V。
+- 网页验收：外部Classic CAN的8项selected持续GOOD；manual请求1使relay1闭合，请求2关闭覆盖并使两路断开；CAN RX=`1198→1569`，console无warn/error。网页标签随后已关闭并finalize。
+- 退出网页后的独立二次验证：status/runtime/signals/manual/rules/log/CAN七个请求均HTTP200，active1/candidate2/selection CRC=`E5CB6C8F`，8/8 selected全部GOOD；manual disabled、request/applied=`2/2`、两路输出0，日志STOPPED，CAN rx=`2363`且errors/Bus-Off/TEC/REC=`0/0/0/0`，ping=`3/3`。正常网页与独立串行二次门禁通过。
+- 边界：无等待的独立curl进程压力仍可在第二请求出现RST/0字节超时，保持`[未验证/未关闭风险]`；本次不把正常串行通过扩写为任意零间隔连接稳定性，也不再叠加无证据状态机实验。

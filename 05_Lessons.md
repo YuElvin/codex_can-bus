@@ -115,6 +115,7 @@
 - L-106：长active请求的命令会话可能先返回session ID且暂时无stdout；必须继续poll到明确exit code和完整HTTP响应，不能把工具尚未交付输出误判为板端无响应。本轮定点trace最终证明path5/code200、header/body两次send和disconnect完成，IWDG unhealthy=0。
 - L-112：FAT32的`current→previous→new current`只能构造可恢复协议，不能假设多文件rename原子。若new current rename、读回或runtime publish在previous已存在后失败，必须同锁立即尝试previous回写current；若该尝试也失败，保留previous并把结论降为启动恢复待验。镜像FAT与FSINFO写的返回值也必须向上传播，否则`f_sync`可能表面成功而关键元数据写失败未被调用方看到。
 - L-113：单socket长业务请求的HTTP200只证明响应字节到达，不能证明socket已回到LISTEN。若`SEND_OK`后的TX_FSR等待没有保持一致的ack/disconnect状态，可能留下`ESTABLISHED`并拒绝所有后续请求。应将W5500 `SEND_OK`作为响应收口边界，立即走既有graceful DISCON，并用“长请求后两次独立请求”而非单次200验证。
+- L-114：W5500网页故障若总在manual POST后出现，不能直接归因继电器线圈瞬态。保持`relay1=relay2=0`、只切换manual enabled仍能复现0字节响应和网络失联时，应把硬件动作假设排除，继续用同连接pcap与`Sn_SR/IR/TX_FSR/RX_RSR`对齐TCP发送/关闭时序。ACK超时延长或header/body合包只有现场对照通过后才能保留。
 - L-114：外部Classic CAN正向RX必须同时保留三层证据：CAN状态RX/错误计数增长、受控GDB的ID/DLC与DBC matched/update/decode-error计数、selected-only API的GOOD raw/value；TX self-test或单次HTTP 200不能替代。反向隔离必须在用户明确停止某一ID后再做，不能从混合流量推断STALE。
 - L-115：STALE隔离验收需要在用户明确停止selected消息后，证明未选消息仍让CAN RX增长、selected raw/value和`updatedMs`保持、quality超过阈值进入`STALE`。仅看总RX或单个MISSING不能证明未选消息未污染SignalCache。
 - L-116：选择性日志的HTTP `ACTIVE/STOPPED`只证明控制面状态机和会话锁，不能证明TF文件实体可读或clean footer。必须记录日志路径、active generation、selection CRC、selected count、锁定期间写请求409，并在下电取卡后以只读文件/行列/哈希/FAT证据关闭介质门禁。
@@ -126,3 +127,4 @@
 
 - `read_active_manifest_with_references()`会为被验证manifest重建全局`CandidatePaths`。若回滚时验证的是旧generation，而后续cleanup仍根据新generation的owned/renamed标志使用该可变全局路径，就会删除刚恢复旧manifest所引用的对象，HTTP即时状态可保持正常但冷启动失败。
 - 对带“对象归属标志 + 可变路径缓存”的事务，回滚读回后必须恢复失败交易路径，或让cleanup接收显式owned路径；验证至少应包含失败后冷启动，不能只看同一运行期的HTTP/runtime快照。
+- L-121：单socket HTTP关闭问题必须同时看pcap和板端业务状态。客户端可能已完整ACK上一响应，却在下一连接中出现“请求已被MCU应用、W5500两次SEND已完成、线上仍无ACK/响应”；因此业务副作用、SEND_OK、HTTP响应和下一次listener可用性是四个不同证据。无收益的超时、合包、轮询和关闭实验应逐项撤销，最终只保留能追溯到已验证基线的最小差异；正常网页/串行通过也不能扩写为零间隔短连接压力通过。

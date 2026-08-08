@@ -709,14 +709,32 @@ static int http_begin_graceful_disconnect(void) {
   return 0;
 }
 
+static void http_begin_ack_wait(void) {
+  const uint32_t initial_fsr =
+    g_w5500_http_trace_post_sendok_tx_fsr_result == (uint32_t)W5500_OK
+      ? g_w5500_http_trace_post_sendok_tx_fsr_value
+      : 0xffffffffu;
+  g_w5500_http_ack_wait_start_tick = HAL_GetTick();
+  g_w5500_http_ack_wait_pending = 1u;
+  ++g_w5500_http_ack_wait_count;
+  g_w5500_http_ack_wait_initial_fsr = initial_fsr;
+  g_w5500_http_ack_wait_final_fsr = initial_fsr;
+  g_w5500_http_ack_wait_elapsed_ms = 0u;
+}
+
 static int http_finish_response_send(void) {
   if (g_w5500_http_trace_send_count == 0u) {
     return 1;
   }
-  /* SEND_OK is the W5500 completion boundary for the final response chunk.
-   * Start TCP close now; waiting for TX_FSR to refill left a long candidate
-   * response in ESTABLISHED with neither close state armed. */
-  return http_begin_graceful_disconnect();
+  if (g_w5500_http_trace_post_sendok_tx_fsr_result == (uint32_t)W5500_OK &&
+      g_w5500_http_trace_post_sendok_tx_fsr_value == W5500_SOCKET_BUFFER_SIZE) {
+    return http_begin_graceful_disconnect();
+  }
+  /* SEND_OK only proves that W5500 accepted the SEND command. Keep the
+   * response connection alive until TCP ACKs release the complete TX buffer;
+   * the poll path remains bounded by the existing 500 ms recovery timeout. */
+  http_begin_ack_wait();
+  return 0;
 }
 
 static int http_open_listener(void) {

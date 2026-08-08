@@ -4026,3 +4026,27 @@
 - 由于旧active对象已被首轮缺陷删掉，未伪造恢复：从仍存在的真实candidate2正常`POST /api/dbc/active`重建active1，HTTP200并验证8个external Classic CAN `GOOD`信号。修复后重跑point3、point4（readback）均HTTP507/`MANIFEST_FAILED`、point5（runtime publish）HTTP422/`RUNTIME_FAILED`；每点fire count=1、专用operation/result匹配，旧runtime/API、规则禁用、继电器关闭、日志STOPPED、CAN零错误和每点后的`reset run`冷启动均通过。
 - 最终正式默认OFF ELF/HEX=`6314d51141317f5073459d874b3c9655b0897b86916b2aeadcce41ffa2c7aea1`/`dcf50fa599f90d671addcef65a00d26e393d14dfcca8f93ae30741a5ba2267fb`；`nm`确认无H1符号。OpenOCD实际`Programming Finished/Verified OK/Resetting Target`，正式`/api/dbc/runtime`=active1/candidate2/8 signals，外部`0x100`解码GOOD，CAN errors/Bus-Off/TEC/REC=0，规则/继电器/日志API烟测均通过。
 - 结论：阶段17 A0-H在Classic CAN范围完成；CAN-FD数据模型/合同仍存在但实板路径`[未验证]`，不写成通过。下一步仅为提交、推送并保持当前正式映像，不再执行H1实验。
+
+## 2026-08-09 网页退出前后双轮回归
+
+- 用户要求验证当前网页，完成首轮后退出旧页面并以新页面执行第二轮。两轮只读基线均为RTOS/W5500/TF/QSPI正常、active generation1/candidate2、selection CRC=`E5CB6C8F`、selected-only 1 message/8 signals；外部标准Classic `0x100`八项均为`GOOD`，值为`1200/-25/3.3/0/2/3/10/1`。候选页每页8项，page0/page1与精确搜索`PackVoltage_Module010`均正确；TX配置`0x321`/DLC8/1000 ms提交后`requestSeq=appliedSeq=1/lastResult=0`。浏览器warn/error日志为空。
+- 时间同步回读`timeSynced=true/utcOffsetMin=480`。选择性日志以1000 ms进入`ACTIVE`，路径`/log/20260809_013243961_signal-v3.csv`，锁定active generation1、selection CRC=`E5CB6C8F`、selectedCount8；随后通过独立HTTP安全停止并回读`STOPPED`。本次未取卡，故该新会话CSV/.meta实体内容保持`[未验证]`，不替代既有已通过的实体日志证据。
+- 两轮均复现HTTP稳定性失败：网页把手动覆盖设为enabled、relay1=1后可回读`requestSeq=appliedSeq=1`且输出1；同页提交关闭覆盖后，表单已清空但后端仍回读旧开启状态，随后独立curl连接port80超时。关闭页面不能释放；必须执行受控OpenOCD `reset run`。每次复位后均确认manual disabled、两路输出0，日志STOPPED，runtime最终恢复active1/candidate2/8 signals。该问题不能被复位后的成功请求覆盖，当前网页全功能稳定回归判定为未通过。
+- 按用户要求最终退出网页后，独立串行API二次验证：`/api/status`、runtime、CAN status/TX、`/api/signals?page=0`、manual、log、rules均HTTP200且状态一致；candidate精确搜索第一次因客户端20 s上限超时，40 s复测在`23.235752 s`返回唯一ordinal72，随后manual仍HTTP200。最终无OpenOCD进程，继电器两路0、日志STOPPED、runtime loaded=true。DBC上传/激活、selection变更与规则写入为保护已验收基线未在本轮重复执行；本轮未改固件/网页源码，故未重新构建、反汇编或烧录。
+
+## 2026-08-09 网页HTTP回归修复诊断
+
+- 恢复历史ACK wait与disconnect pending的CLOSE_WAIT socket重建后，`verify.sh`34/34并烧录。页面读取active1/candidate2/8 selected及外部Classic GOOD信号；manual开启relay1和随后关闭覆盖均成功，页面console无warn/error，随后按用户要求关闭网页。
+- 退出网页后的独立curl二次验证仍失败：开启与GET曾HTTP200，后续关闭POST 0字节超时并使ping/port80失联；另一轮首个开启POST在约5.218 s收到RST。GDB读回显示失败累计`ack_wait_timeout_count=1`、`recovery_count=1`、`recovery_last_sr=0x18(FIN_WAIT)`；成功trace为send count/last/total=`2/118/209`、FSR=`1930`、ACK elapsed=`50 ms`。每次失败后均立即`reset run`恢复manual disabled/两路0，并退出OpenOCD。
+- 两项有界实验均失败并已撤销：ACK wait由500 ms延至2 s仍在首个POST超时；JSON header+首段body合并为一次SEND仍在首个POST超时。随后在`relay1=relay2=0`、仅切换manual enabled的10次计划中，前三次HTTP200、第四次同样超时且网络失联，排除继电器线圈切换是必要条件。
+- 最终源码只保留恢复ACK wait和`disconnect_pending + CLOSE_WAIT → http_open_listener()`；最终`git diff --check`及`verify.sh`通过，text/data/bss=`121480/444/196300`、FLASH/RAM_D1=`121932/196680 B`，ELF/HEX SHA-256=`18017321c3924b7c2069f02690f9b02758977d715044bdeb59860656a51785fe`/`2f0406b19f5ad52cb9856cb4316e59d12669eca0c1e113ecdabdc62e6414dad1`。OpenOCD烧录输出`Programming Finished/Verified OK/Resetting Target`；该候选仍未通过稳定性，不提交/推送。
+- 当前唯一解除条件是Mac `en2`上的同连接pcap。需捕获一次manual POST失败并与板端trace/ACK/recovery读数对齐；在看到HTTP payload、重传、ACK、FIN/RST包序之前，不继续猜测性修改状态机。
+
+## 2026-08-09 pcap收口、网页验证与退出后二次验证
+
+- 用户停止抓包后封存`/tmp/can_bus_http_fix.pcap`，3331 B、SHA-256=`b8799800836afb2a9aaae80dc0efb1bc4cd246d272861229a979ce65e4b62c1a`。首连接91 B header与118 B body均完整ACK；客户端FIN后约13 ms的新SYN收到RST，1 s后重试握手成功，但第二POST在线上没有ACK/HTTP响应。同步板端读取却显示handler已应用、send count/last/total=`2/118/209`、无ACK timeout/recovery，明确区分业务副作用与网络交付。
+- 依次试验的1 ms pending轮询、ACK后强制reopen、`CLOSE_WAIT`重建、20 ms同步交接和客户端FIN主导关闭均未改善零间隔第二请求，全部撤销。最终只恢复`aff4cc5`之前的`http_begin_ack_wait()`与`http_finish_response_send()`TX_FSR门禁；没有HTTP/API/网页/多socket/keep-alive扩展。
+- 最终`git diff --check`与`./scripts/verify.sh`通过，CTest=`34/34`；FLASH/RAM_D1=`121964/196680 B`，text/data/bss=`121512/444/196300`，ELF/HEX SHA-256=`d377d652b833805735977382503392dee6cba82521c6a40579d63ca0599259cb`/`46fbd06a21bb890cf00c49e3a7a2fb44cbdb85e9c3506da88c611b3e569c4f0b`。`nm/objdump`确认最终FSR=2048直达DISCON、否则置ACK pending，500 ms恢复分支保留。OpenOCD/ST-Link烧录实际`Programming Finished/Verified OK/Resetting Target`，电压3.254728 V。
+- 浏览器打开`http://192.168.1.88/`：页面显示外部Classic CAN 8个selected均GOOD；manual读取为disabled/两路断开，提交请求1后enabled+relay1闭合，提交请求2后disabled+两路断开；CAN RX=`1198→1569`，console logs为空。随后关闭唯一页面标签并finalize，tabs列表为空。
+- 退出网页后等待2 s，以独立curl每项间隔2 s读取status/runtime/signals/manual/rules/log/CAN，七项均HTTP200：active1/candidate2/selection CRC=`E5CB6C8F`、8/8 GOOD，manual request/applied=`2/2`且输出0/0，规则两槽disabled，日志STOPPED，CAN rx=`2363`且errors/Bus-Off/TEC/REC=`0/0/0/0`；ping3/3，OpenOCD/GDB/tcpdump及调试端口无残留。
+- 用户指定的“网页验证完成后退出网页再做二次验证”已通过。零间隔独立curl进程仍可能在第二请求RST/0字节超时，明确保留为`[未验证/未关闭风险]`，不纳入本次正常串行通过结论。

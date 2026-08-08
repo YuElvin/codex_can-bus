@@ -396,3 +396,9 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 - point3实板首轮证明旧manifest指针虽立即恢复，但冷启动无法加载。根因是恢复读回旧manifest会重建全局`g_active_paths`为旧generation，而失败交易的owned/renamed标志仍表示新generation；随后清理误删旧active的source/index/selection。
 - 最小修复是在`restore_previous_active_manifest()`保存本次交易`CandidatePaths`，完成旧manifest验证后无条件恢复，令cleanup继续只针对失败的新generation。未改HTTP、TF格式、CAN、日志或事务顺序。
 - 修复后H1 point3/4/5逐点HTTP、故障锁存、旧runtime不变量及冷启动恢复全部重跑通过；最后重烧默认OFF正式映像并由`nm`证明无H1符号。该决定同时覆盖readback和runtime-publish回滚，因为二者也经过同一恢复与清理路径。
+
+### ADR-046：恢复W5500响应ACK门禁并保持单socket边界（2026-08-09）
+
+- 新pcap证明`SEND_OK`、业务应用与线上响应交付不是同一边界：第二POST已被MCU应用并执行两次SEND，但线上没有ACK/HTTP响应。ADR-036中“SEND_OK即可立即收口”的实现假设由本ADR修正。
+- 决策仅恢复`aff4cc5`之前的ACK wait：最终SEND后若`TX_FSR=2048`才进入既有graceful DISCON，否则置ACK pending并由现有500 ms恢复状态机处理。不增加socket、并发、keep-alive、网页重试或API。
+- 最终网页manual开/关与外部selected CAN通过，关闭网页后七个独立串行API和ping再次通过。零间隔独立curl短连接仍为`[未验证/未关闭风险]`，不得由本ADR宣称已解决。
