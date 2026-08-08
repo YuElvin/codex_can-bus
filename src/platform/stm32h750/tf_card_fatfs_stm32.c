@@ -3,6 +3,9 @@
 #include "platform/stm32h750_bringup.h"
 #include "dbc_upload.h"
 #include "large_dbc_contract.h"
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+#include "platform/large_dbc_candidate_stm32.h"
+#endif
 
 #include "bsp_driver_sd.h"
 #include "FreeRTOS.h"
@@ -454,7 +457,16 @@ int stm32h750_tf_append_file_locked(const char *path,
     if (g_tf_write_result != FR_OK || written != len) {
       failure_stage = 4u;
     } else {
-      g_tf_write_sync_result = f_sync(&file);
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+      if (large_dbc_h1_fault_consume(LARGE_DBC_H1_FAULT_LOG_APPEND_SYNC,
+                                      LARGE_DBC_CANDIDATE_IO_SYNC,
+                                      (uint32_t)FR_DISK_ERR)) {
+        g_tf_write_sync_result = FR_DISK_ERR;
+      } else
+#endif
+      {
+        g_tf_write_sync_result = f_sync(&file);
+      }
       if (g_tf_write_sync_result != FR_OK) {
         failure_stage = 4u;
       }

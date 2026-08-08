@@ -162,3 +162,9 @@
 
 - 两份Terra-high只读审计与主线源码/guide复核一致：独立默认OFF的`CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION`，不复用watchdog P0开关、不新增HTTP API，只由OpenOCD写一次性RAM arm。
 - 冻结`LOG_APPEND_SYNC`、`ACTIVE_CURRENT_WRITE`、`ACTIVE_CURRENT_RENAME`、`ACTIVE_CURRENT_READBACK`、`ACTIVE_RUNTIME_PUBLISH`五点；每点必须只消费一次，并验证旧runtime identity/selected/规则/继电器不变、重启恢复和正式映像复原。合同见`docs/LARGE_DBC_H1_FAULT_INJECTION.md`；合同提交前不改源码。
+
+## 2026-08-09 H1实现与构建门禁通过，尚未烧录
+
+- 仅修改`CMakeLists.txt`、H1平台header、large-DBC STM32 active实现和TF append实现；默认OFF分支无符号/行为，ON实验分支包含五点fail-once。独立Terra-high审查发现P0/H1可同时开启和runtime operation sentinel未命名，已分别用CMake配置期`FATAL_ERROR`和`LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH`修正。
+- 默认OFF执行`./scripts/verify.sh`为CTest=`34/34`，ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`，text/data/bss=`121384/444/196292`，`nm`无H1符号。
+- 独立`build/stm32h750-h1fi`以ARM GCC、H1=ON/P0=OFF构建成功；ELF/HEX SHA-256=`09d0f2509290d9c66fa4c06c38a6ca77c7cd466140400810e032a6007213f0a1`/`f5afdef4149945e8c51611d145c1e89b6dcd271dc3f5cf08b94b19cfe88c4cbf`，text/data/bss=`121624/444/196316`。五个diagnostic地址为`0x240268FC..0x2402690C`，helper=`0x080119A4`，反汇编consume调用数精确为5；P0 symbol不存在。当前尚未烧录或触发，板端五点仍`[未验证]`。

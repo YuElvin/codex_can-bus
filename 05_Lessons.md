@@ -121,3 +121,4 @@
 - L-117：TF日志实体验收必须用标准CSV解析而不是`wc`或肉眼抽样：先以meta的signal ordinal/key集合建立白名单，再检查header/列数、每key行数、quality、rowsWritten/drop/failure、cleanClose和FAT链。两次`fsck_msdos -n`与只读挂载/安全弹出共同证明介质一致；可见文件名或HTTP STOPPED不能替代。
 - L-118：物理掉电CSV不应以“最后batch不足selectedCount行”直接判定撕裂。必须区分批次级部分保留与行级撕裂：本轮末batch只写ordinal0..3，但708行全部8列、末尾换行、时间单调、key白名单与FAT链均有效，meta保持`cleanClose=false`。完成结论仍必须补板端重启恢复，不能只停在介质可读。
 - L-119：掉电介质可读后必须把同一TF插回断电目标，分别核对网络/TF、active runtime身份、selected外部RX、旧日志锁状态和新日志写入能力，才能关闭冷启动恢复。现场目标地址必须由当前源码或板端配置复核；本轮固件静态IP为`192.168.1.88`，沿用旧地址会制造假网络故障。
+- L-120：默认OFF的实验故障注入不能只靠文档约定隔离。应以CMake配置期拒绝互斥实验开关、独立构建目录、正式ELF `nm`无符号/哈希不变、实验ELF符号与调用点反汇编、试验后重烧正式哈希形成可执行闭环；非I/O sentinel也必须具名，避免现场读数无法解释。

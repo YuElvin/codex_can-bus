@@ -9,6 +9,27 @@
 #include "dbc_active_commit.h"
 #include "dbc_selected_runtime.h"
 
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+typedef enum {
+  LARGE_DBC_H1_FAULT_LOG_APPEND_SYNC = 1u,
+  LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_WRITE = 2u,
+  LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_RENAME = 3u,
+  LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_READBACK = 4u,
+  LARGE_DBC_H1_FAULT_ACTIVE_RUNTIME_PUBLISH = 5u
+} LargeDbcH1FaultPoint;
+
+#define LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH UINT32_MAX
+
+extern volatile uint32_t g_large_dbc_h1_fault_once;
+extern volatile uint32_t g_large_dbc_h1_fault_fire_count;
+extern volatile uint32_t g_large_dbc_h1_fault_last_point;
+extern volatile uint32_t g_large_dbc_h1_fault_last_operation;
+extern volatile uint32_t g_large_dbc_h1_fault_last_result;
+
+bool large_dbc_h1_fault_consume(uint32_t point, uint32_t operation,
+                                 uint32_t result);
+#endif
+
 typedef enum {
   LARGE_DBC_CANDIDATE_IO_OPEN = 0,
   LARGE_DBC_CANDIDATE_IO_CLOSE,

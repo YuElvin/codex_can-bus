@@ -9,6 +9,12 @@ set(CMAKE_C_EXTENSIONS OFF)
 option(CAN_BUS_BUILD_TESTS "Build host-side unit tests" ON)
 option(CAN_BUS_BUILD_STM32H750_FIRMWARE "Build STM32H750 firmware image" OFF)
 option(CAN_BUS_P0_FAULT_INJECTION "Build the lab-only P0 watchdog fault injection hook" OFF)
+option(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION
+  "Build laboratory-only large DBC H1 fail-once hooks" OFF)
+if(CAN_BUS_P0_FAULT_INJECTION AND CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+  message(FATAL_ERROR
+    "P0 watchdog and large DBC H1 fault injection cannot be enabled together")
+endif()
 set(LARGE_DBC_REAL_FIXTURE "" CACHE FILEPATH "Optional real large DBC fixture for host acceptance")
 if(LARGE_DBC_REAL_FIXTURE AND NOT EXISTS "${LARGE_DBC_REAL_FIXTURE}")
   message(FATAL_ERROR "LARGE_DBC_REAL_FIXTURE does not exist: ${LARGE_DBC_REAL_FIXTURE}")
@@ -174,6 +180,11 @@ if(CAN_BUS_BUILD_STM32H750_FIRMWARE)
 
   if(CAN_BUS_P0_FAULT_INJECTION)
     target_compile_definitions(can_bus_gateway_stm32h750 PRIVATE CAN_BUS_P0_FAULT_INJECTION=1)
+  endif()
+
+  if(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+    target_compile_definitions(can_bus_gateway_stm32h750 PRIVATE
+      CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION=1)
   endif()
 
   target_compile_options(can_bus_gateway_stm32h750 PRIVATE

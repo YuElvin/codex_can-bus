@@ -27,6 +27,8 @@ volatile uint32_t g_large_dbc_h1_fault_last_result;
 
 consume helper必须`used`、`externally_visible`、`noinline`、`noclone`。仅当`fault_once == point`时才在返回失败前依次清零arm、增加fire count并记录point/operation/result；未命中不得改变任何诊断。正式默认构建的`nm`必须不存在全部`large_dbc_h1_fault`符号。
 
+P0 watchdog与H1开关同时为ON时，CMake必须配置失败；runtime publish不是FatFs操作，其`last_operation`固定使用具名sentinel `LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH=UINT32_MAX`。
+
 ## Fail-once 点
 
 | 值 | 名称 | 精确语义 | 预期外部结果 |

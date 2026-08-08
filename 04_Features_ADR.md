@@ -385,3 +385,8 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - H剩余失败路径采用独立`CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION`，默认OFF且不复用watchdog的P0开关。实验构建仅由OpenOCD写RAM arm，生产不增加HTTP入口；正式ELF必须由`nm`证明完全不存在H1符号。
 - 冻结五点为日志append sync、active current tmp写入、current promote rename、new current读回和runtime publish前失败。每点消费前先清零arm，保证rollback I/O不被二次注入；验收要求旧runtime/selected/规则/继电器不变、重启恢复并最终重烧正式映像。完整矩阵见`docs/LARGE_DBC_H1_FAULT_INJECTION.md`。
+
+### ADR-044：H1默认OFF实现与实验映像隔离通过（2026-08-09）
+
+- CMake强制P0 watchdog与H1不能同时ON；H1 runtime非FatFs诊断使用具名`UINT32_MAX` sentinel。默认OFF最终ELF与既有正式映像逐字哈希一致且`nm`无H1符号，证明生产行为/预算未改变。
+- H1 ON/P0 OFF实验ELF比正式text/bss增加240/24 B，五个BSS globals与helper可见，最终反汇编恰有五个调用点。该ADR只关闭实现/构建隔离，不声明任何板端故障点通过。

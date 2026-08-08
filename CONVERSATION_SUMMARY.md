@@ -4011,3 +4011,10 @@
 - 主线复核guide阶段H明确包含断电恢复、active reload失败和日志写失败；两份GPT-5.6-Terra high只读审计一致要求独立默认OFF开关，不复用`CAN_BUS_P0_FAULT_INJECTION`，不新增HTTP调试入口，由OpenOCD写RAM一次性触发并以fire count证明。
 - 新增`docs/LARGE_DBC_H1_FAULT_INJECTION.md`冻结五点：日志append sync、active current tmp写入、tmp→current rename、new current读回、runtime publish前失败。每点先清零arm再返回失败，确保rollback I/O不被二次注入；现场必须核对旧runtime/selected/规则/继电器、冷启动恢复，最后重烧默认OFF正式映像并证明H1符号消失。
 - 本阶段门禁提交仅修改治理文档，尚未修改源码、构建、反汇编或烧录，五点板端状态保持`[未验证]`。
+
+## 2026-08-09 H1实现与构建/反汇编通过
+
+- Terra-high按合同只修改`CMakeLists.txt`、`include/platform/large_dbc_candidate_stm32.h`、`src/platform/stm32h750/large_dbc_candidate_stm32.c`和`src/platform/stm32h750/tf_card_fatfs_stm32.c`：默认OFF开关、五个普通BSS diagnostic、仅命中时先清arm并记录的consume helper，以及日志sync/active write/rename/readback/runtime publish五点。未新增HTTP、CAN或通用框架。
+- 独立Terra-high审查确认五点时序和rollback不二次注入正确，同时发现CMake未强制P0/H1互斥及runtime publish使用裸`UINT32_MAX`。主线增加配置期`FATAL_ERROR`和具名`LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH`；both-ON配置实测按预期失败。
+- 默认OFF `./scripts/verify.sh`通过CTest=`34/34`；最终正式ELF/HEX SHA-256仍为`9fb5986eca59f5709ac4ad87d079484e022f7148c2bed6cac50177b7fe598704`/`c3d0608e97e3f42c6136afa0d068be0dde81baf33e989f346c12bdd6793ab5c3`，text/data/bss=`121384/444/196292`且`nm`无H1符号。
+- H1 ON/P0 OFF独立ARM构建成功，ELF/HEX SHA-256=`09d0f2509290d9c66fa4c06c38a6ca77c7cd466140400810e032a6007213f0a1`/`f5afdef4149945e8c51611d145c1e89b6dcd271dc3f5cf08b94b19cfe88c4cbf`，text/data/bss=`121624/444/196316`。helper=`0x080119A4`，五个globals=`0x240268FC..0x2402690C`，P0 symbol不存在；objdump统计helper调用恰为5并显示point/operation/result常量。尚未烧录或写硬件。

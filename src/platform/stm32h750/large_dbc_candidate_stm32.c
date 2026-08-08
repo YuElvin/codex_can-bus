@@ -110,6 +110,34 @@ static bool g_active_manifest_published;
 static bool g_active_previous_rotated;
 static DbcSelectedRuntimeStatus g_active_runtime_status;
 
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+volatile uint32_t g_large_dbc_h1_fault_once
+  __attribute__((used, externally_visible));
+volatile uint32_t g_large_dbc_h1_fault_fire_count
+  __attribute__((used, externally_visible));
+volatile uint32_t g_large_dbc_h1_fault_last_point
+  __attribute__((used, externally_visible));
+volatile uint32_t g_large_dbc_h1_fault_last_operation
+  __attribute__((used, externally_visible));
+volatile uint32_t g_large_dbc_h1_fault_last_result
+  __attribute__((used, externally_visible));
+
+__attribute__((used, externally_visible, noinline, noclone))
+bool large_dbc_h1_fault_consume(uint32_t point, uint32_t operation,
+                                 uint32_t result) {
+  if (g_large_dbc_h1_fault_once != point) {
+    return false;
+  }
+
+  g_large_dbc_h1_fault_once = 0u;
+  ++g_large_dbc_h1_fault_fire_count;
+  g_large_dbc_h1_fault_last_point = point;
+  g_large_dbc_h1_fault_last_operation = operation;
+  g_large_dbc_h1_fault_last_result = result;
+  return true;
+}
+#endif
+
 _Static_assert(sizeof(g_io_buffer) <= LARGE_DBC_UPLOAD_CHUNK_BYTES,
                "candidate I/O chunk changed");
 _Static_assert(sizeof(DbcStreamParser) > LARGE_DBC_MAX_AUTOMATIC_OBJECT_BYTES,
@@ -1812,8 +1840,18 @@ static bool restore_previous_active_manifest(void) {
 
 static bool publish_active_manifest(const DbcManifestV1 *manifest) {
   if (dbc_manifest_v1_encode(manifest, g_manifest_bytes) !=
-        DBC_CANDIDATE_FORMAT_OK ||
-      !write_sync_new_file(g_active_paths.current_tmp, g_manifest_bytes,
+        DBC_CANDIDATE_FORMAT_OK) {
+    return false;
+  }
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+  if (large_dbc_h1_fault_consume(LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_WRITE,
+                                  LARGE_DBC_CANDIDATE_IO_WRITE,
+                                  (uint32_t)FR_DISK_ERR)) {
+    report_io(LARGE_DBC_CANDIDATE_IO_WRITE, 0u, FR_DISK_ERR);
+    return false;
+  }
+#endif
+  if (!write_sync_new_file(g_active_paths.current_tmp, g_manifest_bytes,
                            sizeof(g_manifest_bytes),
                            &g_active_current_tmp_owned)) {
     return false;
@@ -1842,6 +1880,15 @@ static bool publish_active_manifest(const DbcManifestV1 *manifest) {
   } else if (current_state != FR_NO_FILE) {
     return false;
   }
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+  if (large_dbc_h1_fault_consume(LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_RENAME,
+                                  LARGE_DBC_CANDIDATE_IO_RENAME,
+                                  (uint32_t)FR_DISK_ERR)) {
+    report_io(LARGE_DBC_CANDIDATE_IO_RENAME, 0u, FR_DISK_ERR);
+    (void)restore_previous_active_manifest();
+    return false;
+  }
+#endif
   if (io_rename(g_active_paths.current_tmp,
                 g_active_paths.current) != FR_OK) {
     (void)restore_previous_active_manifest();
@@ -1851,9 +1898,20 @@ static bool publish_active_manifest(const DbcManifestV1 *manifest) {
   g_active_manifest_published = true;
   DbcManifestV1 committed;
   DbcManifestReferenceFacts committed_facts;
-  const bool committed_ok = read_active_manifest_with_references(
-    g_active_paths.current, g_manifest_bytes, &committed, &committed_facts) &&
-    committed.generation == manifest->generation;
+  bool committed_ok;
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+  if (large_dbc_h1_fault_consume(
+        LARGE_DBC_H1_FAULT_ACTIVE_CURRENT_READBACK,
+        LARGE_DBC_CANDIDATE_IO_READ, (uint32_t)FR_DISK_ERR)) {
+    report_io(LARGE_DBC_CANDIDATE_IO_READ, 0u, FR_DISK_ERR);
+    committed_ok = false;
+  } else
+#endif
+  {
+    committed_ok = read_active_manifest_with_references(
+      g_active_paths.current, g_manifest_bytes, &committed, &committed_facts) &&
+      committed.generation == manifest->generation;
+  }
   if (!committed_ok) {
     (void)restore_previous_active_manifest();
   }
@@ -2044,9 +2102,19 @@ stm32h750_large_dbc_active_commit(
     status = LARGE_DBC_ACTIVE_STM32_MANIFEST_FAILED;
     goto active_done;
   }
-  g_active_runtime_status = request->publish(
-    request->publish_context, request->runtime_snapshot, &result->active,
-    result->runtime_slot);
+#if defined(CAN_BUS_LARGE_DBC_H1_FAULT_INJECTION)
+  if (large_dbc_h1_fault_consume(
+        LARGE_DBC_H1_FAULT_ACTIVE_RUNTIME_PUBLISH,
+        LARGE_DBC_H1_OPERATION_RUNTIME_PUBLISH,
+        (uint32_t)DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH)) {
+    g_active_runtime_status = DBC_SELECTED_RUNTIME_PREPARED_SLOT_MISMATCH;
+  } else
+#endif
+  {
+    g_active_runtime_status = request->publish(
+      request->publish_context, request->runtime_snapshot, &result->active,
+      result->runtime_slot);
+  }
   if (g_active_runtime_status != DBC_SELECTED_RUNTIME_OK) {
     status = map_runtime_status(g_active_runtime_status);
   }

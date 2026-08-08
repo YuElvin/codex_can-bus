@@ -153,3 +153,8 @@
 
 - 先以`docs/LARGE_DBC_H1_FAULT_INJECTION.md`冻结默认OFF、OpenOCD fail-once与正式映像恢复合同，再允许最小源码实现。五点覆盖日志持久化与active写/rename/readback/publish失败，不扩展生产API或通用故障框架。
 - 实现后的顺序固定为verify/符号/反汇编、实验映像烧录、逐点即时与冷启动对照、重烧正式映像、Classic CAN/runtime烟雾。任一生产符号泄漏、旧identity变化或回滚失败立即停止。
+
+## 2026-08-09 H1进入目标板实验
+
+- 默认OFF和H1 ON两套构建门禁通过：正式哈希不变/无H1符号，实验映像五点符号与反汇编存在，P0/H1互斥可执行。下一步只允许烧录实验HEX并按1→5逐点验证，不再修改合同或增加故障点。
+- 每个active点必须独立记录HTTP、专用诊断、runtime/selected/规则/继电器前后与冷启动；最后强制重烧正式`c3d0608e...`HEX并做Classic CAN烟雾。

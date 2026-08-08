@@ -314,3 +314,8 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 
 - H1冻结为独立默认OFF实验构建与五个OpenOCD fail-once点：日志sync、active current tmp写、promote rename、new current读回、runtime publish。生产无调试API且`nm`必须无H1符号；每点完成即时不变量、冷启动恢复后，最终重烧正式映像。
 - 当前仅完成合同与只读审计，尚未修改源码、构建或烧录；因此五点目标板证据仍`[未验证]`。
+
+## 2026-08-09 H1实现/静态验证状态
+
+- H1默认OFF实现已完成并经独立审查修正；统一verify 34/34，正式ELF/HEX哈希与尺寸不变且无H1符号。ON实验映像为ELF `09d0f250...`/HEX `f5afdef4...`、text/data/bss=`121624/444/196316`，H1=ON/P0=OFF且五个consume调用均在最终反汇编。
+- CMake已实际拒绝P0/H1同时ON；实验diagnostic普通BSS地址`0x240268FC..0x2402690C`，重启自动清零。尚未烧录实验映像；现场不变量和恢复仍待执行。
