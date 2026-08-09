@@ -243,3 +243,4 @@
 - 网页概览、candidate分页（896/8）、外部Classic selected-only 8项GOOD、继电器/规则读取和选择性日志ACTIVE→STOPPED均通过，console无warn/error；日志锁定active2/`E5CB6C8F`/8。
 - 退出网页后status/runtime/candidate/signals/manual/log/rules/CAN独立串行HTTP均200、ping3/3；manual安全0/0开关request/applied=`1/1→2/2`且输出始终0。lifecycle无ACK timeout/recovery。
 - 当前验证门禁通过；零间隔任意短连接稳定性仍非本轮证明范围，保留`[未验证/未关闭风险]`。下一步为Git差异审计与提交，不再重复写操作。
+- `c011c5f`已推送至`origin/codex/W5500`；工作树收口检查待完成。

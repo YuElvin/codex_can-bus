@@ -4151,3 +4151,4 @@
 - 网页完成时间同步和1000 ms选择性日志`STARTING→ACTIVE→STOPPED`；会话路径`/log/20260809_161933131_signal-v3.csv`，始终锁定active2/`E5CB6C8F`/8。页面console warn/error为空，随后已退出网页。
 - 退出网页后独立串行HTTP：status、runtime、candidate selected、signals、manual、log、rules、CAN均HTTP200；signals严格8项且GOOD，CAN errors/busOff/TEC/REC=`0/0/0/0`，ping=`3/3`。安全manual POST以relay1/relay2=`0/0`执行enabled=`1→0`，两次requestSeq=appliedSeq=`1/1→2/2`，输出始终`0/0`；最后lifecycle为ACK elapsed=`50 ms`、ACK timeout/recovery=`0/0`。
 - 本轮网页与退出后二次验证门禁通过。此前偶发失联的根因尚未由本次单轮证明消除；仅把“本冷启动、现有2.1 s串行网页路径和5 s独立交接”的正向证据写为通过，不扩写为零间隔任意短连接稳定性已经关闭。
+- 已提交并推送`c011c5f Verify W5500 single-socket lifecycle`至`origin/codex/W5500`。提交包含lifecycle可观测性、2秒TCP预算/仅socket0恢复、TF后候选恢复、网页2.1秒串行节流及本轮治理证据；本行仅记录Git状态，不替代上述实板证据。

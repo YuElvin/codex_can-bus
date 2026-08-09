@@ -387,3 +387,4 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 
 - 本冷启动网页和退出后二次验证已完成：网页candidate896/8、外部Classic 8项GOOD、日志ACTIVE→STOPPED、规则/继电器安全读取通过；退出后八项独立API和ping均通过，manual 0/0安全POST开关也完整回读。lifecycle ACK timeout/recovery均0。
 - 范围边界：本次证明新版网页2.1 s串行及独立5 s交接路径；零间隔任意短连接稳定性仍`[未验证/未关闭风险]`，不写为已根治。
+- Git：`c011c5f Verify W5500 single-socket lifecycle`已推送至`origin/codex/W5500`。
