@@ -155,11 +155,132 @@ static int test_hysteresis_high_latches_between_thresholds(void) {
   return 0;
 }
 
+static Rule v2_rule(uint32_t threshold,
+                    RelayState action_state,
+                    uint32_t delay_ms,
+                    uint8_t priority) {
+  Rule rule;
+  memset(&rule, 0, sizeof(rule));
+  snprintf(rule.id, sizeof(rule.id), "v2");
+  snprintf(rule.signal_key, sizeof(rule.signal_key), "Can2Data.marker");
+  rule.enabled = true;
+  rule.op = RULE_OP_GE;
+  rule.threshold = (double)threshold;
+  rule.relay = 0u;
+  rule.action_state = action_state;
+  rule.delay_ms = delay_ms;
+  rule.timeout_ms = 1500u;
+  rule.safe_state = RELAY_STATE_OFF;
+  rule.default_state = RELAY_STATE_OFF;
+  rule.priority = priority;
+  return rule;
+}
+
+static int test_priority_winner_delay_and_timeout(void) {
+  RuleEngine engine;
+  rule_engine_init(&engine);
+  Rule rule0 = v2_rule(42434u, RELAY_STATE_ON, 1000u, 10u);
+  Rule rule1 = v2_rule(42435u, RELAY_STATE_OFF, 0u, 20u);
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rule0));
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rule1));
+
+  SignalSnapshot signal = {
+    .key = "Can2Data.marker",
+    .value = 42434.0,
+    .updated_ms = 10u,
+    .valid = true,
+  };
+  RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
+
+  rule_engine_evaluate(&engine, &signal, 1u, 10u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 0u);
+  rule_engine_evaluate(&engine, &signal, 1u, 1010u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_ON, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 0u);
+
+  signal.value = 42435.0;
+  signal.updated_ms = 1020u;
+  rule_engine_evaluate(&engine, &signal, 1u, 1020u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+
+  engine.rules[1].safe_state = RELAY_STATE_ON;
+  signal.updated_ms = 1020u;
+  rule_engine_evaluate(&engine, &signal, 1u, 2521u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_ON, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+  return 0;
+}
+
+static int test_v2_manual_override_has_priority(void) {
+  RuleEngine engine;
+  rule_engine_init(&engine);
+  Rule rule0 = v2_rule(42434u, RELAY_STATE_OFF, 0u, 10u);
+  Rule rule1 = v2_rule(42435u, RELAY_STATE_OFF, 0u, 20u);
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rule0));
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rule1));
+
+  const RelayState manual[RULE_RELAY_COUNT] = {RELAY_STATE_ON, RELAY_STATE_OFF};
+  rule_engine_set_manual(&engine, true, manual);
+  SignalSnapshot signal = {
+    .key = "Can2Data.marker",
+    .value = 42435.0,
+    .updated_ms = 20u,
+    .valid = true,
+  };
+  RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
+
+  rule_engine_evaluate(&engine, &signal, 1u, 20u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_ON, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == UINT8_MAX);
+  return 0;
+}
+
+static int test_distinct_signal_keys_and_missing_safe_state(void) {
+  RuleEngine engine;
+  Rule rpm = rpm_rule();
+  Rule speed = rpm_rule();
+  SignalSnapshot signals[2] = {
+    {.key = "EngineData.rpm", .value = 3500.0, .updated_ms = 10u, .valid = true},
+    {.key = "VehicleData.speed", .value = 10.0, .updated_ms = 10u, .valid = true},
+  };
+  RelayState relays[RULE_RELAY_COUNT] = {RELAY_STATE_OFF, RELAY_STATE_OFF};
+
+  snprintf(speed.id, sizeof(speed.id), "speed_limit");
+  snprintf(speed.signal_key, sizeof(speed.signal_key), "VehicleData.speed");
+  speed.threshold = 50.0;
+  speed.action_state = RELAY_STATE_OFF;
+  speed.safe_state = RELAY_STATE_OFF;
+  speed.priority = 20u;
+  rpm.priority = 10u;
+  rule_engine_init(&engine);
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &rpm));
+  ASSERT_TRUE(rule_engine_add_rule(&engine, &speed));
+
+  rule_engine_evaluate(&engine, signals, 2u, 20u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_ON, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 0u);
+
+  signals[1].value = 60.0;
+  rule_engine_evaluate(&engine, signals, 2u, 30u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+
+  rule_engine_evaluate(&engine, signals, 1u, 40u, relays);
+  ASSERT_EQ_STATE(RELAY_STATE_OFF, relays[0]);
+  ASSERT_TRUE(engine.winner_rule[0] == 1u);
+  return 0;
+}
+
 int main(void) {
   ASSERT_TRUE(test_basic_match_and_default() == 0);
   ASSERT_TRUE(test_manual_override_has_priority() == 0);
   ASSERT_TRUE(test_timeout_uses_safe_state() == 0);
   ASSERT_TRUE(test_delay_requires_continuous_match() == 0);
   ASSERT_TRUE(test_hysteresis_high_latches_between_thresholds() == 0);
+  ASSERT_TRUE(test_priority_winner_delay_and_timeout() == 0);
+  ASSERT_TRUE(test_v2_manual_override_has_priority() == 0);
+  ASSERT_TRUE(test_distinct_signal_keys_and_missing_safe_state() == 0);
   return 0;
 }

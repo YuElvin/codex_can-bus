@@ -1,4 +1,4 @@
-#if defined(CAN_BUS_USE_STM32_HAL)
+#if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "platform/stm32h750_bringup.h"
 
@@ -75,21 +75,49 @@ static uint8_t dlc_to_bytes(uint32_t dlc) {
   }
 }
 
+static uint32_t frame_format_from_config(const CanPortConfig *config) {
+  if (!config->fd_enabled) {
+    return FDCAN_FRAME_CLASSIC;
+  }
+  return config->brs_enabled ? FDCAN_FRAME_FD_BRS : FDCAN_FRAME_FD_NO_BRS;
+}
+
+static uint32_t mode_from_config(const CanPortConfig *config) {
+  if (config->internal_loopback) {
+    return FDCAN_MODE_INTERNAL_LOOPBACK;
+  }
+  if (config->external_loopback) {
+    return FDCAN_MODE_EXTERNAL_LOOPBACK;
+  }
+  return FDCAN_MODE_NORMAL;
+}
+
 static CanPortResult fdcan_configure(void *ctx, const CanPortConfig *config) {
   Stm32FdcanContext *fdcan = (Stm32FdcanContext *)ctx;
   if (fdcan == NULL || fdcan->hfdcan == NULL || config == NULL) {
     return CAN_PORT_ERROR;
   }
 
-  if (config->internal_loopback) {
-    if (HAL_FDCAN_ConfigGlobalFilter(fdcan->hfdcan,
-                                     FDCAN_ACCEPT_IN_RX_FIFO0,
-                                     FDCAN_ACCEPT_IN_RX_FIFO0,
-                                     FDCAN_REJECT_REMOTE,
-                                     FDCAN_REJECT_REMOTE) != HAL_OK) {
-      return CAN_PORT_ERROR;
-    }
+  if (HAL_FDCAN_DeInit(fdcan->hfdcan) != HAL_OK) {
+    return CAN_PORT_ERROR;
   }
+
+  fdcan->hfdcan->Init.Mode = mode_from_config(config);
+  fdcan->hfdcan->Init.FrameFormat = frame_format_from_config(config);
+  fdcan->hfdcan->Init.AutoRetransmission = config->auto_retransmission ? ENABLE : DISABLE;
+
+  if (HAL_FDCAN_Init(fdcan->hfdcan) != HAL_OK) {
+    return CAN_PORT_ERROR;
+  }
+
+  if (HAL_FDCAN_ConfigGlobalFilter(fdcan->hfdcan,
+                                   FDCAN_ACCEPT_IN_RX_FIFO0,
+                                   FDCAN_ACCEPT_IN_RX_FIFO0,
+                                   FDCAN_REJECT_REMOTE,
+                                   FDCAN_REJECT_REMOTE) != HAL_OK) {
+    return CAN_PORT_ERROR;
+  }
+
   return CAN_PORT_OK;
 }
 
@@ -105,6 +133,9 @@ static CanPortResult fdcan_send(void *ctx, const CanFrame *frame) {
   Stm32FdcanContext *fdcan = (Stm32FdcanContext *)ctx;
   FDCAN_TxHeaderTypeDef header = {0};
   if (fdcan == NULL || fdcan->hfdcan == NULL || frame == NULL) {
+    return CAN_PORT_ERROR;
+  }
+  if (frame->dlc > CAN_FRAME_MAX_DATA_LEN) {
     return CAN_PORT_ERROR;
   }
 
@@ -147,15 +178,23 @@ static CanPortResult fdcan_receive(void *ctx, CanFrame *frame) {
 static CanPortResult fdcan_status(void *ctx, CanPortStatus *status) {
   Stm32FdcanContext *fdcan = (Stm32FdcanContext *)ctx;
   FDCAN_ProtocolStatusTypeDef protocol = {0};
+  FDCAN_ErrorCountersTypeDef counters = {0};
   if (fdcan == NULL || fdcan->hfdcan == NULL || status == NULL) {
     return CAN_PORT_ERROR;
   }
   if (HAL_FDCAN_GetProtocolStatus(fdcan->hfdcan, &protocol) != HAL_OK) {
     return CAN_PORT_ERROR;
   }
-  status->bus_off = protocol.BusOff;
-  status->tec = (uint8_t)protocol.LastErrorCode;
-  status->rec = (uint8_t)protocol.DataLastErrorCode;
+  if (HAL_FDCAN_GetErrorCounters(fdcan->hfdcan, &counters) != HAL_OK) {
+    return CAN_PORT_ERROR;
+  }
+
+  status->tx_count = 0u;
+  status->rx_count = 0u;
+  status->error_count = 0u;
+  status->bus_off = protocol.BusOff != 0u;
+  status->tec = (uint8_t)counters.TxErrorCnt;
+  status->rec = (uint8_t)counters.RxErrorCnt;
   return CAN_PORT_OK;
 }
 

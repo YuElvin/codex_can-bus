@@ -61,5 +61,35 @@ int main(void) {
   ASSERT_TRUE(dbc_encode_signal_value(rpm, &frame, 2000.0));
   ASSERT_TRUE(frame.data[0] == 0x80);
   ASSERT_TRUE(frame.data[1] == 0x3e);
+
+  const char dbc_text[] =
+    "VERSION \"sample\"\n"
+    "BO_ 512 VehicleData: 8 Vector__XXX\n"
+    " SG_ speed : 0|16@1+ (0.01,0) [0|250] \"kmh\" Vector__XXX\n";
+  size_t line_count = 0u;
+  ASSERT_TRUE(dbc_parse_text(&db, dbc_text, strlen(dbc_text), &line_count));
+  ASSERT_EQ_SIZE(3, line_count);
+  ASSERT_EQ_SIZE(1, db.message_count);
+  ASSERT_EQ_SIZE(1, db.signal_count);
+  ASSERT_EQ_SIZE(1, db.skipped_lines);
+  ASSERT_EQ_SIZE(0, db.error_lines);
+
+  const char invalid_id_text[] =
+    "BO_ 2048 InvalidId: 8 Vector__XXX\n";
+  ASSERT_TRUE(!dbc_parse_text(&db, invalid_id_text, strlen(invalid_id_text), &line_count));
+  ASSERT_EQ_SIZE(1u, db.error_lines);
+
+  const char invalid_intel_layout_text[] =
+    "BO_ 256 ShortFrame: 1 Vector__XXX\n"
+    " SG_ overflow : 0|16@1+ (1,0) [0|1] \"\" Vector__XXX\n";
+  ASSERT_TRUE(!dbc_parse_text(&db, invalid_intel_layout_text, strlen(invalid_intel_layout_text), &line_count));
+  ASSERT_EQ_SIZE(1u, db.error_lines);
+
+  const char invalid_motorola_layout_text[] =
+    "BO_ 256 ShortFrame: 1 Vector__XXX\n"
+    " SG_ overflow : 0|2@0+ (1,0) [0|1] \"\" Vector__XXX\n";
+  ASSERT_TRUE(!dbc_parse_text(&db, invalid_motorola_layout_text, strlen(invalid_motorola_layout_text), &line_count));
+  ASSERT_EQ_SIZE(1u, db.error_lines);
+
   return 0;
 }

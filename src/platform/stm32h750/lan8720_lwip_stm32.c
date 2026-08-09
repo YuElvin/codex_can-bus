@@ -1,4 +1,4 @@
-#if defined(CAN_BUS_USE_STM32_HAL)
+#if defined(CAN_BUS_USE_STM32_HAL) || defined(STM32H750xx)
 
 #include "platform/stm32h750_bringup.h"
 
@@ -49,6 +49,7 @@ static Lan8720Result lwip_poll(void *ctx) {
   if (lan == NULL || lan->netif == NULL) {
     return LAN8720_ERROR;
   }
+  ethernet_link_check_state(lan->netif);
   (void)ethernetif_input(lan->netif);
   sys_check_timeouts();
   return LAN8720_OK;
@@ -75,6 +76,10 @@ void stm32h750_lan8720_bind(Lan8720Port *port, Stm32Lan8720Context *ctx, struct 
     .link_up = lwip_link_up,
     .get_ip = lwip_get_ip,
   };
+  if (ctx == NULL) {
+    lan8720_port_bind(port, NULL, &ops);
+    return;
+  }
   ctx->netif = netif;
   lan8720_port_bind(port, ctx, &ops);
 }

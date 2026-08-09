@@ -1,6 +1,7 @@
 # CubeMX Project
 
-`can_bus_gateway.ioc` is the STM32CubeMX project generated from `../pin_configuration.txt`.
+`can_bus_gateway.ioc` is the STM32CubeMX project tracked alongside
+`../pin_configuration.md`.
 
 ## MCU Assumption
 
@@ -19,7 +20,7 @@ Open the project:
 
 ```sh
 /Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX \
-  /Users/elvin/Desktop/project/can_bus/cube_mx/can_bus_gateway.ioc
+  /Users/elvin/Desktop/project/can_bus_W5500/cube_mx/can_bus_gateway.ioc
 ```
 
 Then in STM32CubeMX:
@@ -31,10 +32,11 @@ Then in STM32CubeMX:
 
 ## Configured Peripherals
 
-- ETH RMII for LAN8720, using PA1 as external 50 MHz `ETH_REF_CLK`.
+- W5500 on SPI2: PB13 SCK, PB14 MISO, PB15 MOSI, PB12 CS, PB11 RST, PA7 INT.
 - QuadSPI single-bank pinout for W25Q128.
-- SDMMC1 4-bit pins plus PA8 `SD_DETECT`.
-- FDCAN1 on PD0/PD1; FDCAN2 pins PB5/PB6 reserved.
+- SDMMC1 4-bit pins plus PA8 `SD_DETECT`; firmware bring-up currently skips PA8 detection.
+- FDCAN2 on PB5/PB6 is the verified external MCP2562FD/USBCAN-2E-U path.
+- FDCAN1 on PD0/PD1 remains configured for internal/external loopback diagnostics.
 - Relay GPIO outputs on PE7/PE8, default low in application code.
 - Debug LEDs on PE10/PE11.
 - USART2 debug UART on PD5/PD6, 115200 baud.
@@ -48,13 +50,15 @@ Then in STM32CubeMX:
 - APB1/APB2/APB3/APB4: 100 MHz.
 - FDCAN kernel clock: PLL1Q 100 MHz.
 - FDCAN1 timing: nominal 500 kbit/s, data phase 2 Mbit/s, 64-byte CAN-FD RX/TX elements.
-- FDCAN2 is reserved with a separate message RAM offset and classic 8-byte elements.
+- FDCAN2 timing: nominal 500 kbit/s classic CAN, separate message RAM offset and 8-byte elements.
 - SDMMC kernel clock: PLL1Q 100 MHz, `ClockDiv=2` for about 25 MHz card clock.
 - QUADSPI clock: D1HCLK 200 MHz, prescaler 3 for 50 MHz serial clock.
-- ETH RMII reference clock comes from the LAN8720 module on PA1, not from MCU MCO.
+- SPI2 clock: APB1-derived, current `.ioc` calculates about 6.25 Mbit/s with prescaler 16.
 
 ## Notes
 
 CubeMX 6.18 successfully loads this `.ioc` on this machine. The command-line `-q` option is a script mode in this version; it does not directly generate code from an `.ioc` file.
 
-The checked configuration keeps SWD explicitly reserved on PA13/PA14. The current generated tree also carries a user-code ETH MSP implementation because CubeMX did not emit `HAL_ETH_MspInit()` in the generated MSP file; keep that block when regenerating.
+The checked configuration keeps SWD explicitly reserved on PA13/PA14. LAN8720,
+ETH RMII, LwIP, and `ethernetif` are no longer part of the active W5500
+firmware path.

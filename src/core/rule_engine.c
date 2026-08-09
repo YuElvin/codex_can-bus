@@ -80,6 +80,7 @@ void rule_engine_init(RuleEngine *engine) {
   for (size_t i = 0u; i < RULE_RELAY_COUNT; ++i) {
     engine->relay_defaults[i] = RELAY_STATE_OFF;
     engine->manual.relay[i] = RELAY_STATE_OFF;
+    engine->winner_rule[i] = UINT8_MAX;
   }
 }
 
@@ -114,8 +115,15 @@ void rule_engine_evaluate(RuleEngine *engine,
                           size_t signal_count,
                           uint32_t now_ms,
                           RelayState out_relays[RULE_RELAY_COUNT]) {
+  bool selected[RULE_RELAY_COUNT] = {false};
+  uint8_t selected_priority[RULE_RELAY_COUNT] = {0u};
+
   if (engine == NULL || out_relays == NULL) {
     return;
+  }
+
+  for (size_t i = 0u; i < RULE_RELAY_COUNT; ++i) {
+    engine->winner_rule[i] = UINT8_MAX;
   }
 
   if (engine->manual.enabled) {
@@ -137,8 +145,13 @@ void rule_engine_evaluate(RuleEngine *engine,
 
     const SignalSnapshot *signal = find_signal(signals, signal_count, rule->signal_key);
     if (is_timed_out(signal, rule->timeout_ms, now_ms)) {
-      out_relays[rule->relay] = rule->safe_state;
       rule->condition_since_ms = 0u;
+      if (!selected[rule->relay] || rule->priority > selected_priority[rule->relay]) {
+        selected[rule->relay] = true;
+        selected_priority[rule->relay] = rule->priority;
+        engine->winner_rule[rule->relay] = (uint8_t)i;
+        out_relays[rule->relay] = rule->safe_state;
+      }
       continue;
     }
 
@@ -149,15 +162,27 @@ void rule_engine_evaluate(RuleEngine *engine,
     }
 
     if (rule->delay_ms == 0u) {
-      out_relays[rule->relay] = rule->action_state;
+      if (!selected[rule->relay] || rule->priority > selected_priority[rule->relay]) {
+        selected[rule->relay] = true;
+        selected_priority[rule->relay] = rule->priority;
+        engine->winner_rule[rule->relay] = (uint8_t)i;
+        out_relays[rule->relay] = rule->action_state;
+      }
       continue;
     }
 
     if (rule->condition_since_ms == 0u) {
       rule->condition_since_ms = now_ms;
     }
-    if (now_ms - rule->condition_since_ms >= rule->delay_ms) {
-      out_relays[rule->relay] = rule->action_state;
+    if (!selected[rule->relay] || rule->priority > selected_priority[rule->relay]) {
+      selected[rule->relay] = true;
+      selected_priority[rule->relay] = rule->priority;
+      engine->winner_rule[rule->relay] = (uint8_t)i;
+      if (now_ms - rule->condition_since_ms >= rule->delay_ms) {
+        out_relays[rule->relay] = rule->action_state;
+      } else {
+        out_relays[rule->relay] = rule->default_state;
+      }
     }
   }
 }

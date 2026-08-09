@@ -22,6 +22,10 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "FreeRTOS.h"
+#include "platform/stm32h750_bringup.h"
+#include "task.h"
+#include <stddef.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,17 +50,103 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+extern void vPortSVCHandler(void);
+extern void xPortPendSVHandler(void);
+extern void xPortSysTickHandler(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+typedef struct {
+  uint32_t magic;
+  uint32_t exception;
+  uint32_t stacked_r0;
+  uint32_t stacked_r1;
+  uint32_t stacked_r2;
+  uint32_t stacked_r3;
+  uint32_t stacked_r12;
+  uint32_t stacked_lr;
+  uint32_t stacked_pc;
+  uint32_t stacked_xpsr;
+  uint32_t exception_lr;
+  uint32_t cfsr;
+  uint32_t hfsr;
+  uint32_t mmfar;
+  uint32_t bfar;
+  uint32_t afsr;
+  uint32_t checksum;
+} FaultRecord;
+
+#define FAULT_RECORD_MAGIC 0x4641554cu
+
+volatile FaultRecord g_fault_record __attribute__((section(".noinit")));
+
+static uint32_t fault_record_checksum(const FaultRecord *record)
+{
+  const uint32_t *words = (const uint32_t *)record;
+  uint32_t checksum = 0x5a3c19e7u;
+
+  for (size_t i = 0u; i < (sizeof(*record) / sizeof(words[0])) - 1u; ++i) {
+    checksum ^= words[i];
+  }
+  return checksum;
+}
+
+__attribute__((noreturn, noinline, used)) static void fault_record_capture(uint32_t *stack,
+                                                                             uint32_t exception_lr,
+                                                                             uint32_t exception)
+{
+  FaultRecord record = {
+    .magic = FAULT_RECORD_MAGIC,
+    .exception = exception,
+    .stacked_r0 = stack[0],
+    .stacked_r1 = stack[1],
+    .stacked_r2 = stack[2],
+    .stacked_r3 = stack[3],
+    .stacked_r12 = stack[4],
+    .stacked_lr = stack[5],
+    .stacked_pc = stack[6],
+    .stacked_xpsr = stack[7],
+    .exception_lr = exception_lr,
+    .cfsr = SCB->CFSR,
+    .hfsr = SCB->HFSR,
+    .mmfar = SCB->MMFAR,
+    .bfar = SCB->BFAR,
+    .afsr = SCB->AFSR,
+  };
+
+  record.checksum = fault_record_checksum(&record);
+  g_fault_record = record;
+  SCB_CleanDCache_by_Addr((uint32_t *)(uintptr_t)&g_fault_record, sizeof(g_fault_record));
+  __DSB();
+  __ISB();
+  NVIC_SystemReset();
+  for (;;) {
+  }
+}
+
+#define FAULT_HANDLER(name, exception_code)                                                   \
+  __attribute__((naked)) void name(void)                                                      \
+  {                                                                                            \
+    __asm volatile("tst lr, #4\n"                                                           \
+                   "ite eq\n"                                                                \
+                   "mrseq r0, msp\n"                                                        \
+                   "mrsne r0, psp\n"                                                        \
+                   "mov r1, lr\n"                                                           \
+                   "movs r2, %0\n"                                                         \
+                   "b fault_record_capture\n"                                               \
+                   :                                                                          \
+                   : "I"(exception_code));                                                  \
+  }
 
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
 extern FDCAN_HandleTypeDef hfdcan1;
 /* USER CODE BEGIN EV */
+extern FDCAN_HandleTypeDef hfdcan2;
+extern SD_HandleTypeDef hsd1;
 
 /* USER CODE END EV */
 
@@ -81,59 +171,26 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Memory management fault.
   */
-void MemManage_Handler(void)
-{
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
-}
+FAULT_HANDLER(MemManage_Handler, 1)
 
 /**
   * @brief This function handles Pre-fetch fault, memory access fault.
   */
-void BusFault_Handler(void)
-{
-  /* USER CODE BEGIN BusFault_IRQn 0 */
-
-  /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
-}
+FAULT_HANDLER(BusFault_Handler, 2)
 
 /**
   * @brief This function handles Undefined instruction or illegal state.
   */
-void UsageFault_Handler(void)
-{
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
+FAULT_HANDLER(UsageFault_Handler, 3)
 
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
-}
+FAULT_HANDLER(HardFault_Handler, 4)
 
 /**
   * @brief This function handles System service call via SWI instruction.
   */
-void SVC_Handler(void)
+__attribute__((naked)) void SVC_Handler(void)
 {
-  /* USER CODE BEGIN SVCall_IRQn 0 */
-
-  /* USER CODE END SVCall_IRQn 0 */
-  /* USER CODE BEGIN SVCall_IRQn 1 */
-
-  /* USER CODE END SVCall_IRQn 1 */
+  __asm volatile("b vPortSVCHandler");
 }
 
 /**
@@ -152,14 +209,9 @@ void DebugMon_Handler(void)
 /**
   * @brief This function handles Pendable request for system service.
   */
-void PendSV_Handler(void)
+__attribute__((naked)) void PendSV_Handler(void)
 {
-  /* USER CODE BEGIN PendSV_IRQn 0 */
-
-  /* USER CODE END PendSV_IRQn 0 */
-  /* USER CODE BEGIN PendSV_IRQn 1 */
-
-  /* USER CODE END PendSV_IRQn 1 */
+  __asm volatile("b xPortPendSVHandler");
 }
 
 /**
@@ -172,6 +224,9 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
+  if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+    xPortSysTickHandler();
+  }
 
   /* USER CODE END SysTick_IRQn 1 */
 }
@@ -211,6 +266,39 @@ void FDCAN1_IT1_IRQHandler(void)
   /* USER CODE END FDCAN1_IT1_IRQn 1 */
 }
 
+/**
+  * @brief This function handles FDCAN2 interrupt 0.
+  */
+void FDCAN2_IT0_IRQHandler(void)
+{
+  HAL_FDCAN_IRQHandler(&hfdcan2);
+}
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+  if (hfdcan != NULL && hfdcan->Instance == FDCAN2) {
+    can2_analyzer_rx_notify_from_isr(RxFifo0ITs);
+  }
+}
+
+/**
+  * @brief This function handles EXTI line[9:5] interrupts.
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI9_5_IRQn 0 */
+
+  /* USER CODE END EXTI9_5_IRQn 0 */
+  HAL_GPIO_EXTI_IRQHandler(W5500_INT_Pin);
+  /* USER CODE BEGIN EXTI9_5_IRQn 1 */
+
+  /* USER CODE END EXTI9_5_IRQn 1 */
+}
+
 /* USER CODE BEGIN 1 */
+void SDMMC1_IRQHandler(void)
+{
+  HAL_SD_IRQHandler(&hsd1);
+}
 
 /* USER CODE END 1 */
