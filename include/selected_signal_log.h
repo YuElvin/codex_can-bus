@@ -9,7 +9,7 @@
 #include "large_dbc_contract.h"
 
 #define SELECTED_SIGNAL_LOG_META_FORMAT_VERSION 1u
-#define SELECTED_SIGNAL_LOG_CSV_FORMAT_VERSION 3u
+#define SELECTED_SIGNAL_LOG_CSV_FORMAT_VERSION 4u
 #define SELECTED_SIGNAL_LOG_STALE_AFTER_MS 3000u
 #define SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES 512u
 #define SELECTED_SIGNAL_LOG_BUILD_ID_MAX_BYTES 64u
@@ -98,16 +98,33 @@ SignalValueQuality selected_signal_log_effective_quality(
   const SignalValueSnapshot *value,
   uint32_t now_ms);
 
-SelectedSignalLogStatus selected_signal_log_serialize_csv_header(
+/* CSV v4 is a wide table.  The caller streams these small fragments because
+ * a valid 128-signal header or sample row does not fit in one scratch buffer. */
+SelectedSignalLogStatus selected_signal_log_serialize_csv_header_start(
   char *output,
   size_t output_capacity,
   size_t *output_length);
 
-SelectedSignalLogStatus selected_signal_log_serialize_csv_row(
-  uint64_t unix_ms,
-  uint32_t now_ms,
+SelectedSignalLogStatus selected_signal_log_serialize_csv_header_signal(
   const DbcSelectedRuntimeSignal *signal,
+  char *output,
+  size_t output_capacity,
+  size_t *output_length);
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_row_start(
+  uint64_t unix_ms,
+  char *output,
+  size_t output_capacity,
+  size_t *output_length);
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_row_value(
+  uint32_t now_ms,
   const SignalValueSnapshot *value,
+  char *output,
+  size_t output_capacity,
+  size_t *output_length);
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_line_end(
   char *output,
   size_t output_capacity,
   size_t *output_length);

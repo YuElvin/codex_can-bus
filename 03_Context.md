@@ -375,6 +375,12 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 
 - 已在网页实际提交TX、同步时间、manual 0/0启停和选择性日志启停，均由独立API读回；关闭网页后八项串行API及ping通过。立即连续请求风险未关闭，当前不提交/推送为“稳定性修复完成”。
 
+- 最新LISTEN公共网络配置守护映像已在用户物理冷启动后完成目标压力：真实100071 B candidate catalog连续三轮均约18.81–18.83 s且HTTP200，每轮后3 s的status及紧邻最终runtime均HTTP200，ping3/3；计数`networkRepairCount/networkRepairFailures/ackTimeouts/recoveryCount/listenerCloseWaitHandoffs=0/0/0/0/0`。该结论关闭“连续长请求后短暂不可连接”的本轮复现路径，但不外推为并发、异常网络或无限期稳定性。
+
+- 网页规则/候选实时交互已实板验收：规则目录异步化后，目录仍读取时slot保存按钮可用且可直接输入活动key；临时安全`off`规则创建/回读/删除完成，manual输出保持0/0。candidate在未知日志状态下page0/page1复选框均可用，ordinal8跨页提交generation9/selected9后再清除为generation10/selected8；active runtime维持generation3。网页SHA=`fe75c7f3...1d9a5`、console warn/error为空。候选实时页面仍受单socket串行与约18.6秒catalog读取实际耗时约束，但不再由前端日志未知或目录加载锁死。
+
+- 选择性日志格式已升级并完成实体 TF 验收：`signal-v4` 首行首列固定`datetime`，后续列为会话锁定的已选信号 key；每个采样周期为一条等列数宽数据行。物理冷启动后以8项GOOD信号、1000 ms形成`/log/20260809_222113000_signal-v4.csv`；主机标准CSV解析确认header=9列、12条数据行均9列、UTC时间格式正确，meta为`csvFormat=signal-v4`、selectedCount=8、rowsWritten=12、rowsDropped/lateSamples/writeFailures=0、cleanClose=true。该结论只覆盖正常停止的宽表会话；断电时的v4尾行行为仍`[未验证]`。
+
 ## 2026-08-09 candidate 查询复发
 
 - 最新物理上电后，新版网页的实际读取、规则/继电器回读和日志ACTIVE→STOPPED均通过；active2/candidate4/8 selected与外部Classic RX保持。

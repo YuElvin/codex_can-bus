@@ -87,6 +87,7 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
 <section>
   <h2>两槽规则</h2>
   <button id="rules-refresh">读取两槽规则</button>
+  <datalist id="active-dbc-signals"></datalist>
   <div id="rules" class="grid"></div>
 </section>
 
@@ -108,7 +109,7 @@ pre{background:#0c1117;overflow:auto;padding:10px;min-height:2em;white-space:pre
   </div>
   <div class="candidate-actions">
     <button id="candidate-prev" type="button" disabled>上一页</button><button id="candidate-next" type="button" disabled>下一页</button>
-    <button id="candidate-save" type="button" disabled>提交当前页变更</button>
+    <button id="candidate-save" type="button" disabled>提交选择变更</button>
     <span id="candidate-write-state" class="notice"></span>
   </div>
 </section>
@@ -127,6 +128,8 @@ let canTxFormDirty = false;
 let ruleSlots = [];
 let signalCatalog = null;
 let signalCatalogReason = '尚未读取活动 DBC 信号目录';
+let signalCatalogRequestSeq = 0;
+let signalCatalogLoading = false;
 let candidateToken = '';
 let candidatePage = 0;
 let candidateMatched = 0;
@@ -210,10 +213,10 @@ function renderLogControl(data) {
 }
 function candidateLoggingBlocked() { return !logControlKnown || logControlEnabled || $('log-enabled').checked; }
 function updateCandidateWriteState() {
-  const blocked=candidateLoggingBlocked(); const changed=candidateSet.size+candidateClear.size;
+  const blocked=logControlKnown && (logControlEnabled || $('log-enabled').checked); const changed=candidateSet.size+candidateClear.size;
   for (const checkbox of document.querySelectorAll('#candidate-body input[type="checkbox"]')) checkbox.disabled=blocked;
   $('candidate-save').disabled=blocked || !candidateToken || changed===0;
-  $('candidate-write-state').textContent=!logControlKnown ? '请先读取日志状态' : (blocked ? '日志已启用：禁止修改 selection' : (changed ? '当前页待提交 '+changed+' 项' : '当前页无待提交变更'));
+  $('candidate-write-state').textContent=!logControlKnown ? '可浏览和选择；提交时将读取日志状态' : (blocked ? '日志已启用：禁止修改 selection' : (changed ? '待提交 '+changed+' 项' : '当前没有待提交变更'));
   $('candidate-write-state').className=blocked?'error':'notice';
 }
 function clearCandidateEdits() { candidateBaseline=new Map(); candidateSet.clear(); candidateClear.clear(); }
@@ -222,10 +225,11 @@ function renderCandidatePage(data) {
   if (candidateToken!==nextToken) { candidateToken=nextToken; clearCandidateEdits(); }
   candidatePage=Number(data.page); candidatePageSize=Number(data.pageSize) || 8; candidateMatched=Number(data.matched) || 0;
   candidateItems=Array.isArray(data.items)?data.items.slice(0,8):[];
-  candidateBaseline=new Map(candidateItems.map(item=>[Number(item.ordinal),readFlag(item.selected)])); candidateSet.clear(); candidateClear.clear();
+  candidateBaseline=new Map(candidateItems.map(item=>[Number(item.ordinal),readFlag(item.selected)]));
   const rows=candidateItems.map(item=>{
     const ordinal=Number(item.ordinal); const row=document.createElement('tr'); const selectCell=document.createElement('td'); const checkbox=document.createElement('input');
-    checkbox.type='checkbox'; checkbox.checked=readFlag(item.selected); checkbox.dataset.ordinal=String(ordinal);
+    const initial=readFlag(item.selected); const desired=candidateSet.has(ordinal) ? true : (candidateClear.has(ordinal) ? false : initial);
+    checkbox.type='checkbox'; checkbox.checked=desired; checkbox.dataset.ordinal=String(ordinal);
     checkbox.onchange=()=>{
       const initial=candidateBaseline.get(ordinal); candidateSet.delete(ordinal); candidateClear.delete(ordinal);
       if (checkbox.checked!==initial) (checkbox.checked?candidateSet:candidateClear).add(ordinal);
@@ -252,7 +256,7 @@ async function loadCandidatePage(page=candidatePage) {
 }
 async function saveCandidateSelection() {
   try {
-    if (!logControlKnown) throw new Error('请先读取日志状态');
+    if (!logControlKnown) await readLogControl(false);
     if (candidateLoggingBlocked()) throw new Error('日志已启用，不能修改 selection');
     if (!candidateToken) throw new Error('请先读取 candidate');
     if (!candidateSet.size && !candidateClear.size) throw new Error('当前页没有变更');
@@ -282,7 +286,7 @@ function form(slot) {
     const labelNode = document.createElement('label'); labelNode.textContent = label + ' ';
     let input;
     if (type === 'select') { input = document.createElement('select'); for (const v of ['on','off']) { const o=document.createElement('option');o.value=v;o.textContent=v;input.append(o); } }
-    else if (type === 'signal') { input = document.createElement('select'); input.append(new Option(signalCatalogReason, '')); for (const key of signalCatalog || []) input.append(new Option(key, key)); input.disabled=!signalCatalog || !signalCatalog.length; }
+    else if (type === 'signal') { input = document.createElement('input'); input.setAttribute('list','active-dbc-signals'); input.placeholder=signalCatalogReason; input.autocomplete='off'; input.spellcheck=false; }
     else { input = document.createElement('input'); input.type=type; if (type==='number') { input.min='0'; input.step='1'; } }
     input.name=key; labelNode.append(input); card.append(labelNode);
   }
@@ -295,34 +299,38 @@ function form(slot) {
   return card;
 }
 function signalCatalogReady() { return Array.isArray(signalCatalog) && signalCatalog.length > 0; }
-function invalidateSignalCatalog(reason) {
-  signalCatalog=null; signalCatalogReason=reason;
+function refreshSignalCatalogControls() {
+  const list=$('active-dbc-signals'); list.replaceChildren(...(signalCatalog || []).map(key=>new Option(key,key)));
   for (const card of document.querySelectorAll('form[data-slot]')) {
-    const select=card.elements.namedItem('signalKey'); if (select) { select.disabled=true; select.options[0].textContent=reason; }
+    const input=card.elements.namedItem('signalKey'); if (input) input.placeholder=signalCatalogReason;
     updateRuleSaveState(card);
   }
+}
+function invalidateSignalCatalog(reason) {
+  signalCatalogRequestSeq+=1; signalCatalog=null; signalCatalogReason=reason; refreshSignalCatalogControls();
 }
 function updateRuleSaveState(card) {
   const enabled=card.elements.namedItem('enabled').checked;
   const save=card.querySelector('button[type="submit"]'); const status=card.querySelector('[data-signal-catalog-status]');
-  const blocked=enabled && !signalCatalogReady(); save.disabled=blocked;
-  status.textContent=blocked ? '无法启用保存：'+signalCatalogReason : '';
+  save.disabled=false;
+  status.className='notice';
+  status.textContent=enabled && !signalCatalogReady() ? '可直接输入活动 DBC 信号 key；'+signalCatalogReason : '';
 }
 function setRuleForm(slot, rule) {
   const card = document.querySelector('form[data-slot="'+slot+'"]');
   for (const [key,value] of Object.entries(rule)) {
     const input = card.elements.namedItem(key); if (!input) continue;
-    if (key==='signalKey' && value && !Array.from(input.options).some(option=>option.value===String(value))) input.append(new Option(String(value)+'（当前规则）', String(value)));
     if (input.type === 'checkbox') input.checked = Boolean(value); else input.value = String(value);
   }
   updateRuleSaveState(card);
 }
 async function loadSignalCatalog() {
-  invalidateSignalCatalog('正在读取活动 DBC 信号目录');
+  const requestSeq=++signalCatalogRequestSeq; signalCatalogLoading=true; signalCatalog=null; signalCatalogReason='正在读取活动 DBC 信号目录'; refreshSignalCatalogControls();
   const keys=[]; let page=0;
   for (;;) {
     const data=await exclusive('读取 DBC 信号目录',()=>api('/api/signals?page='+page));
-    if (!data.generation) { signalCatalog=[]; signalCatalogReason='没有已激活的 DBC，无法启用规则'; return; }
+    if (requestSeq!==signalCatalogRequestSeq) return;
+    if (!data.generation) { signalCatalog=[]; signalCatalogReason='没有已激活的 DBC；后端会拒绝无效信号'; refreshSignalCatalogControls(); return; }
     for (const item of Array.isArray(data.items)?data.items:[]) if (item && item.key) keys.push(String(item.key));
     const total=Number(data.total);
     const pageSize=Number(data.pageSize);
@@ -330,18 +338,21 @@ async function loadSignalCatalog() {
     if ((page+1)*pageSize>=total) break;
     page+=1;
   }
+  if (requestSeq!==signalCatalogRequestSeq) return;
   signalCatalog=Array.from(new Set(keys));
-  signalCatalogReason=signalCatalog.length ? '' : '活动 DBC 没有可用信号，无法启用规则';
+  signalCatalogReason=signalCatalog.length ? '可从列表选择，也可直接输入活动 DBC 信号 key' : '活动 DBC 没有可用信号；后端会拒绝无效信号';
+  refreshSignalCatalogControls();
 }
 async function refreshRules() {
   const button=$('rules-refresh'); if (button.disabled) return; button.disabled=true;
   try {
-    try { await loadSignalCatalog(); }
-    catch (error) { signalCatalog=[]; signalCatalogReason='信号目录读取失败：'+error.message; }
     const data = await exclusive('读取规则', () => api('/api/rules'));
     ruleSlots = data.rules || []; $('rules').replaceChildren(form(0), form(1));
     for (const rule of ruleSlots) setRuleForm(rule.slot, rule);
-    show(signalCatalogReady() ? '规则已从 '+data.source+' 回读' : '规则已回读；'+signalCatalogReason, signalCatalogReady()?'ok':'error');
+    show('规则已从 '+data.source+' 回读；可立即创建或保存', 'ok');
+    if (!signalCatalogLoading) loadSignalCatalog().catch(error=>{
+      signalCatalog=[]; signalCatalogReason='信号目录读取失败：'+error.message; refreshSignalCatalogControls();
+    }).finally(()=>{ signalCatalogLoading=false; });
   } finally { button.disabled=false; }
 }
 function ruleFormData(slot) {
@@ -356,7 +367,6 @@ async function saveRule(slot) {
   try {
     const card = document.querySelector('form[data-slot="'+slot+'"]'); const enabled = card.elements.namedItem('enabled').checked;
     const existing = ruleSlots.find(rule => rule.slot === slot);
-    if (enabled && !signalCatalogReady()) throw new Error('无法启用保存：'+signalCatalogReason);
     if (enabled && !card.elements.namedItem('signalKey').value) throw new Error('请选择信号');
     await exclusive('保存规则', async () => {
       if (!enabled && existing && existing.enabled) await api('/api/rules/'+slot, {method:'DELETE'});
@@ -387,9 +397,9 @@ async function saveManual() {
     renderManual(data); show('RuleTask 已确认应用请求 '+data.requestSeq, 'ok');
   } catch (error) { show(error.message, 'error'); }
 }
-async function readLogControl() {
-  try { const data=await exclusive('读取数据记录控制',()=>api('/api/log/control')); renderLogControl(data); show('已读取数据记录控制', 'ok'); }
-  catch (error) { show(error.message, 'error'); }
+async function readLogControl(showSuccess=true) {
+  try { const data=await exclusive('读取数据记录控制',()=>api('/api/log/control')); renderLogControl(data); if (showSuccess) show('已读取数据记录控制', 'ok'); return data; }
+  catch (error) { show(error.message, 'error'); throw error; }
 }
 async function saveLogControl() {
   try {

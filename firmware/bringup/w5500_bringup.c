@@ -39,6 +39,7 @@ volatile uint32_t g_w5500_http_error_count = 0u;
 volatile uint32_t g_w5500_http_last_nonclosed_close = 0u;
 volatile uint32_t g_w5500_http_recovery_count = 0u;
 volatile uint32_t g_w5500_http_recovery_last_sr = 0xffffffffu;
+volatile uint32_t g_w5500_http_listener_close_wait_handoff_count = 0u;
 volatile uint32_t g_w5500_http_network_repair_count = 0u;
 volatile uint32_t g_w5500_http_network_repair_failure_count = 0u;
 volatile uint32_t g_w5500_http_network_repair_result = 0xffffffffu;
@@ -768,9 +769,28 @@ static int http_ensure_network_config(void) {
 
 static int http_open_listener(void) {
   uint8_t sr = 0u;
-  if (s0_read_u8(W5500_S0_SR, &sr) == W5500_OK &&
-      (sr == W5500_S0_SR_LISTEN || sr == W5500_S0_SR_SYNRECV ||
-       sr == W5500_S0_SR_ESTABLISHED)) {
+  if (s0_read_u8(W5500_S0_SR, &sr) != W5500_OK) {
+    g_w5500_http_status = 2u;
+    ++g_w5500_http_error_count;
+    return 1;
+  }
+  if (sr == W5500_S0_SR_CLOSE_WAIT) {
+    /* The caller observed CLOSED/INIT, but the client FIN won the next SR
+     * sample. Preserve this valid half-close and let the existing pending
+     * disconnect path reopen socket0 after the FIN handshake completes. */
+    ++g_w5500_http_listener_close_wait_handoff_count;
+    if (http_begin_graceful_disconnect() != 0) {
+      g_w5500_http_status = 2u;
+      ++g_w5500_http_error_count;
+      (void)http_close_socket(4u);
+      return 1;
+    }
+    g_w5500_http_socket_sr = sr;
+    g_w5500_http_status = 0u;
+    return 0;
+  }
+  if (sr == W5500_S0_SR_LISTEN || sr == W5500_S0_SR_SYNRECV ||
+      sr == W5500_S0_SR_ESTABLISHED) {
     if (http_ensure_network_config() != 0) {
       g_w5500_http_status = 2u;
       ++g_w5500_http_error_count;
@@ -855,8 +875,8 @@ static size_t build_status_body(char *body, size_t len) {
   const size_t result = (size_t)snprintf(body,
                           len,
                           "{\"ok\":true,\"data\":{\"rtos\":{\"started\":%lu,\"ready\":%lu,\"loop\":%lu},"
-                          "\"w5500\":{\"status\":%d,\"link\":%lu,\"version\":%lu,\"phycfgr\":%lu,\"lastNonclosedClose\":%lu,\"socketIr\":%lu,"
-                          "\"lifecycle\":{\"sr\":%lu,\"ackPending\":%lu,\"ackElapsedMs\":%lu,\"ackTimeouts\":%lu,\"disconnectPending\":%u,\"recoveryCount\":%lu,\"recoverySr\":%lu},"
+                          "\"w5500\":{\"status\":%d,\"link\":%lu,\"version\":%lu,\"phycfgr\":%lu,\"lastNonclosedClose\":%lu,\"socketIr\":%lu,\"networkRepairCount\":%lu,\"networkRepairFailures\":%lu,"
+                          "\"lifecycle\":{\"sr\":%lu,\"ackPending\":%lu,\"ackElapsedMs\":%lu,\"ackTimeouts\":%lu,\"disconnectPending\":%u,\"recoveryCount\":%lu,\"recoverySr\":%lu,\"listenerCloseWaitHandoffs\":%lu},"
                           "\"httpTrace\":{\"seq\":%lu,\"active\":%lu,\"mutexWaitStartTick\":%lu,\"mutexWaitEndTick\":%lu,\"mutexWaitMs\":%lu,\"rxReadyTick\":%lu,\"rxSize\":%lu,\"handleEnterTick\":%lu,\"recordTick\":%lu,\"handlerReturnTick\":%lu,\"handlerResult\":%lu,\"disconnectStartTick\":%lu,\"disconnectEndTick\":%lu,\"handleWaitCount\":%lu,\"handleWaitFirstTick\":%lu,\"handleWaitLastRxSize\":%lu,\"sendCount\":%lu,\"lastSendLen\":%lu,\"txTotal\":%lu,\"postSendokTxFsrResult\":%lu,\"postSendokTxFsrValue\":%lu,"
                           "\"t\":{\"p\":%lu,\"g\":%lu,\"ss\":%lu,\"se\":%lu,\"is\":%lu,\"ie\":%lu,\"rs\":%lu,\"re\":%lu,\"bs\":%lu,\"be\":%lu,\"cs\":%lu,\"ce\":%lu,\"us\":%lu,\"ue\":%lu,\"hs\":%lu,\"hi\":%lu,\"hk\":%lu}}},"
                           "\"tf\":{\"status\":%d},\"qspi\":{\"status\":%d,\"jedec\":%lu}}}",
@@ -869,6 +889,8 @@ static size_t build_status_body(char *body, size_t len) {
                           (unsigned long)g_w5500_phycfgr,
                           (unsigned long)g_w5500_http_last_nonclosed_close,
                           (unsigned long)g_w5500_http_socket_ir,
+                          (unsigned long)g_w5500_http_network_repair_count,
+                          (unsigned long)g_w5500_http_network_repair_failure_count,
                           (unsigned long)g_w5500_http_socket_sr,
                           (unsigned long)g_w5500_http_ack_wait_pending,
                           (unsigned long)g_w5500_http_ack_wait_elapsed_ms,
@@ -876,6 +898,7 @@ static size_t build_status_body(char *body, size_t len) {
                           (unsigned)g_w5500_http_disconnect_pending,
                           (unsigned long)g_w5500_http_recovery_count,
                           (unsigned long)g_w5500_http_recovery_last_sr,
+                          (unsigned long)g_w5500_http_listener_close_wait_handoff_count,
                           (unsigned long)g_w5500_http_trace_seq,
                           (unsigned long)g_w5500_http_trace_active,
                           (unsigned long)g_w5500_http_trace_mutex_wait_start_tick,
@@ -4186,6 +4209,11 @@ int w5500_http_status_poll(void) {
     return http_open_listener();
   }
   if (sr == W5500_S0_SR_LISTEN) {
+    if (http_ensure_network_config() != 0) {
+      g_w5500_http_status = 2u;
+      ++g_w5500_http_error_count;
+      return 1;
+    }
     g_w5500_http_status = 0u;
     return 0;
   }

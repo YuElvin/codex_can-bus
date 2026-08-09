@@ -60,9 +60,9 @@ static bool test_paths_and_collision(void) {
     UINT64_C(1709251199123), 480, csv, sizeof(csv), meta, sizeof(meta)) ==
     SELECTED_SIGNAL_LOG_OK);
   ASSERT_TRUE(strcmp(csv,
-    "/log/20240301_075959123_signal-v3.csv") == 0);
+    "/log/20240301_075959123_signal-v4.csv") == 0);
   ASSERT_TRUE(strcmp(meta,
-    "/log/20240301_075959123_signal-v3.meta") == 0);
+    "/log/20240301_075959123_signal-v4.meta") == 0);
   ASSERT_TRUE(selected_signal_log_check_path_collision(false, false) ==
               SELECTED_SIGNAL_LOG_OK);
   ASSERT_TRUE(selected_signal_log_check_path_collision(true, false) ==
@@ -153,78 +153,96 @@ static bool test_quality_contract(void) {
 
 static bool test_csv_header_and_row(void) {
   char output[SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES];
+  char fragment[SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES];
   size_t length = 0u;
-  DbcSelectedRuntimeSignal signal = {
+  DbcSelectedRuntimeSignal first = {
     .catalog_ordinal = 17u,
     .definition_hash = UINT64_C(0x26A3283B4020769E)
   };
-  strcpy(signal.key, "Message.quoted,\"signal\"\r\nnext");
-  strcpy(signal.unit, "\"V\",\xE4\xBC\x8F");
-  SignalValueSnapshot value = {
+  DbcSelectedRuntimeSignal second = {
+    .catalog_ordinal = 18u,
+    .definition_hash = UINT64_C(0x6AE2B9898336A12C)
+  };
+  strcpy(first.key, "Message.quoted,\"signal\"");
+  strcpy(second.key, "Message.second");
+  SignalValueSnapshot good = {
     .value = -12.5,
-    .raw = INT64_MIN,
     .updated_ms = 7u,
     .quality = SIGNAL_VALUE_QUALITY_GOOD
   };
+  SignalValueSnapshot missing = {
+    .value = 42.0,
+    .updated_ms = 7u,
+    .quality = SIGNAL_VALUE_QUALITY_MISSING
+  };
 
-  ASSERT_TRUE(selected_signal_log_serialize_csv_header(
-    output, sizeof(output), &length) == SELECTED_SIGNAL_LOG_OK);
+  output[0] = '\0';
+  ASSERT_TRUE(selected_signal_log_serialize_csv_header_start(
+    fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_header_signal(
+    &first, fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_header_signal(
+    &second, fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_line_end(
+    fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
   ASSERT_TRUE(strcmp(output,
-    "utc_time,unix_ms,updated_ms,key,value,raw,unit,quality\n") == 0);
-  ASSERT_TRUE(length == strlen(output));
+    "datetime,\"Message.quoted,\"\"signal\"\"\",\"Message.second\"\n") == 0);
 
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 3007u, &signal, &value, output, sizeof(output), &length) ==
+  output[0] = '\0';
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_start(
+    0u, fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    3007u, &good, fragment, sizeof(fragment), &length) ==
     SELECTED_SIGNAL_LOG_OK);
-  ASSERT_TRUE(strcmp(output,
-    "1970-01-01T00:00:00.000Z,0,7,\"Message.quoted,\"\"signal\"\"\r\nnext\",-12.5,-9223372036854775808,\"\"\"V\"\",\xE4\xBC\x8F\",GOOD\n") == 0);
-  ASSERT_TRUE(length == strlen(output) && length < 512u);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    3007u, &missing, fragment, sizeof(fragment), &length) ==
+    SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(selected_signal_log_serialize_csv_line_end(
+    fragment, sizeof(fragment), &length) == SELECTED_SIGNAL_LOG_OK);
+  strcat(output, fragment);
+  ASSERT_TRUE(strcmp(output, "1970-01-01T00:00:00.000Z,-12.5,\n") == 0);
 
-  const size_t exact_length = length;
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 3007u, &signal, &value, output, exact_length + 1u, &length) ==
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    3008u, &good, fragment, sizeof(fragment), &length) ==
     SELECTED_SIGNAL_LOG_OK);
-  ASSERT_TRUE(length == exact_length);
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 3007u, &signal, &value, output, exact_length, &length) ==
+  ASSERT_TRUE(strcmp(fragment, ",-12.5") == 0);
+
+  ASSERT_TRUE(selected_signal_log_serialize_csv_header_signal(
+    &first, fragment, 4u, &length) ==
     SELECTED_SIGNAL_LOG_CAPACITY);
-  ASSERT_TRUE(length == 0u && output[0] == '\0');
-
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 3008u, &signal, &value, output, sizeof(output), &length) ==
-    SELECTED_SIGNAL_LOG_OK);
-  ASSERT_TRUE(strstr(output, ",STALE\n") != NULL);
-
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 0u, &signal, &value, output, 32u, &length) ==
-    SELECTED_SIGNAL_LOG_CAPACITY);
-  ASSERT_TRUE(length == 0u && output[0] == '\0');
-  value.value = INFINITY;
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    0u, 0u, &signal, &value, output, sizeof(output), &length) ==
+  ASSERT_TRUE(length == 0u && fragment[0] == '\0');
+  good.value = INFINITY;
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    0u, &good, fragment, sizeof(fragment), &length) ==
     SELECTED_SIGNAL_LOG_INVALID_VALUE);
-  ASSERT_TRUE(length == 0u && output[0] == '\0');
+  ASSERT_TRUE(length == 0u && fragment[0] == '\0');
   return true;
 }
 
 static bool test_worst_valid_csv_row_fits_scratch(void) {
-  DbcSelectedRuntimeSignal signal = {0};
-  memset(signal.key, '"', LARGE_DBC_KEY_MAX_BYTES);
-  signal.key[LARGE_DBC_KEY_MAX_BYTES] = '\0';
-  memset(signal.unit, '"', LARGE_DBC_UNIT_MAX_BYTES);
-  signal.unit[LARGE_DBC_UNIT_MAX_BYTES] = '\0';
   SignalValueSnapshot value = {
     .value = 100000000000000000000.0,
-    .raw = INT64_MIN,
     .updated_ms = UINT32_MAX,
     .quality = SIGNAL_VALUE_QUALITY_MISSING
   };
   char output[SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES];
   size_t length = 0u;
-  ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-    UINT64_C(1709251199123), UINT32_MAX, &signal, &value,
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    UINT32_MAX, &value,
     output, sizeof(output), &length) == SELECTED_SIGNAL_LOG_OK);
-  ASSERT_TRUE(length > 0u && length < sizeof(output));
+  ASSERT_TRUE(strcmp(output, ",") == 0);
+  value.quality = SIGNAL_VALUE_QUALITY_GOOD;
+  ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+    UINT32_MAX, &value, output, sizeof(output), &length) ==
+    SELECTED_SIGNAL_LOG_OK);
+  ASSERT_TRUE(length > 1u && length < sizeof(output));
   return true;
 }
 
@@ -284,15 +302,18 @@ static bool test_selected_cardinality_iteration(void) {
       snprintf(signal.key, sizeof(signal.key), "M.S%u", (unsigned)ordinal);
       SignalValueSnapshot value = {
         .value = ordinal,
-        .raw = ordinal,
         .updated_ms = ordinal,
         .quality = SIGNAL_VALUE_QUALITY_GOOD
       };
       size_t length = 0u;
-      ASSERT_TRUE(selected_signal_log_serialize_csv_row(
-        0u, ordinal, &signal, &value, output, sizeof(output), &length) ==
+      ASSERT_TRUE(selected_signal_log_serialize_csv_header_signal(
+        &signal, output, sizeof(output), &length) ==
         SELECTED_SIGNAL_LOG_OK);
       ASSERT_TRUE(length != 0u && strstr(output, signal.key) != NULL);
+      ASSERT_TRUE(selected_signal_log_serialize_csv_row_value(
+        ordinal, &value, output, sizeof(output), &length) ==
+        SELECTED_SIGNAL_LOG_OK);
+      ASSERT_TRUE(length != 0u && output[0] == ',');
       ++rows;
     }
     ASSERT_TRUE(rows == counts[test]);

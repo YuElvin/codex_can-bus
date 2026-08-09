@@ -137,3 +137,9 @@
 - 大静态HTML响应与随后立即短连接必须作为同一交接场景验证；“静态文件最终完整返回”与“下一API立即可达”是不同证据。若只能在约3 s后恢复，网页功能可记录为带恢复窗口可用，但HTTP稳定性不得关闭。
 
 - L-123：单socket现场验收中的“上一次请求已安全交接”必须可观测。将SR、ACK pending/elapsed/timeouts、DISCON pending和recovery计数加入既有状态快照后，才能把HTTP200与listener状态分开解释；当前轮的50 ms ACK且timeout/recovery为0只证明该轮正常交接，不能外推为零间隔短连接问题已根治。
+
+- L-124：对W5500单socket服务，`Sn_SR=LISTEN`只能证明socket寄存器状态，不能证明GAR/SUBR/SHAR/SIPR仍完整。应在空闲LISTEN轮询复用既有公共配置读回/精确修复逻辑，并以真实长事务至少多轮“长响应→交接status→下一连接”验收；计数为零时可证明该窗口无需修复，但不能冒充已命中故障分支。
+
+- L-125：前端的“未知”状态不能被误作“禁止用户准备操作”。对candidate selection，日志未知应允许浏览、翻页和跨页编辑，只在提交前串行读取日志状态并保留后端ACTIVE门禁；对规则，活动signalKey目录应异步提供建议而非禁用保存，直接输入仍由后端活动DBC/definition-hash校验。分页渲染只能在candidate token改变时清空待提交set/clear，不能在换页时丢弃用户编辑。
+
+- L-126：宽表日志不能把“每个信号一个写计数”沿用为“每行一个采样”。必须先流式写完整 header（`datetime`加锁定 key），再把每个采样写成一条固定列数的数据行，并只在该行换行成功后递增`rowsWritten`。实体核验应以标准CSV解析同时交叉 header key、每行列数、UTC时间、meta selectedCount/rowsWritten/cleanClose；HTTP STOPPED或肉眼首行不足以证明列没有错位。

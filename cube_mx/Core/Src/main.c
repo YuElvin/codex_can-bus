@@ -1112,12 +1112,38 @@ static void signal_log_task(void *argument)
         ok = selected_log_flush_buffer(&context, identity->meta_path, now_ms,
                                        false);
       }
-      if (ok && selected_signal_log_serialize_csv_header(
+      if (ok && selected_signal_log_serialize_csv_header_start(
                   scratch, sizeof(scratch), &fragment_length) ==
                 SELECTED_SIGNAL_LOG_OK) {
         ok = selected_log_append_fragment(
           &context, scratch, fragment_length, identity->csv_path, now_ms,
-          true, false) &&
+          true, false);
+      } else {
+        ok = false;
+      }
+      for (uint16_t signal_index = 0u;
+           ok && signal_index < identity->selected_count; ++signal_index) {
+        DbcSelectedRuntimeSignal signal;
+        SignalValueSnapshot value;
+        if (w5500_http_selected_log_signal(
+              identity->active_generation, identity->selection_crc32,
+              signal_index, &signal, &value) != 0 ||
+            selected_signal_log_serialize_csv_header_signal(
+              &signal, scratch, sizeof(scratch), &fragment_length) !=
+              SELECTED_SIGNAL_LOG_OK) {
+          ok = false;
+        } else {
+          ok = selected_log_append_fragment(
+            &context, scratch, fragment_length, identity->csv_path, now_ms,
+            true, false);
+        }
+      }
+      if (ok && selected_signal_log_serialize_csv_line_end(
+                  scratch, sizeof(scratch), &fragment_length) ==
+                SELECTED_SIGNAL_LOG_OK) {
+        ok = selected_log_append_fragment(
+               &context, scratch, fragment_length, identity->csv_path,
+               now_ms, true, false) &&
              selected_log_flush_buffer(&context, identity->csv_path, now_ms,
                                        true);
       } else {
@@ -1149,6 +1175,15 @@ static void signal_log_task(void *argument)
         }
         last_sample_ms += elapsed_periods * identity->sample_period_ms;
         ++g_log_sample_count;
+        if (selected_signal_log_serialize_csv_row_start(
+              unix_ms, scratch, sizeof(scratch), &fragment_length) !=
+            SELECTED_SIGNAL_LOG_OK) {
+          ok = false;
+        } else {
+          ok = selected_log_append_fragment(
+            &context, scratch, fragment_length, identity->csv_path, now_ms,
+            true, false);
+        }
         for (uint16_t signal_index = 0u;
              ok && signal_index < identity->selected_count; ++signal_index) {
           DbcSelectedRuntimeSignal signal;
@@ -1156,15 +1191,24 @@ static void signal_log_task(void *argument)
           if (w5500_http_selected_log_signal(
                 identity->active_generation, identity->selection_crc32,
                 signal_index, &signal, &value) != 0 ||
-              selected_signal_log_serialize_csv_row(
-                unix_ms, now_ms, &signal, &value, scratch, sizeof(scratch),
+              selected_signal_log_serialize_csv_row_value(
+                now_ms, &value, scratch, sizeof(scratch),
                 &fragment_length) != SELECTED_SIGNAL_LOG_OK) {
             ok = false;
           } else {
             ok = selected_log_append_fragment(
               &context, scratch, fragment_length, identity->csv_path, now_ms,
-              true, true);
+              true, false);
           }
+        }
+        if (ok && selected_signal_log_serialize_csv_line_end(
+                    scratch, sizeof(scratch), &fragment_length) ==
+                  SELECTED_SIGNAL_LOG_OK) {
+          ok = selected_log_append_fragment(
+            &context, scratch, fragment_length, identity->csv_path, now_ms,
+            true, true);
+        } else {
+          ok = false;
         }
       }
       if (ok && signal_log_buffer_should_flush(

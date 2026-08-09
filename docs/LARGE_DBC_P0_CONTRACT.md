@@ -324,7 +324,9 @@ v1 冻结 `MAX_LOG_ROWS_PER_SECOND=20`，采样周期仍为 `100..10000 ms`。�
 - clean close；
 - write/drop/late/failure counters。
 
-LogTask 使用单行 256..512 B scratch 和静态批量缓冲，逐项短快照；不得在任务栈创建 128 项大数组。
+当前 v4 宽表会话先流式写入一次 header：首单元格为 `datetime`，随后按锁定 selected ordinal 顺序写入已转义的信号 key。每个采样周期只写一条数据行：UTC ISO-8601 时间戳后按相同顺序写入各信号数值；`MISSING` 或 `ERROR` 保留空单元格，绝不移动后续列。
+
+LogTask 使用 256..512 B scratch 和静态批量缓冲分片序列化 header/数据行；不得在任务栈创建 128 项大数组，也不得为生成宽表累积整行或整套 SignalCache。
 
 ## 16. RAM、Flash、heap 与 stack 预算
 

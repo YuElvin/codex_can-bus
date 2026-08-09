@@ -436,3 +436,21 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 
 - 为避免将某次HTTP200误判为listener已恢复，既有`/api/status`增加只读`w5500.lifecycle`：SR、ACK pending/elapsed/timeouts、DISCON pending、recovery count/last SR。不新增端点或业务动作。
 - 物理冷启动回归中，网页及退出后二次验证均通过，所有观测的上一响应ACK elapsed为50 ms、ACK timeout/recovery均0。该字段是现场观测工具，不构成对零间隔任意短连接的根因结论；该风险仍保留。
+
+## ADR-050：LISTEN空闲时复用公共网络配置不变量（2026-08-09）
+
+- 失联瞬间socket0已读为`LISTEN`而ACK/DISCON/recovery及CLOSE_WAIT handoff计数均为0，说明仅以socket状态判断可监听不足。决策是在`w5500_http_status_poll()`确认`LISTEN`时调用既有`http_ensure_network_config()`；配置一致不写入，不一致仅精确修复并读回GAR/SUBR/SHAR/SIPR的18字节。
+- 目标映像经`verify.sh` CTest=`34/34`、反汇编LISTEN路径调用确认和OpenOCD `Verified OK`后，由用户物理冷启动。真实100071 B candidate catalog连续三轮均HTTP200（约18.81–18.83 s），每轮3 s后的status及最终紧邻runtime均HTTP200，ping3/3；最后repair/failure、ACK timeout、recovery和handoff均为0。
+- 此证据关闭此前“连续长请求后port80短暂拒绝”的复现序列；三轮未命中损坏修复分支，故不把它写成公共配置损坏已在本轮复现或无限期/并发网络稳定性保证。
+
+## ADR-051：网页目录读取不得抢占规则创建或候选浏览（2026-08-09）
+
+- 规则写的活动signalKey合法性仍由后端`http_validate_rule_signal_key()`及V5 definition hash确认，前端不应以完整`/api/signals`分页读取作为保存前置。规则表单改为可直接输入的datalist控件：规则先回读，目录异步补充建议，输入和保存始终可用；无效key仍由后端拒绝。
+- candidate selection的日志ACTIVE门禁保持后端409和前端显示，但“日志状态未知”只意味着提交时需先读取`/api/log/control`，不得禁用浏览、翻页、勾选或累积跨页set/clear。candidate token变化才清空待提交集合，分页/筛选不会清除。
+- 物理TF部署后，目录加载中规则创建、安全规则持久化和删除均通过；candidate page1勾选ordinal8实际generation9/selected9，清除后generation10/selected8，active generation3不变。该ADR不缩短TF catalog读取时间、不新增HTTP并发或绕过日志ACTIVE门禁。
+
+## ADR-052：选择性日志采用按采样周期的 v4 宽表（2026-08-09）
+
+- 决策：新会话文件名使用`_signal-v4.csv`，header 的第一个字段固定`datetime`，其后为会话锁定的 selected key；每一采样周期只产生一条按同顺序排列的数据行。`MISSING`/`ERROR`产生空单元格，以保持列对齐。旧v2/v3会话不续写、不迁移。
+- 实现边界：header和数据行均以小片段流式追加，沿用512 B scratch与静态批量缓冲；不在LogTask栈上创建128项快照或整行动态缓冲。`rowsWritten`在一整条数据行换行成功后递增，而不再按信号单元格计数。
+- 现场证据：物理冷启动后active generation3、8项selected均GOOD；1000 ms会话`/log/20260809_222113000_signal-v4.csv`经安全STOPPED和取卡只读解析，header为`datetime`加8个selected key，12条数据行均9列且时间戳合法，meta为`csvFormat=signal-v4`、`selectedCount=8`、`rowsWritten=12`、`rowsDropped/lateSamples/writeFailures=0/0/0`、`cleanClose=true`。v4物理掉电尾行与恢复仍`[未验证]`。

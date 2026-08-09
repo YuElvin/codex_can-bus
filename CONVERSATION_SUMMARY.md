@@ -4152,3 +4152,76 @@
 - 退出网页后独立串行HTTP：status、runtime、candidate selected、signals、manual、log、rules、CAN均HTTP200；signals严格8项且GOOD，CAN errors/busOff/TEC/REC=`0/0/0/0`，ping=`3/3`。安全manual POST以relay1/relay2=`0/0`执行enabled=`1→0`，两次requestSeq=appliedSeq=`1/1→2/2`，输出始终`0/0`；最后lifecycle为ACK elapsed=`50 ms`、ACK timeout/recovery=`0/0`。
 - 本轮网页与退出后二次验证门禁通过。此前偶发失联的根因尚未由本次单轮证明消除；仅把“本冷启动、现有2.1 s串行网页路径和5 s独立交接”的正向证据写为通过，不扩写为零间隔任意短连接稳定性已经关闭。
 - 已提交并推送`c011c5f Verify W5500 single-socket lifecycle`至`origin/codex/W5500`。提交包含lifecycle可观测性、2秒TCP预算/仅socket0恢复、TF后候选恢复、网页2.1秒串行节流及本轮治理证据；本行仅记录Git状态，不替代上述实板证据。
+
+## 2026-08-09 用户物理重上电后的网页双会话复测（进行中）
+
+- 浏览器表面必须区分：应用内浏览器对`http://192.168.1.88/`的受控导航先报`ERR_BLOCKED_BY_CLIENT`，其受控标签停在`about:blank`；Chrome 受控页面可实际加载`CAN 网关控制台`。因此后台 Chrome 的读取成功不能表述为用户可见的应用内页面已完成。
+- Chrome 第一会话完成只读网页交互：概览、CAN TX读取、manual读取、日志控制读取、规则读取和candidate目录读取均成功；candidate第0页为896项、已选8/128，搜索`AliveCounter`返回112项，浏览器console无warn/error。随后已关闭标签。
+- Chrome 第二会话已重新加载并完成一次自动CAN刷新后停止：状态为正常，TX=`400`、RX=`6515`，TX配置为enabled/`0x321`/DLC8/`C2 A5 00 01 02 03 04 05`/1000ms/result0，RX selected 8项均GOOD。该记录仅为后台Chrome正向证据；写操作（时间同步、日志启停、manual、CAN TX写入、规则、selection、DBC上传/激活）尚未在本轮执行，不可称“所有功能”或用户可见双轮验收完成。
+
+## 2026-08-09 网页第一轮可恢复写操作复测
+
+- 第一轮Chrome页面先停止自动刷新，基线为manual=`disabled/0/0`、日志=`disabled/1000ms`、CAN TX=`enabled/0x321/DLC8/C2 A5 00 01 02 03 04 05/1000ms/result0`。时间同步返回“系统时间已同步”；日志启动后回读enabled=true，停止提交首次前端状态未刷新，复读后以明确关闭提交和独立读取确认enabled=false。未在日志ACTIVE期间写selection或规则。
+- manual以`enabled=1, relay1=0, relay2=0`提交并回读两路均断开，再以`enabled=0`提交并回读恢复关闭、两路断开。CAN TX以相同现有配置回写：提交瞬间`requestSeq=1/appliedSeq=0/result=4294967295`，独立读取后`requestSeq=appliedSeq=1/result=0`。
+- candidate第0页完整读取耗时较长。页面清除ordinal0后，等待至“selection 已提交并回读”确认selected=`8→7`；随后重新选择ordinal0并等待完整回读，确认selected=`7→8`、无待提交变更，恢复原selection。两槽规则首次安全POST因两个槽priority均0而正确返回HTTP400 `invalid_rule`；改slot0 priority为1后成功创建V5规则（selected key、threshold=999999、action=off、safeState=off、relay1），再通过页面删除并回读slot0 disabled，继电器保持断开。
+- 点击“上传候选”在未选文件时走本地“请选择DBC文件”保护，无上传。点击“激活候选”时浏览器确认框控制超时，未接受确认、未发送激活提交；随后的Chrome会话重连/关闭该标签也受该确认框影响而超时。不能将此写为DBC激活通过，也尚未满足“关闭第一轮网页后第二轮”的网页会话要求。未改源码、未构建、未烧录。
+- 控制异常后独立串行HTTP复核仍为200：runtime保持active generation2/candidate generation4/`E5CB6C8F`/8项；日志为`enabled=false,state=STOPPED`且本次会话路径为`/log/20260809_164108536_signal-v3.csv`；manual为`enabled=0, relay1/relay2=0/0, requestSeq=appliedSeq=2, output=0/0`。这证明已恢复状态，但不替代尚未完成的第二轮网页会话。
+
+## 2026-08-09 退出第一轮后的独立第二轮网页回归
+
+- 确认阻断标签是agent创建的Chrome标签组，用户未打开该网页。通过本机UI关闭该`CAN 网关控制台`标签及其空组，未接受DBC激活确认，因此没有激活请求。随后新建独立Chrome标签进入`http://192.168.1.88/`，满足首轮退出后再进入第二轮的会话边界。
+- 第二轮自动CAN刷新完成一轮后停止：状态“正常”，TX=`1416`、RX=`23474`；TX回读仍为`0x321`/DLC8/`C2 A5 00 01 02 03 04 05`/1000ms/已应用/result0；8个RX selected信号均GOOD且值为`1200/-25/3.3/0/2/3/10/1`。console warn/error为空。
+- 第二轮概览、manual、日志、两槽规则均回读成功：runtime active2/candidate4/`E5CB6C8F`/100071B/1 message/8 signals，manual disabled且两路断开，日志disabled/1000ms，规则源为V5且两槽disabled。candidate第0页完整返回896项/已选8/128；`AliveCounter`搜索最终回读matched=112。候选长查询后再次概览HTTP成功。
+- 最后snapshot的当前事务lifecycle为ACK pending=0、ACK elapsed=50ms、ACK timeouts=0、disconnect pending=0；但累计`lastNonclosedClose=1048`、`recoveryCount=3`和`recoverySr=24`非零，记录为历史累计诊断，不能将本次窗口扩大为长期零恢复结论。第二轮标签已关闭。
+- DBC上传只验证“未选文件”保护，DBC激活只验证确认提示且取消，未对现有candidate4执行上传/激活以避免改变持久化candidate/active。若用户需要把这两个有状态操作也纳入“所有功能”的成功路径，必须明确授权使用哪份DBC及是否允许改写candidate/active；当前该两项为`[未验证成功路径]`。
+
+## 2026-08-09 用户授权后的真实 DBC 上传、激活与双会话回归
+
+- 用户明确“授权操作开发板网页所有功能”。第一轮网页通过系统文件选择器选择`/Users/elvin/Desktop/project/data/BNE_CLASSIC_CAN_TEST_100KB.dbc`（100071 B），网页“上传候选”返回`stagedOnly=true`、`candidateQueued=true`、generation7、source CRC32=`4B88D9CE`。候选查询完成后返回token=`0000000000000007-000186E7-4B88D9CE`、896项、初始selected=0；日志控制已先确认`STOPPED`，随后选择ordinal0..7。选择写入后回读token=`0000000000000008-000186E7-4B88D9CE`、selected=8，且ordinal0..7全部selected=true。
+- 第一轮在网页“激活候选”确认框中实际选择“确定”。激活期间HTTP暂不监听，关闭第一轮网页释放socket0后，runtime回读为active generation3、candidate generation8、activeSlot1、`loaded=true`、100071 B、selected-only、1 message/8 signals、selection CRC=`E5CB6C8F`、`lastResult=0`。这是真实上传、selection和激活成功路径；旧active generation2已由该用户授权操作替换。
+- 按用户要求已在激活后关闭第一轮网页；新建独立第二轮Chrome页面重新进入板端。自动CAN刷新后停止，CAN正常且`TX=2375/RX=39468`、errors/busOff/TEC/REC=`0/0/0/0`。概览在该独立会话回读RTOS/W5500/TF/QSPI正常，active3/candidate8、8 signals/1 message。8个外部Classic selected信号全部`GOOD`，值为`1200/-25/3.3/0/2/3/10/1`。
+- 第二轮连续网页读取手动/记录/规则时再次触发单socket长请求，自动化通道超时；关闭第二轮页面后HTTP恢复。最终同一网页API串行复核：manual=`enabled=0, relay1/relay2=0/0, requestSeq=appliedSeq=2, outputs=0/0`；日志=`enabled=false,state=STOPPED,1000ms`；规则V5两槽均disabled。两轮页面均已关闭。该轮证明受2.1 s/关闭页面交接约束下的功能成功；连续长请求后的短暂HTTP不可连接仍是已知`[未关闭风险]`，不扩写为任意并发或零间隔请求稳定。
+- 本轮无源码改动、未构建、未反汇编、未烧录；仅追加现场验证记录。
+
+## 2026-08-09 连续长请求后 socket0 监听恢复修复（实板压力待冷启动）
+
+- 只读复现已确认：candidate catalog 查询约`18.75–18.79 s`后可返回HTTP200；紧接status也可200，但连续第二轮后下一连接会被port80拒绝，约12秒后才恢复。即使每段等待3秒也可复现，故不是浏览器控制工具超时，也不能由前端2.1秒节流掩盖。失败窗口ICMP仍正常。
+- 失败恢复后的只读ST-Link读数：socket SR=`0x14(LISTEN)`、`lastNonclosedClose=0x11C`（`http_open_listener()` source1再次读到`CLOSE_WAIT=0x1C`）、ACK pending=`0`、recovery count仍为`5`、error count=`2`。说明现有ACK/recovery计数未覆盖“先读到CLOSED/INIT、再读到CLOSE_WAIT”的关闭握手竞态。
+- 最小补丁仅修改`firmware/bringup/w5500_bringup.c`：`http_open_listener()`读到`CLOSE_WAIT`时不再硬`CLOSE`，改为调用已有`http_begin_graceful_disconnect()`，由原pending状态机完成FIN后重监听；未新增socket、HTTP重试、并发或API写入。新增只读status字段`listenerCloseWaitHandoffs`，用于证明实板是否命中该交接分支。
+- `git diff --check`、`./scripts/verify.sh`均通过，CTest=`34/34`；STM32 ELF text/data/bss=`122188/452/196316`、FLASH=`122648 B (93.57%)`。`nm`确认handoff计数位于`0x24004E18`；objdump确认SR=`0x1C`分支递增该计数并调用`http_begin_graceful_disconnect()`，没有进入source1硬CLOSE路径。OpenOCD实际`Programming Finished/Verified OK/Resetting Target`、电压`3.260712 V`。
+- 烧录后的软件复位网络已恢复（ping=`2/2`、runtime HTTP200），但TF runtime仍为`loaded=false/generation0`，无法在此状态验证真实18秒candidate路径；这符合本项目既有“软件reset不等于TF冷启动”边界。必须整板物理断电重上电后恢复active/candidate，才可执行最终连续长请求压力验收；当前修复实板结论为`[待确认]`。
+
+## 2026-08-09 LISTEN空闲网络配置校验候选（待物理冷启动验收）
+
+- 第一处CLOSE_WAIT handoff候选烧录后，长candidate成功后仍可出现port80拒绝。失败瞬间短暂停机读取为SR=`LISTEN`、ACK/disconnect/recovery/error均0、handoff计数0，说明不是CLOSE_WAIT分支；约数百毫秒后状态机已回LISTEN。
+- 源码定位到`w5500_http_status_poll()`的空闲`LISTEN`分支此前直接返回，未执行已存在的`http_ensure_network_config()`，故“socket显示LISTEN而公共GAR/SIPR等配置损坏”的既有现场模式无从修复。最小补丁在该分支逐轮复用同一校验/18B精确修复，且status导出`networkRepairCount/networkRepairFailures`；没有新增socket、重试、并发或API。
+- `git diff --check`与`./scripts/verify.sh`通过，CTest=`34/34`；ELF text/data/bss=`122320/452/196308`、FLASH=`122780 B (93.67%)`。objdump确认LISTEN路径调用`http_ensure_network_config()`。OpenOCD实际`Programming Finished/Verified OK/Resetting Target`、电压`3.262903 V`。
+- 第二个候选烧录后，软件reset一直为`loaded=false/generation0`；已连续请求用户进行物理断电至少5秒再上电，尚未检测到cold-start恢复。没有active/candidate时不能以短runtime GET替代18–19秒candidate长请求压力验收，故目标板修复仍为`[阻断/待确认]`。
+
+## 2026-08-09 LISTEN公共配置守护物理冷启动压力验收通过
+
+- 用户完成整板断电重上电后，板端恢复`active generation3`、`candidate generation8`、100071 B DBC、selected-only 1 message/8 signals；`/api/dbc/runtime`为HTTP200。
+- 对真实candidate catalog连续执行三轮完整查询，每轮均为HTTP200，首字节/总耗时分别为`18.818983/18.824347 s`、`18.820096/18.825236 s`、`18.805430/18.810712 s`；每轮后等待3秒的`/api/status`均HTTP200（`0.062851/0.016089/0.014084 s`）。随后不等待的`/api/dbc/runtime`仍HTTP200（`1.036720 s`），ping=`3/3`、零丢包。
+- 最后status计数为`lastNonclosedClose=0`、`networkRepairCount=0`、`networkRepairFailures=0`、`ackTimeouts=0`、`disconnectPending=0`、`recoveryCount=0`、`listenerCloseWaitHandoffs=0`。本窗口未实际命中公共配置修复或CLOSE_WAIT交接分支，但修复后目标压力序列没有复现此前port80拒绝。
+- 本轮只验证连续长请求后3秒交接与最终紧邻runtime连接；不把三轮正向样本外推为任意网络异常、并发或无限期稳定性证明。当前工作树仍含未提交的固件与本记录修改。
+
+## 2026-08-09 网页规则与候选目录实时交互修复（待TF部署）
+
+- 用户报告规则启用保存被“正在读取活动 DBC 信号目录”锁定，以及候选目录在“请先读取日志状态”下虽可翻页却无法勾选和提交。源码确认均为`www/index.html`前端门禁：`refreshRules()`先串行扫完整`/api/signals`分页并禁用保存；候选复选框把日志状态未知误当作写入禁止，且每次翻页清除未提交set/clear集合。
+- 本轮网页补丁把规则`signalKey`改为可直接输入、带异步datalist建议的输入框；规则读取先完成、目录作为不阻塞保存的后台辅助。后端仍验证活动信号，故无效key不会绕过规则合同。候选目录在日志状态未知时允许浏览、勾选及跨页累积选择；点击提交才自动读取`/api/log/control`，日志ACTIVE仍由前端和后端拒绝。
+- `node --check`对抽出的网页脚本通过，`git diff --check`通过；本轮未改固件，故未编译或反汇编。目标板后端实测日志状态为disabled，candidate第0页HTTP200（ordinal0..7）；以仅约1秒交接立即请求第1页被port80拒绝，等待4秒后第1页HTTP200（ordinal8..15、约18.84秒），因此网页原有单socket串行节流仍保留。
+- 本机当前无外置TF卷，板端仍提供旧SHA-256=`18e69ff78e7e6fa48cc12c3d67f3d82d8f0f3152e0acb702aa79dcba34f9c87d`网页，尚未部署本补丁；开发板页面实测为`[待确认]`，不可把源码/脚本检查写成已修复。
+
+## 2026-08-09 网页规则与候选目录实时交互实板验收通过
+
+- 用户断电后插入TF，主机精确确认唯一外置`/dev/disk4s1`、FAT32 `CANBUS`，枚举active/candidate generation对象、规则与日志后，仅覆盖`/Volumes/CANBUS/www/index.html`；源/卡`cmp`和SHA-256均为`fe75c7f3020333d3520e8363e887a0d4562b33e8412324eeeb4ebc2f4701d9a5`，随后安全弹出。板端物理上电的TF恢复窗口后，`GET /`为HTTP200且同一SHA，runtime恢复active generation3、8 signals/1 message、lastResult=0。
+- 浏览器实测点击“读取两槽规则”后，slot0在状态仍为“可直接输入活动 DBC 信号 key；正在读取活动 DBC 信号目录”时`保存/创建`未禁用；规则先回读为V5，目录只作异步datalist建议。slot1使用活动`PackVoltage`、合法relay=`1`、threshold=`1300`、priority=`2`、action/safeState=`off`成功创建并由`GET /api/rules`读回；随后网页删除该临时规则，最终slot1 disabled。manual仍`enabled=0`、输出`0/0`。
+- 浏览器读取candidate第0页时，8个checkbox均enabled、next enabled，提示改为“可浏览和选择；提交时将读取日志状态”。翻到page1后ordinal8..15也全部可勾选；真实勾选ordinal8并提交，自动读取日志状态（STOPPED）后回读candidate generation9、selected=`9/2 messages`。随后清除ordinal8并提交，回读generation10、selected=`8/1 message`，未激活candidate、active runtime仍generation3。最终page1 API为HTTP200、ordinal8..15均unselected，console warn/error为空。
+- `node --check`网页脚本和`git diff --check`通过；本轮只改`www/index.html`，未改固件，故未重新编译或反汇编。当前工作树含本轮网页及此前未提交的固件/治理修改，未提交或推送。
+
+## 2026-08-09 selected-signal CSV v4 宽表格式实体验收
+
+- 用户要求记录文件首行首格为日期时间，后续列为选中信号名称，每条记录按同列生成数据。实现将`SELECTED_SIGNAL_LOG_CSV_FORMAT_VERSION`升至4，文件改为`_signal-v4.csv`；LogTask先流式写`datetime`和锁定selected key header，再每个采样周期流式写一条UTC时间戳加各信号值的宽数据行。`MISSING`/`ERROR`保留空单元格；`rowsWritten`仅在完整数据行换行成功后递增。旧v2/v3会话不改写。
+- host `test_selected_signal_log`、完整`./scripts/verify.sh`均通过（CTest=`34/34`）；最终STM32构建FLASH=`122752 B (93.65%)`、RAM_D1=`196696 B`、ELF text/data/bss=`122292/452/196308`。目标ELF符号和反汇编确认`signal_log_task`经小片段追加写入header与数据行，没有128项自动数组；OpenOCD烧录显示`Programming Finished`、`Verified OK`、`Resetting Target`。
+- 用户物理重上电后的恢复窗口结束时，`/api/status`的TF为status=0，runtime为active generation3、selectedOnly、8 signals；`/api/signals`八项均GOOD。以1000 ms创建`/log/20260809_222113000_signal-v4.csv`，进入ACTIVE后安全停止至STOPPED。取卡只读识别为`/dev/disk4s1`的`CANBUS`卷，CSV为1008 B、meta为1032 B。
+- 标准CSV解析实体文件：header恰为9列，首字段`datetime`，后8列依次为锁定的8个`ClassicCanTest_BattMod_001.*` key；12条数据行均为9列，时间戳均符合UTC ISO-8601毫秒格式，首条数值为`1200,-25,3.3,0,2,3,10,1`。meta记录`csvFormat=signal-v4`、active/candidate=`3/8`、selection CRC=`E5CB6C8F`、selectedCount=8、rowsWritten=12、rowsDropped/lateSamples/writeFailures=`0/0/0`、cleanClose=true。此轮关闭用户要求的正常停止宽表格式验收；v4物理掉电尾行/恢复仍`[未验证]`。

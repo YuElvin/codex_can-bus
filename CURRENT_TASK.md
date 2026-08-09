@@ -1,12 +1,14 @@
 # 当前任务
 
-更新时间：2026-08-09
+更新时间：2026-08-10
 
 ## 项目目标
 
 交付基于 STM32H750VBTx、W5500、MCP2562FD、TF、W25Q128 和 FreeRTOS 的 CAN/CAN-FD 数据采集网关；各功能必须以构建、反汇编、烧录和现场证据验收，不能以源码存在或单次 HTTP 200 代替。
 
 ## 当前阶段
+
+- 2026-08-10选择性日志已升级为`signal-v4`宽表并完成实体TF验收：CSV首列固定`datetime`，后续列按selected key顺序排列，每采样周期一条等列数数据行；`/log/20260809_222113000_signal-v4.csv`实体解析为9列header、12条9列数据，meta为`rowsWritten=12`、`cleanClose=true`。host/STM32验证、关键反汇编、OpenOCD烧录校验均通过；当前待办为提交并推送本工作树全部进度。
 
 - 2026-08-09网络候选已烧录：此前网页静态加载后紧随概览读取曾`Failed to fetch`，随后candidate3分页恢复并已完成selection/activation闭环。源码把ACK/DISCON期限统一为2000 ms、DISCON超时仅重建socket0，并让网页按2100 ms单请求节流；`verify.sh`=34/34、FLASH=122444 B且OpenOCD验证通过。当前TF仍在板端，下一步仅需断电取卡部署新版`/www/index.html`、插回物理重上电，复测网页节流；不得格式化或重传历史candidate3。
 - 2026-08-09后续实证已关闭candidate3阻断：网页完成generation3的分页，选择ordinal0..7生成candidate4并激活为active2；退出网页后二次验证的runtime/candidate/signals/CAN/manual/log/rules一致，外部Classic 8项均GOOD。当前仅待部署新版网页后对2.1s节流实板复测；仍保留一次manual POST响应RST的网络风险，不把间隔3s成功扩大为零间隔稳定。

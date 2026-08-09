@@ -705,17 +705,18 @@ LogTask CSV
 
 ### 14.3 CSV 格式
 
-保持当前长表格式：
+当前生产格式为宽表 `signal-v4`：
 
 ```text
-utc_time,unix_ms,updated_ms,key,value,raw,unit,quality
+datetime,"<selected key 0>","<selected key 1>",...
+2026-08-09T14:21:14.114Z,1200,-25,...
 ```
 
-优点：
+约束：
 
-- 不需要为每套选择生成不同列头。
-- 搜索和审计 key 简单。
-- 不同信号更新时间可以独立表达。
+- `datetime` 固定为首列；header 后续列严格对应会话锁定的 selected ordinal/key 顺序。
+- 每个采样周期仅一条数据行，且每条数据行列数必须与 header 一致；`MISSING`/`ERROR` 写空单元格，不得错列。
+- 同 basename `.meta` 必须继续记录 `csvFormat=signal-v4`、selected ordinal/key、`rowsWritten` 和 `cleanClose`，使列含义可离线审计。
 
 ### 14.4 缓冲策略
 

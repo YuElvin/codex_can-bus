@@ -51,14 +51,6 @@ static bool buffer_u64(SelectedLogBuffer *buffer, uint64_t value) {
   return true;
 }
 
-static bool buffer_i64(SelectedLogBuffer *buffer, int64_t value) {
-  if (value < 0) {
-    return buffer_char(buffer, '-') &&
-           buffer_u64(buffer, (uint64_t)(-(value + 1)) + 1u);
-  }
-  return buffer_u64(buffer, (uint64_t)value);
-}
-
 static bool buffer_hex(SelectedLogBuffer *buffer, uint64_t value,
                        uint8_t digits) {
   static const char hex[] = "0123456789ABCDEF";
@@ -206,14 +198,14 @@ SelectedSignalLogStatus selected_signal_log_format_paths(
   }
   const int csv_length = snprintf(
     csv_path, csv_path_capacity,
-    "/log/%04u%02u%02u_%02u%02u%02u%03u_signal-v3.csv",
+    "/log/%04u%02u%02u_%02u%02u%02u%03u_signal-v4.csv",
     (unsigned)calendar.year, (unsigned)calendar.month,
     (unsigned)calendar.day, (unsigned)calendar.hour,
     (unsigned)calendar.minute, (unsigned)calendar.second,
     (unsigned)calendar.millisecond);
   const int meta_length = snprintf(
     meta_path, meta_path_capacity,
-    "/log/%04u%02u%02u_%02u%02u%02u%03u_signal-v3.meta",
+    "/log/%04u%02u%02u_%02u%02u%02u%03u_signal-v4.meta",
     (unsigned)calendar.year, (unsigned)calendar.month,
     (unsigned)calendar.day, (unsigned)calendar.hour,
     (unsigned)calendar.minute, (unsigned)calendar.second,
@@ -325,16 +317,6 @@ SignalValueQuality selected_signal_log_effective_quality(
   }
 }
 
-static const char *quality_text(SignalValueQuality quality) {
-  switch (quality) {
-    case SIGNAL_VALUE_QUALITY_GOOD: return "GOOD";
-    case SIGNAL_VALUE_QUALITY_STALE: return "STALE";
-    case SIGNAL_VALUE_QUALITY_ERROR: return "ERROR";
-    case SIGNAL_VALUE_QUALITY_MISSING:
-    default: return "MISSING";
-  }
-}
-
 static bool buffer_utc(SelectedLogBuffer *buffer, uint64_t unix_ms) {
   SignalLogCalendar calendar;
   if (!signal_log_time_local_calendar(unix_ms, 0, &calendar) ||
@@ -357,7 +339,7 @@ static bool buffer_utc(SelectedLogBuffer *buffer, uint64_t unix_ms) {
          buffer_char(buffer, 'Z');
 }
 
-SelectedSignalLogStatus selected_signal_log_serialize_csv_header(
+SelectedSignalLogStatus selected_signal_log_serialize_csv_header_start(
   char *output,
   size_t output_capacity,
   size_t *output_length) {
@@ -368,45 +350,84 @@ SelectedSignalLogStatus selected_signal_log_serialize_csv_header(
   }
   SelectedLogBuffer buffer = {output, output_capacity, 0u};
   return serialization_finish(
-    &buffer,
-    buffer_text(&buffer,
-      "utc_time,unix_ms,updated_ms,key,value,raw,unit,quality\n"),
+    &buffer, buffer_text(&buffer, "datetime"),
     output_length);
 }
 
-SelectedSignalLogStatus selected_signal_log_serialize_csv_row(
-  uint64_t unix_ms,
-  uint32_t now_ms,
+SelectedSignalLogStatus selected_signal_log_serialize_csv_header_signal(
   const DbcSelectedRuntimeSignal *signal,
+  char *output,
+  size_t output_capacity,
+  size_t *output_length) {
+  serialization_begin(output, output_capacity, output_length);
+  if (signal == NULL || output == NULL ||
+      output_length == NULL || output_capacity == 0u ||
+      output_capacity > SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES ||
+      !bounded_string(signal->key, sizeof(signal->key), false, false)) {
+    return SELECTED_SIGNAL_LOG_INVALID_ARGUMENT;
+  }
+  SelectedLogBuffer buffer = {output, output_capacity, 0u};
+  return serialization_finish(
+    &buffer, buffer_char(&buffer, ',') && buffer_quoted(&buffer, signal->key),
+    output_length);
+}
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_row_start(
+  uint64_t unix_ms,
+  char *output,
+  size_t output_capacity,
+  size_t *output_length) {
+  serialization_begin(output, output_capacity, output_length);
+  if (output == NULL || output_length == NULL || output_capacity == 0u ||
+      output_capacity > SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES) {
+    return SELECTED_SIGNAL_LOG_INVALID_ARGUMENT;
+  }
+  SelectedLogBuffer buffer = {output, output_capacity, 0u};
+  return serialization_finish(&buffer, buffer_utc(&buffer, unix_ms),
+                              output_length);
+}
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_row_value(
+  uint32_t now_ms,
   const SignalValueSnapshot *value,
   char *output,
   size_t output_capacity,
   size_t *output_length) {
   char physical[128];
   serialization_begin(output, output_capacity, output_length);
-  if (signal == NULL || value == NULL || output == NULL ||
-      output_length == NULL || output_capacity == 0u ||
-      output_capacity > SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES ||
-      !bounded_string(signal->key, sizeof(signal->key), false, false) ||
-      !bounded_string(signal->unit, sizeof(signal->unit), false, true)) {
+  if (value == NULL || output == NULL || output_length == NULL ||
+      output_capacity == 0u ||
+      output_capacity > SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES) {
     return SELECTED_SIGNAL_LOG_INVALID_ARGUMENT;
   }
-  if (rule_file_format_decimal(value->value, physical, sizeof(physical)) == 0u) {
-    return SELECTED_SIGNAL_LOG_INVALID_VALUE;
+  const SignalValueQuality quality =
+    selected_signal_log_effective_quality(value, now_ms);
+  if (quality == SIGNAL_VALUE_QUALITY_GOOD ||
+      quality == SIGNAL_VALUE_QUALITY_STALE) {
+    if (rule_file_format_decimal(value->value, physical, sizeof(physical)) == 0u) {
+      return SELECTED_SIGNAL_LOG_INVALID_VALUE;
+    }
+  } else {
+    physical[0] = '\0';
   }
   SelectedLogBuffer buffer = {output, output_capacity, 0u};
   const bool success =
-    buffer_utc(&buffer, unix_ms) && buffer_char(&buffer, ',') &&
-    buffer_u64(&buffer, unix_ms) && buffer_char(&buffer, ',') &&
-    buffer_u64(&buffer, value->updated_ms) && buffer_char(&buffer, ',') &&
-    buffer_quoted(&buffer, signal->key) && buffer_char(&buffer, ',') &&
-    buffer_text(&buffer, physical) && buffer_char(&buffer, ',') &&
-    buffer_i64(&buffer, value->raw) && buffer_char(&buffer, ',') &&
-    buffer_quoted(&buffer, signal->unit) && buffer_char(&buffer, ',') &&
-    buffer_text(&buffer,
-      quality_text(selected_signal_log_effective_quality(value, now_ms))) &&
-    buffer_char(&buffer, '\n');
+    buffer_char(&buffer, ',') && buffer_text(&buffer, physical);
   return serialization_finish(&buffer, success, output_length);
+}
+
+SelectedSignalLogStatus selected_signal_log_serialize_csv_line_end(
+  char *output,
+  size_t output_capacity,
+  size_t *output_length) {
+  serialization_begin(output, output_capacity, output_length);
+  if (output == NULL || output_length == NULL || output_capacity == 0u ||
+      output_capacity > SELECTED_SIGNAL_LOG_OUTPUT_MAX_BYTES) {
+    return SELECTED_SIGNAL_LOG_INVALID_ARGUMENT;
+  }
+  SelectedLogBuffer buffer = {output, output_capacity, 0u};
+  return serialization_finish(&buffer, buffer_char(&buffer, '\n'),
+                              output_length);
 }
 
 SelectedSignalLogStatus selected_signal_log_serialize_meta_header(
@@ -423,7 +444,7 @@ SelectedSignalLogStatus selected_signal_log_serialize_meta_header(
   SelectedLogBuffer buffer = {output, output_capacity, 0u};
   const bool success =
     buffer_text(&buffer, "format=selected-signal-log-meta-v1\n") &&
-    buffer_text(&buffer, "csvFormat=signal-v3\nfirmwareBuildId=") &&
+    buffer_text(&buffer, "csvFormat=signal-v4\nfirmwareBuildId=") &&
     buffer_quoted(&buffer, identity->firmware_build_id) &&
     buffer_text(&buffer, "\nactiveGeneration=") &&
     buffer_hex(&buffer, identity->active_generation, 16u) &&
