@@ -1,5 +1,12 @@
 # 项目计划
 
+## 2026-08-09 当前收口门禁
+
+- 大DBC A0-H的既有Classic CAN验收保持有效；本轮真实上传创建的candidate3分页/选择/激活尚未通过，不得以candidate2旧验收替代。
+- 当前网络候选的完成标准：新网页按单socket交接节流后，连续页面操作不再`Failed to fetch`；candidate3至少完成分页、1..128选择、激活后旧active不受失败破坏；退出网页后独立串行API二次验证一致。外部Classic RX需用户恢复发送后另取证据；CAN-FD仍`[未验证]`。
+
+- 本轮candidate3已分页并经8项selection成为candidate4，active2安全生效；外部Classic RX和退出后二次API均已实证。剩余验收仅为新版网页部署后的2.1s节流连续操作；不以3s间隔成功代替零间隔传输稳定性。
+
 本文件只记录当前计划和验收边界；长历史保留在 `CONVERSATION_SUMMARY.md`，详细架构设计保留在 `ARCHITECTURE_DESIGN.md`。项目最终通过条件和固定后续阶段见 `PROJECT_FINAL_ACCEPTANCE.md`。
 
 ## 当前目标
@@ -184,3 +191,14 @@
 - 更新：候选现在另加`LISTEN`确认后的配置读回/修复，已重新构建、反汇编并烧录；烧录reset未使TF掉电，需物理冷启动后才可取得有效实板结论。
 
 - 当前实板已完成带恢复窗口的网页TX/时间/manual/log及退出后API回归；目标“所有网页操作在正常立即连续请求下稳定”仍未证实，禁止关闭HTTP稳定性门禁或提交为最终完成。
+
+## 2026-08-09 阶段17门禁：candidate 长事务再次阻断
+
+- 最新物理冷启动确认新版网页、active2/candidate4、外部Classic selected解码和选择性日志闭环可用；但退出网页后candidate selected查询可在12 s内无响应，随后HTTP端口失联而ICMP保持正常，约25 s后runtime才可能恢复。一次截断输出的后续请求不用于重复触发归因。
+- 阶段17网页/退出后二次验证重新标记`[阻断]`。下一工作包是candidate查询后端阶段与TF I/O可观测性及最小恢复修复；禁止以重传、selection变更、多socket、重试或网页绕过替代根因修复。
+- 补充现场：runtime HTTP200后3 s的完整candidate连接已被拒绝、未进入后端，故工作包先检查socket0响应关闭后的重新监听，再按需取得candidate后端/TF证据。
+
+## 2026-08-09 阶段17当前冷启动回归通过
+
+- lifecycle可观测映像经物理冷启动，网页概览、candidate 896/8、selected-only外部Classic解码、日志闭环、规则/继电器读取均通过；退出网页后八项独立API、manual 0/0安全写入和ping通过，ACK timeout/recovery为0。
+- 当前网页与退出二次验证门禁在既有2.1 s网页串行及5 s独立交接下通过。仍不以此关闭零间隔短连接风险；后续稳定性问题须有同一连接诊断证据，禁止扩大为多socket/重试方案。

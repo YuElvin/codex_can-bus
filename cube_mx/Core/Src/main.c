@@ -1660,6 +1660,10 @@ static void bringup_default_task(void *argument)
   }
   rule_file_load_from_tf();
   (void)w5500_http_recover_large_dbc_active();
+  /* Candidate recovery can observe a transient TF state before the later
+   * active/runtime recovery sequence. Retry after that sequence so a valid
+   * candidate manifest is not left unavailable for the whole boot. */
+  (void)w5500_http_recover_large_dbc_candidate();
   if (watchdog_start() != 0) {
     Error_Handler();
   }

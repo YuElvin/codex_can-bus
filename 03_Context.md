@@ -1,5 +1,15 @@
 # 当前上下文
 
+## 2026-08-09 当前网络/候选验证状态
+
+- 已烧录的候选统一W5500 ACK/DISCON的2 s TCP预算，DISCON超时只关闭并重开socket0 listener；网页以2.1 s单请求节流避免前一`Connection: close`尚未完成时发起下一连接。构建和反汇编通过，现场仍`[未验证]`。
+- `candidate.current`实际指向真实100071 B DBC的generation3；其source/index/selection对象在主机只读验证完整，但板端candidate查询失败。旧active generation1不受影响。不得重传、格式化或激活该candidate，先取得恢复/查询失败的具体证据。
+- 下一物理门槛：开发板下电，TF插Mac部署`www/index.html`，安全弹出、插回并物理上电；之后才进行网页全功能和退出后二次验证。
+
+- 已实际完成candidate3→candidate4 selection（8项/1消息）和active2激活；active2/runtime slot1外部Classic selected-only 8项GOOD，日志锁定/停止与退出网页二次API验证通过。新版网页未部署，且一次manual POST的响应RST虽业务已应用，零间隔HTTP稳定性仍`[未关闭风险]`。
+- 新版网页现已部署到TF（`cmp`及SHA-256一致），active/candidate/log对象未触碰；主机只读fsck仍权限拒绝，未声称文件系统检查通过。待卡插回板端物理上电后验证网页节流。
+- 物理上电已完成：active2恢复和8项外部Classic GOOD通过；candidate selected查询HTTP500后导致port80暂失联、约30秒后恢复。网页节流验收`[未通过]`，下一步只诊断此查询/网络链路，不改变active2或TF对象。
+
 更新时间：2026-08-09（大 DBC selected-only 阶段17 A0-H Classic CAN闭环通过）
 
 ## 当前仓库
@@ -364,3 +374,16 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 物理重启后新映像恢复了网页、runtime及外部Classic解码。大静态页后立即下一连接仍可能失败，但等待约3 s后网页日志/规则/candidate读回成功；此延迟依赖不能作为HTTP稳定性关闭证据。
 
 - 已在网页实际提交TX、同步时间、manual 0/0启停和选择性日志启停，均由独立API读回；关闭网页后八项串行API及ping通过。立即连续请求风险未关闭，当前不提交/推送为“稳定性修复完成”。
+
+## 2026-08-09 candidate 查询复发
+
+- 最新物理上电后，新版网页的实际读取、规则/继电器回读和日志ACTIVE→STOPPED均通过；active2/candidate4/8 selected与外部Classic RX保持。
+- `[阻断]` 退出网页后candidate selected查询可在12 s内无响应并使port80不可达，ICMP仍正常；约25 s后runtime可恢复。一次截断输出的后续测试不能用于重复触发归因。当前问题锁定candidate长事务与W5500单socket可达性，未授权重传、激活或选择变更。
+- 完整复测表明runtime HTTP200后的3 s，candidate连接已被拒绝、未进入后端；因此当前优先诊断W5500 socket0关闭/重新监听稳定性，candidate后端/TF为次级排查。
+
+- 当前新增最小只读`/api/status` lifecycle诊断（SR、ACK/DISCON、recovery）；host/目标构建已过，未烧录/实板，状态`[待确认]`。
+- lifecycle映像已通过反汇编并OpenOCD烧录/校验（3.275218 V）；当前等待物理断电重上电，因为烧录reset不会重新初始化TF。
+- 用户已物理冷启动：active2/candidate4/8 selected恢复，5 s间隔runtime/status与完整candidate selected为HTTP200，lifecycle无ACK timeout/recovery；网页实际及退出后二次验证仍待执行。
+
+- 本冷启动网页和退出后二次验证已完成：网页candidate896/8、外部Classic 8项GOOD、日志ACTIVE→STOPPED、规则/继电器安全读取通过；退出后八项独立API和ping均通过，manual 0/0安全POST开关也完整回读。lifecycle ACK timeout/recovery均0。
+- 范围边界：本次证明新版网页2.1 s串行及独立5 s交接路径；零间隔任意短连接稳定性仍`[未验证/未关闭风险]`，不写为已根治。

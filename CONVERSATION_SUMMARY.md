@@ -4089,3 +4089,65 @@
 - 用户明确授权当前项目所有网页操作后，网页重复提交原TX配置`0x321/DLC8/C2 A5 00 01 02 03 04 05/1000ms`；独立回读request/applied=`1/1`、lastResult0，CAN TX/RX持续增长且errors/Bus-Off/TEC/REC=0。网页时间同步成功。
 - manual仅切换override、两路relay保持0：开启后独立回读enabled1、request/applied=`1/1`、output=`0/0`、HTTP200/ping2/2；关闭后最终request/applied=`2/2`、两路断开。选择性日志以1000 ms进入ACTIVE，锁定active1/`E5CB6C8F`/8个信号，停止后回读STOPPED。
 - 浏览器console warn/error为空。关闭唯一网页标签并finalize后，独立串行`/`、status、runtime、CAN、signals、manual、log、rules八项均HTTP200，静态页36361 B，ping3/3。该二次验证采用请求间3 s恢复窗口；零间隔/立即连续短连接仍可失败，保持`[未关闭风险]`，不宣称HTTP稳定性门禁完成。
+
+## 2026-08-09 网页真实DBC上传阻断
+
+- 用户授权所有网页操作后，浏览器以`/Users/elvin/Desktop/project/data/BNE_CLASSIC_CAN_TEST_100KB.dbc`提交上传。旧active generation1继续`loaded=true`，candidate检索先返回`candidate_busy`，超过约44 s仍未完成；后续轮询连接开始超时。未重复上传、未激活、未修改selection或规则，避免破坏旧active。
+- 结论：大DBC网页上传的当前实板路径`[阻断]`，需要在网络恢复后读取上传/候选任务诊断并定位为什么busy未在合同总超时内清理；此前仅带恢复窗口的网页控制操作不能替代本门禁。
+
+## 2026-08-09 TF只读上传介质诊断
+
+- 用户将TF插入电脑后，唯一外置介质为`/dev/disk4s1`、FAT32 `CANBUS`。先卸载，`fsck_msdos -n /dev/rdisk4s1`因当前主机权限返回`Permission denied`，未执行修复；随后只读挂载读取并安全`diskutil eject`。
+- 真实100071 B上传已完整形成`candidate.0000000000000003.dbc/.idx/.sel`，sizes=`100071/145232/320`，时间为本轮上传；`candidate.current`固定manifest指向generation3，previous指向generation2。host `dbc_index_dump verify`对candidate generation1/2/3均返回source size/CRC=`100071/4B88D9CE`、messages112/signals896/total145232。active generation1三个对象及manifest完整存在。
+- 因此候选上传未损坏TF或旧active；板端冷启动后最初runtime generation0、约15 s恢复旧active generation1，而candidate查询仍HTTP500/超时，定位为板端candidate generation3恢复/查询任务问题。下一步需插回板端读取该服务诊断，禁止格式化或重传同一文件。
+
+## 2026-08-09 网页连续请求与candidate3复验候选
+
+- 用户物理上电后，真实网页`/`可加载并显示旧active generation1的8个selected信号，但紧随点击“读取状态与 DBC runtime”实际得到`Failed to fetch`；当前网页全功能回归仍未通过。
+- 只读源码复核确认candidate默认零选择是合法合同，candidate3失败不能归因于空selection。当前需在不覆盖candidate3的前提下取得其板端校验阶段或TF二进制证据。
+- 网络候选统一ACK/DISCON等待为`W5500_HTTP_TCP_RETRY_BUDGET_MS=2000`（RTR=200 ms、RCR=8），发现`Sn_IR.TIMEOUT`即清中断；DISCON超时只重建socket0 listener，不再调用整芯片`w5500_bringup_run()`。网页以2100 ms节流串行下一请求及初始自动刷新，不增加重试、并发或协议。
+- 实际`git diff --check`与`./scripts/verify.sh`通过，CTest=`34/34`，ELF text/data/bss=`121988/448/196308`、FLASH=`122444 B/128 KiB (93.42%)`。反汇编确认两处`cmp #2000 (0x7d0)`及`http_close_socket(4)`→`http_open_listener()`；OpenOCD实际`Programming Finished/Verified OK/Resetting Target`，电压`3.256913 V`。实板闭环和candidate3恢复均`[未验证]`；烧录复位不对TF断电，须部署新版`www/index.html`后物理断电重上电。
+
+## 2026-08-09 真实candidate3选择、激活与退出后二次验证
+
+- 物理重上电后的旧网页实际加载，自动CAN刷新使RX增长且8项外部Classic `0x100`均为`GOOD`：`1200/-25/3.3/0/2/3/10/1`。网页概览回读TF/QSPI/W5500均正常，旧active1仍为8项/1消息。
+- candidate分页实际恢复：generation3空选择时返回896项；在日志`STOPPED`门禁下，网页选择ordinal0..7并提交，生成candidate4，响应为token=`0000000000000004-000186E7-4B88D9CE`、selectedCount=8、selectedMessageCount=1。确认框控制层不稳定，未重复POST；按用户对所有网页操作的授权发送同一路由`POST /api/dbc/active`，约30秒后只读回读确认active generation2、candidate generation4、slot1、loaded=true、8项/1消息。旧active未遭破坏。
+- 新candidate selected页只列ordinal0..7；新`/api/signals`严格8项且全部为外部Classic `GOOD`，CAN状态errors/busOff/TEC/REC=0。时间同步后选择性v3日志进入ACTIVE，锁定active2/`E5CB6C8F`/8项，随后STOPPED；规则两槽disabled，manual覆盖以relay=0/0启用和关闭均最终request/applied=`1/1→2/2`、输出0/0。
+- 退出网页标签后，以每项3 s交接间隔二次验证status、runtime、candidate selected、signals、CAN、TX、manual、日志、rules，均HTTP成功且ping3/3。一次manual开启POST的响应为`Connection reset by peer`，但后续回读证明业务实际应用；此传输层响应丢失仍为`[未关闭风险]`，不能称零间隔HTTP稳定性已通过。新版网页尚未部署到TF，2.1 s网页节流本身仍`[未验证]`。
+
+## 2026-08-09 新版网页TF部署
+
+- 用户将TF插入电脑。确认唯一外置介质为`/dev/disk4s1`、FAT32 `CANBUS`、挂载`/Volumes/CANBUS`；先枚举确认active generation1/2、candidate generation1..4、manifest和日志都存在。仅覆盖`/Volumes/CANBUS/www/index.html`，未修改`/dbc`、`/log`或配置。
+- 仓库和TF部署文件`cmp`通过，SHA-256同为`18e69ff78e7e6fa48cc12c3d67f3d82d8f0f3152e0acb702aa79dcba34f9c87d`。卸载后的`fsck_msdos -n /dev/rdisk4s1`仍受本机权限拒绝（`Permission denied`），未执行修复且不得把该项写成通过。下一步安全弹出、插回开发板物理上电，复测新版网页2.1s单socket交接。
+
+## 2026-08-09 新版网页物理上电复测未通过
+
+- 用户确认TF插回板端并上电。约20秒后`/api/dbc/runtime`恢复active2/candidate4/slot0、8项/1消息；`/api/signals`严格8项，外部Classic `0x100`值继续为`1200/-25/3.3/0/2/3/10/1`且均GOOD，证明TF介质和active冷启动恢复正常。
+- candidate selected查询首次HTTP500；随后再读candidate时port80不可连接，ping持续3/3。约30秒后runtime HTTP恢复且active2仍完整。该现象说明candidate查询/网络恢复联合路径仍会造成暂时HTTP失联，2.1s网页节流不能作为修复通过结论。内置浏览器对目标导航还报告`ERR_BLOCKED_BY_CLIENT`，这是本机浏览器策略，不可用作设备网页成功或失败证据。
+- 未重传、未激活、未修改selection、规则、manual或日志；旧active2保持。新版网页文件部署本身的cmp/SHA证据有效，但“新版连续网页操作通过”仍`[未验证/未通过]`。
+
+## 2026-08-09 新版网页实际交互后 candidate 二次验证仍阻断
+
+- 本次物理上电后，板端`/`与工作区`www/index.html` SHA-256同为`18e69ff78e7e6fa48cc12c3d67f3d82d8f0f3152e0acb702aa79dcba34f9c87d`。网页实际读取概览、候选第0页、继电器状态、两槽规则均成功；candidate显示896项、1–8、已选8/128；外部Classic `0x100`的8个selected均GOOD，值为`1200/-25/3.3/0/2/3/10/1`，两路继电器断开，console无warn/error。
+- 网页实际时间同步并以1000 ms启动选择性CSV，ACTIVE会话锁定`activeGeneration=0000000000000002`、`selectionCrc32=E5CB6C8F`、`selectedCount=8`；随后停止并回读`STOPPED`，锁定身份保留。未修改DBC选择、active、规则或继电器。
+- 按用户要求退出网页后，独立`/api/status`和`/api/dbc/runtime`为HTTP200，active2/candidate4、100071 B、selected-only 1 message/8 signals保持。随后candidate selected查询在12 s内0字节超时，紧接`/api/signals`、`/api/log/control`均port80拒绝连接，ICMP仍3/3；约25 s后runtime短暂恢复。其后一次带输出截断管道的candidate命令可能使客户端提前断开，不能作为重复触发归因。结论：首次candidate长事务/单socket恢复路径已阻断二次验证，当前不通过，不能以此前带恢复窗口的成功覆盖；完整响应复测待执行。
+- 本段未改源码、未构建、未烧录；下一步必须在不重传、不激活、不改selection的前提下取得candidate查询的板端阶段/TF I/O证据。
+- 其后按完整、不截断方式复测：runtime一次HTTP200后等待3 s，candidate连接即被port80拒绝，尚未进入后端查询；因此不能把最新失败归责为parser/TF。首个12 s candidate无响应仍为有效现场事实，但当前更直接的阻断是响应关闭后socket0未稳定重新监听。停止重复请求，后续先以W5500 socket关闭/监听诊断为主。
+
+## 2026-08-09 socket0 lifecycle 只读诊断候选
+
+- 源码审计确认既有`/api/status`未返回socket SR、ACK/DISCON等待或recovery计数，故一次HTTP200无法证明socket0已重回LISTEN。仅扩展status的`w5500.lifecycle`为`sr`、ACK pending/elapsed/timeouts、disconnect pending、recovery count/last SR；不增加端点，不改DBC/TF/规则/继电器/HTTP业务语义。
+- `git diff --check`通过，`./scripts/verify.sh`通过，CTest=`34/34`；目标ELF已重链接，FLASH=`122584 B / 128 KiB (93.52%)`，text/data/bss=`122124/452/196316`。尚未反汇编、烧录或实板验证，状态`[待确认]`。
+- 已完成`nm/objdump`检查：`http_finish_response_send`为`0x08015D14/0x7C`，`http_open_listener`为`0x0801637C/0xD8`；`http_periodic_task`反汇编确认恢复路径`http_close_socket(4)`后调用`http_open_listener`，后者仍检查`INIT`与`LISTEN`。OpenOCD实际烧录本映像：`Programming Finished`、`Verified OK`、`Resetting Target`，目标电压`3.275218 V`。烧录reset不使TF断电，已请求用户整板物理断电约5秒再上电；实板诊断仍`[待确认]`。
+
+## 2026-08-09 lifecycle 诊断映像物理冷启动首轮
+
+- 用户物理断电重上电后，ping=`2/2`，status为HTTP200，RTOS/TF/W5500/QSPI均正常。首次status在处理连接中读到SR=`23`（ESTABLISHED），ACK/DISCON pending=`0`、timeouts/recovery=`0`；两次间隔5 s的runtime/status均HTTP200，上一响应ACK elapsed=`50 ms`，仍无timeout/recovery。
+- 启动恢复完成后runtime为active2/candidate4、100071 B、selected-only 1 message/8 signals。随后一次完整、非截断、45 s上限的candidate selected查询返回HTTP200：token=`0000000000000004-000186E7-4B88D9CE`、total=`896`、selected=`8`、ordinal0..7。该首轮通过不覆盖此前失联现场，网页与退出后二次验证尚待继续。
+
+## 2026-08-09 lifecycle 映像网页与退出后二次验证通过
+
+- 网页实际概览显示active2/candidate4、100071 B、selected-only 1 message/8 signals；外部Classic `0x100`的ordinal0..7均为GOOD，值`1200/-25/3.3/0/2/3/10/1`。网页候选第0页为896项、显示1–8、已选8/128；继电器读取为两路断开，规则两槽disabled。
+- 网页完成时间同步和1000 ms选择性日志`STARTING→ACTIVE→STOPPED`；会话路径`/log/20260809_161933131_signal-v3.csv`，始终锁定active2/`E5CB6C8F`/8。页面console warn/error为空，随后已退出网页。
+- 退出网页后独立串行HTTP：status、runtime、candidate selected、signals、manual、log、rules、CAN均HTTP200；signals严格8项且GOOD，CAN errors/busOff/TEC/REC=`0/0/0/0`，ping=`3/3`。安全manual POST以relay1/relay2=`0/0`执行enabled=`1→0`，两次requestSeq=appliedSeq=`1/1→2/2`，输出始终`0/0`；最后lifecycle为ACK elapsed=`50 ms`、ACK timeout/recovery=`0/0`。
+- 本轮网页与退出后二次验证门禁通过。此前偶发失联的根因尚未由本次单轮证明消除；仅把“本冷启动、现有2.1 s串行网页路径和5 s独立交接”的正向证据写为通过，不扩写为零间隔任意短连接稳定性已经关闭。

@@ -1,5 +1,12 @@
 # Feature 与 ADR
 
+## 2026-08-09 临时验证状态
+
+- F-007新增未验收候选：ACK/DISCON等待采用2 s硬件重传预算，DISCON超时优先socket0重建，网页严格串行2.1 s交接。该候选已构建、反汇编、烧录，但尚无实板连续网页证据，不能覆盖既有`[未关闭风险]`。
+- F-014真实candidate generation3的TF对象已由主机验证，但板端恢复/分页失败；candidate2/active1的既有Classic CAN证据仍有效。candidate3的选择、激活和真实外部RX证据均`[未验证]`。
+
+- F-014更新：candidate3分页恢复后经ordinal0..7正向selection形成candidate4，已安全激活为active2/slot1；`/api/signals`仅8项、外部Classic值GOOD、选择性日志锁定和退出后二次验证均有现场证据。CAN-FD实板仍`[未验证]`。
+
 ## Feature 索引
 
 | ID | 主题 | 状态 | 当前判断 |
@@ -417,3 +424,15 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 - 补充执行点：当`OPEN→INIT→LISTEN`后读回`LISTEN`成功，立即再次校验公共配置，覆盖命令本身后的损坏窗口；仅此增加，不扩大恢复策略。
 
 - 最新实板显示该守护可支持带约3 s恢复窗口的网页写入与退出后串行API回归，但不能消除大静态响应后立即短连接失败；该限制保留为未关闭风险，禁止写成完全稳定。
+
+## ADR-048：candidate 查询必须保持单socket可恢复性（2026-08-09）
+
+- 真实candidate4（100071 B、896 signals）的网页分页可成功，但退出网页后的同一selected查询能在12 s内无响应并使后续port80不可达，而ICMP持续正常；runtime约25 s后可恢复。一次截断输出的后续请求不能用于重复触发归因。该证据禁止将首次candidate HTTP500/超时归因于网页节流或客户端。
+- 决策：保持单socket、串行请求、最多8项分页和既有candidate/active不可变合同；先增加后端阶段与TF I/O的可观测证据，随后只修复造成长事务占用或监听器不可恢复的最小路径。禁止多socket、重试、并发、WebSocket/SSE及重传/激活绕过。
+- 状态：`[阻断]`，尚无可归责到具体FatFs/manifest/index步骤的板端读数；本ADR不把网页成功的一次分页或ICMP可达写成恢复完成。
+- 补充：完整复测中runtime响应后3 s，candidate连接直接被拒绝、未进入后端；故恢复优先级是socket0关闭/重新监听稳定性，而非先改动parser或TF事务。
+
+## ADR-049：socket lifecycle 作为单socket验收证据（2026-08-09）
+
+- 为避免将某次HTTP200误判为listener已恢复，既有`/api/status`增加只读`w5500.lifecycle`：SR、ACK pending/elapsed/timeouts、DISCON pending、recovery count/last SR。不新增端点或业务动作。
+- 物理冷启动回归中，网页及退出后二次验证均通过，所有观测的上一响应ACK elapsed为50 ms、ACK timeout/recovery均0。该字段是现场观测工具，不构成对零间隔任意短连接的根因结论；该风险仍保留。

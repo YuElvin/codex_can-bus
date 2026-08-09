@@ -135,3 +135,5 @@
 - W5500公共配置可在listener建立命令之后损坏；若只在OPEN前检查会留下窗口。对已冻结的单socket建监听器序列，至少在`LISTEN`状态读回成功后再做一次配置不变量检查。
 
 - 大静态HTML响应与随后立即短连接必须作为同一交接场景验证；“静态文件最终完整返回”与“下一API立即可达”是不同证据。若只能在约3 s后恢复，网页功能可记录为带恢复窗口可用，但HTTP稳定性不得关闭。
+
+- L-123：单socket现场验收中的“上一次请求已安全交接”必须可观测。将SR、ACK pending/elapsed/timeouts、DISCON pending和recovery计数加入既有状态快照后，才能把HTTP200与listener状态分开解释；当前轮的50 ms ACK且timeout/recovery为0只证明该轮正常交接，不能外推为零间隔短连接问题已根治。

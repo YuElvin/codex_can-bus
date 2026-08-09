@@ -139,6 +139,11 @@ let candidateQueryTimer = 0;
 let candidateRequestSeq = 0;
 let logControlEnabled = false;
 let logControlKnown = false;
+/* The firmware intentionally closes each HTTP/1.1 response. Keep the next
+ * browser request outside its bounded socket0 TCP teardown window; this is
+ * pacing, not a retry, and preserves the one-request-at-a-time contract. */
+const singleSocketRelistenMs = 2100;
+let nextRequestNotBefore = Date.now() + singleSocketRelistenMs;
 
 function show(message, kind = 'notice') { const node = $('notice'); node.className = kind; node.textContent = message; }
 function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
@@ -149,12 +154,15 @@ async function exclusive(label, work) {
   return request;
 }
 async function api(path, options = {}) {
-  const response = await fetch(path, Object.assign({cache:'no-store'}, options));
-  const text = await response.text();
-  let payload;
-  try { payload = JSON.parse(text); } catch (_) { throw new Error(path + ' 返回非 JSON：' + text); }
-  if (!response.ok || !payload.ok) { throw new Error(path + ' HTTP ' + response.status + '：' + text); }
-  return payload.data;
+  const waitMs=Math.max(0,nextRequestNotBefore-Date.now()); if (waitMs) await sleep(waitMs);
+  try {
+    const response = await fetch(path, Object.assign({cache:'no-store'}, options));
+    const text = await response.text();
+    let payload;
+    try { payload = JSON.parse(text); } catch (_) { throw new Error(path + ' 返回非 JSON：' + text); }
+    if (!response.ok || !payload.ok) { throw new Error(path + ' HTTP ' + response.status + '：' + text); }
+    return payload.data;
+  } finally { nextRequestNotBefore=Date.now()+singleSocketRelistenMs; }
 }
 function addCell(row, value) { const cell=document.createElement('td'); cell.textContent=value; row.append(cell); }
 function formatCanId(value) { const id=Number(value); return Number.isInteger(id) && id>=0 && id<=0x7ff ? '0x'+id.toString(16).toUpperCase().padStart(3,'0') : String(value ?? '—'); }
@@ -459,7 +467,7 @@ $('candidate-refresh').onclick=()=>loadCandidatePage(0); $('candidate-prev').onc
 $('candidate-filter').onchange=()=>loadCandidatePage(0);
 $('candidate-query').oninput=()=>{ clearTimeout(candidateQueryTimer); candidateQueryTimer=setTimeout(()=>loadCandidatePage(0),300); };
 document.addEventListener('visibilitychange',()=>{ if (document.hidden) pauseCanForHidden(); else if (canResumeOnVisible) { canResumeOnVisible=false; startCan(); } });
-if (document.hidden) canResumeOnVisible=true; else canInitialTimer=setTimeout(()=>{ canInitialTimer=0; startCan(); },300);
+if (document.hidden) canResumeOnVisible=true; else canInitialTimer=setTimeout(()=>{ canInitialTimer=0; startCan(); },singleSocketRelistenMs);
 </script>
 </body>
 </html>

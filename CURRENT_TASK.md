@@ -8,6 +8,11 @@
 
 ## 当前阶段
 
+- 2026-08-09网络候选已烧录：此前网页静态加载后紧随概览读取曾`Failed to fetch`，随后candidate3分页恢复并已完成selection/activation闭环。源码把ACK/DISCON期限统一为2000 ms、DISCON超时仅重建socket0，并让网页按2100 ms单请求节流；`verify.sh`=34/34、FLASH=122444 B且OpenOCD验证通过。当前TF仍在板端，下一步仅需断电取卡部署新版`/www/index.html`、插回物理重上电，复测网页节流；不得格式化或重传历史candidate3。
+- 2026-08-09后续实证已关闭candidate3阻断：网页完成generation3的分页，选择ordinal0..7生成candidate4并激活为active2；退出网页后二次验证的runtime/candidate/signals/CAN/manual/log/rules一致，外部Classic 8项均GOOD。当前仅待部署新版网页后对2.1s节流实板复测；仍保留一次manual POST响应RST的网络风险，不把间隔3s成功扩大为零间隔稳定。
+- 2026-08-09新版`www/index.html`已仅覆盖写入TF并以`cmp`和SHA-256=`18e69ff78e7e6fa48cc12c3d67f3d82d8f0f3152e0acb702aa79dcba34f9c87d`核对；`fsck_msdos -n`仍因主机权限被拒，未修复。等待安全插回板端物理上电后，验证网页2.1s节流和退出后二次回读。
+- 2026-08-09物理上电后active2和8项外部Classic GOOD已恢复，但candidate selected查询HTTP500后使80端口暂时不可达、约30秒再恢复。新版网页节流实板验收未通过；必须先诊断candidate查询与W5500失联链路，禁止以网页文件部署或3秒间隔API成功替代。
+
 - 2026-08-09当前网页退出前后双轮回归未能全通过：DBC/CAN/selected signals、candidate分页/搜索、时间、日志、TX和规则只读均通过，但两轮均在manual开启成功后复现关闭提交不生效且port80卡死，必须`reset run`恢复。最终板端已恢复manual disabled/两路0、log STOPPED、runtime active1/candidate2/8 signals；退出网页后的独立串行API均HTTP200。当前下一项为诊断该重复HTTP/socket失败，不能用复位后成功覆盖失败窗口。
 - 2026-08-09阶段17“大 DBC selected-only闭环”A0-H（Classic CAN范围）已通过。真实链为candidate generation2、active generation1、sourceSize/CRC=`100071/4B88D9CE`、selection CRC=`E5CB6C8F`、8个selected/1个消息；外部标准Classic CAN正向解码、未选隔离、STALE、分页API、选择性v3 CSV/meta、日志锁/吞吐、实体FAT只读一致性、活动日志物理掉电恢复、可控TF sync失败及active write/rename/readback/runtime-publish失败保持旧runtime均有现场证据。H1 point3首轮暴露并修复了rollback路径归属污染，修复后point3–5均冷启动恢复；正式默认OFF映像已重烧并烟测。CAN-FD实板保持`[未验证]`，不伪造为已通过且不阻断本轮Classic CAN完成边界。
 - 2026-08-01阶段17“大 DBC selected-only闭环”A0-F门禁客观通过，G源码、host、最终固件与实板收口正在进行。恢复双ID外部输入后，最终固件总RX=`2826→3098`、selected matched=`1413→1549`、updates=`11304→12392`，准确满足总RX增量272、selected增量136、updates=`136×8`；page0八项为预期raw/value且`GOOD`、page1仍全`MISSING`。v3日志已在这些`GOOD`值下进入ACTIVE，锁定active generation7、selection CRC=`62BA0D66`、count128和`/log/20260801_175230000_signal-v3.csv`。下一动作需要用户停止`0x100`、保持`0x110`，取得超过3000 ms的STALE和值保持证据；随后停止会话、取卡只读核验CSV/meta。此前MISSING/分页/过滤/400、128项/1000 ms=`422 rate_limit`和日志期间写操作409均已实测。最终`./scripts/verify.sh`为CTest=`34/34`，Flash=`121708 B`、RAM_D1=`196664 B`，ELF `text/data/bss=121256/444/196284`，ELF/HEX SHA-256=`97cd14af626ecb7951f1f012148819f922c688b339b1f9185d66fbd630afc10b`/`963fa24f74a9808bc0687ab2ab4e5cd7ba2e7d3c5d1b912ae5794c08816e5b7d`；H和CAN-FD实板仍`[未验证]`。
@@ -209,3 +214,32 @@
 
 - 已把配置不变量校验扩展到空闲LISTEN轮询；host、构建、反汇编和烧录均通过，尚无本候选实板验收。
 - `[阻断]` 再次烧录后的MCU reset不重置TF供电，需整板物理重启后验证；外部CAN发送和受控网页提交仍待用户确认。
+
+## 2026-08-09 当前阻断：真实DBC网页上传未完成
+
+- 已按用户授权提交100071 B真实DBC，旧active保持generation1 loaded；candidate处于busy超过正常窗口后连接超时。禁止重复上传、激活或selection变更。
+- 下一步是恢复网络后读取上传/候选诊断、确认busy所有权及120 s总超时清理；在此之前网页全功能验收不成立。
+
+## 2026-08-09 当前阻断：candidate 查询失联复发
+
+- 最新物理上电后的新版网页被板端正确服务；网页概览、candidate分页、规则/继电器读取和选择性日志启停均有现场证据，runtime为active2/candidate4、8 selected且外部Classic RX正常。
+- `[阻断]` 退出网页后的candidate selected查询12 s无响应，随后port80拒绝连接而ICMP继续正常；runtime约25 s后可恢复。后续一次截断输出的测试不能用于重复触发归因。不得宣布网页/HTTP稳定性或完整二次验证通过。
+- 下一步仅诊断candidate后端阶段与TF I/O；禁止重传、激活和selection变更。
+- 补充：完整复测中runtime HTTP200后等待3 s，candidate连接即被拒绝、未进入后端。诊断优先级调整为socket0关闭后稳定重新监听；candidate后端/TF诊断保留为次级，禁止重复压力请求。
+
+## 2026-08-09 当前候选：socket0 lifecycle 可观测性
+
+- 仅在既有`/api/status`加入SR、ACK/DISCON pending和recovery诊断字段，目标是把响应关闭后是否已回LISTEN变为可验证事实；不改变业务路径。
+- host/目标构建门禁通过，尚待反汇编、烧录和物理上电实测。当前目标仍为网页验证与退出后二次验证，不得视为修复完成。
+- 反汇编已确认socket close→open listener与INIT/LISTEN读回；诊断映像已OpenOCD Verified并reset（3.275218 V）。`[待确认]`：烧录reset未对TF断电，等待用户物理冷启动后读取lifecycle并继续网页二次验证。
+
+## 2026-08-09 lifecycle 冷启动首轮通过
+
+- 用户已物理冷启动；active2/candidate4/8 selected恢复，间隔5 s的runtime/status和完整candidate selected均HTTP200。lifecycle在上一响应后ACK elapsed=50 ms、timeout/recovery=0。
+- 网页实际交互与退出后二次验证尚未重跑，稳定性门禁仍`[待确认]`，不可宣布最终通过。
+
+## 2026-08-09 本冷启动网页与退出二次验证通过
+
+- 网页概览、candidate分页（896/8）、外部Classic selected-only 8项GOOD、继电器/规则读取和选择性日志ACTIVE→STOPPED均通过，console无warn/error；日志锁定active2/`E5CB6C8F`/8。
+- 退出网页后status/runtime/candidate/signals/manual/log/rules/CAN独立串行HTTP均200、ping3/3；manual安全0/0开关request/applied=`1/1→2/2`且输出始终0。lifecycle无ACK timeout/recovery。
+- 当前验证门禁通过；零间隔任意短连接稳定性仍非本轮证明范围，保留`[未验证/未关闭风险]`。下一步为Git差异审计与提交，不再重复写操作。

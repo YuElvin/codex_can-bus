@@ -289,7 +289,10 @@ extern SelectedSignalLogSession g_selected_signal_log_session;
 #define W5500_HTTP_HANDLE_OK 0
 #define W5500_HTTP_HANDLE_ERROR 1
 #define W5500_HTTP_HANDLE_WAIT 2
-#define W5500_HTTP_DISCONNECT_RECOVERY_TIMEOUT_MS 500u
+/* RTR=200 ms and RCR=8 make the W5500 TCP retry window about 1.8 s. Keep
+ * application teardown outside that window: closing or resetting socket0 at
+ * 500 ms can discard a response which the peer has not acknowledged yet. */
+#define W5500_HTTP_TCP_RETRY_BUDGET_MS 2000u
 #define W5500_HTTP_IDLE_CONNECTION_TIMEOUT_MS 100u
 
 typedef struct {
@@ -743,7 +746,7 @@ static int http_finish_response_send(void) {
   }
   /* SEND_OK only proves that W5500 accepted the SEND command. Keep the
    * response connection alive until TCP ACKs release the complete TX buffer;
-   * the poll path remains bounded by the existing 500 ms recovery timeout. */
+   * the poll path remains bounded by the configured TCP retry budget. */
   http_begin_ack_wait();
   return 0;
 }
@@ -853,6 +856,7 @@ static size_t build_status_body(char *body, size_t len) {
                           len,
                           "{\"ok\":true,\"data\":{\"rtos\":{\"started\":%lu,\"ready\":%lu,\"loop\":%lu},"
                           "\"w5500\":{\"status\":%d,\"link\":%lu,\"version\":%lu,\"phycfgr\":%lu,\"lastNonclosedClose\":%lu,\"socketIr\":%lu,"
+                          "\"lifecycle\":{\"sr\":%lu,\"ackPending\":%lu,\"ackElapsedMs\":%lu,\"ackTimeouts\":%lu,\"disconnectPending\":%u,\"recoveryCount\":%lu,\"recoverySr\":%lu},"
                           "\"httpTrace\":{\"seq\":%lu,\"active\":%lu,\"mutexWaitStartTick\":%lu,\"mutexWaitEndTick\":%lu,\"mutexWaitMs\":%lu,\"rxReadyTick\":%lu,\"rxSize\":%lu,\"handleEnterTick\":%lu,\"recordTick\":%lu,\"handlerReturnTick\":%lu,\"handlerResult\":%lu,\"disconnectStartTick\":%lu,\"disconnectEndTick\":%lu,\"handleWaitCount\":%lu,\"handleWaitFirstTick\":%lu,\"handleWaitLastRxSize\":%lu,\"sendCount\":%lu,\"lastSendLen\":%lu,\"txTotal\":%lu,\"postSendokTxFsrResult\":%lu,\"postSendokTxFsrValue\":%lu,"
                           "\"t\":{\"p\":%lu,\"g\":%lu,\"ss\":%lu,\"se\":%lu,\"is\":%lu,\"ie\":%lu,\"rs\":%lu,\"re\":%lu,\"bs\":%lu,\"be\":%lu,\"cs\":%lu,\"ce\":%lu,\"us\":%lu,\"ue\":%lu,\"hs\":%lu,\"hi\":%lu,\"hk\":%lu}}},"
                           "\"tf\":{\"status\":%d},\"qspi\":{\"status\":%d,\"jedec\":%lu}}}",
@@ -865,6 +869,13 @@ static size_t build_status_body(char *body, size_t len) {
                           (unsigned long)g_w5500_phycfgr,
                           (unsigned long)g_w5500_http_last_nonclosed_close,
                           (unsigned long)g_w5500_http_socket_ir,
+                          (unsigned long)g_w5500_http_socket_sr,
+                          (unsigned long)g_w5500_http_ack_wait_pending,
+                          (unsigned long)g_w5500_http_ack_wait_elapsed_ms,
+                          (unsigned long)g_w5500_http_ack_wait_timeout_count,
+                          (unsigned)g_w5500_http_disconnect_pending,
+                          (unsigned long)g_w5500_http_recovery_count,
+                          (unsigned long)g_w5500_http_recovery_last_sr,
                           (unsigned long)g_w5500_http_trace_seq,
                           (unsigned long)g_w5500_http_trace_active,
                           (unsigned long)g_w5500_http_trace_mutex_wait_start_tick,
@@ -4101,7 +4112,11 @@ int w5500_http_status_poll(void) {
       }
       return 0;
     }
-    if (elapsed_ms >= W5500_HTTP_DISCONNECT_RECOVERY_TIMEOUT_MS) {
+    if ((ir_result == W5500_OK && (ir & W5500_S0_IR_TIMEOUT) != 0u) ||
+        elapsed_ms >= W5500_HTTP_TCP_RETRY_BUDGET_MS) {
+      if (ir_result == W5500_OK && (ir & W5500_S0_IR_TIMEOUT) != 0u) {
+        (void)s0_write_u8(W5500_S0_IR, W5500_S0_IR_TIMEOUT);
+      }
       ++g_w5500_http_ack_wait_timeout_count;
       g_w5500_http_ack_wait_pending = 0u;
       g_w5500_http_ack_wait_start_tick = 0u;
@@ -4143,13 +4158,20 @@ int w5500_http_status_poll(void) {
       return http_open_listener();
     }
     const uint32_t elapsed_ms = HAL_GetTick() - g_w5500_http_disconnect_pending_start_tick;
-    if (elapsed_ms >= W5500_HTTP_DISCONNECT_RECOVERY_TIMEOUT_MS) {
+    if ((ir_result == W5500_OK && (ir & W5500_S0_IR_TIMEOUT) != 0u) ||
+        elapsed_ms >= W5500_HTTP_TCP_RETRY_BUDGET_MS) {
+      if (ir_result == W5500_OK && (ir & W5500_S0_IR_TIMEOUT) != 0u) {
+        (void)s0_write_u8(W5500_S0_IR, W5500_S0_IR_TIMEOUT);
+      }
       g_w5500_http_recovery_last_sr = sr;
       ++g_w5500_http_recovery_count;
       g_w5500_http_disconnect_pending = 0u;
       g_w5500_http_disconnect_pending_start_tick = 0u;
       http_trace_finish();
-      if (w5500_bringup_run() != 0) {
+      /* This is a socket lifecycle failure, not evidence that common W5500
+       * network registers are corrupt. Reopen only socket0 so PHY/MAC/ARP
+       * state and the configured retry budget remain intact. */
+      if (http_close_socket(4u) != 0) {
         g_w5500_http_status = 6u;
         ++g_w5500_http_error_count;
         return 1;
@@ -4164,15 +4186,6 @@ int w5500_http_status_poll(void) {
     return http_open_listener();
   }
   if (sr == W5500_S0_SR_LISTEN) {
-    /* A listener can remain locally healthy while the common network
-     * registers are corrupted between connections. Check the frozen
-     * configuration before accepting the next SYN; the port helper writes
-     * nothing when every field already matches. */
-    if (http_ensure_network_config() != 0) {
-      g_w5500_http_status = 2u;
-      ++g_w5500_http_error_count;
-      return 1;
-    }
     g_w5500_http_status = 0u;
     return 0;
   }
