@@ -4225,3 +4225,18 @@
 - host `test_selected_signal_log`、完整`./scripts/verify.sh`均通过（CTest=`34/34`）；最终STM32构建FLASH=`122752 B (93.65%)`、RAM_D1=`196696 B`、ELF text/data/bss=`122292/452/196308`。目标ELF符号和反汇编确认`signal_log_task`经小片段追加写入header与数据行，没有128项自动数组；OpenOCD烧录显示`Programming Finished`、`Verified OK`、`Resetting Target`。
 - 用户物理重上电后的恢复窗口结束时，`/api/status`的TF为status=0，runtime为active generation3、selectedOnly、8 signals；`/api/signals`八项均GOOD。以1000 ms创建`/log/20260809_222113000_signal-v4.csv`，进入ACTIVE后安全停止至STOPPED。取卡只读识别为`/dev/disk4s1`的`CANBUS`卷，CSV为1008 B、meta为1032 B。
 - 标准CSV解析实体文件：header恰为9列，首字段`datetime`，后8列依次为锁定的8个`ClassicCanTest_BattMod_001.*` key；12条数据行均为9列，时间戳均符合UTC ISO-8601毫秒格式，首条数值为`1200,-25,3.3,0,2,3,10,1`。meta记录`csvFormat=signal-v4`、active/candidate=`3/8`、selection CRC=`E5CB6C8F`、selectedCount=8、rowsWritten=12、rowsDropped/lateSamples/writeFailures=`0/0/0`、cleanClose=true。此轮关闭用户要求的正常停止宽表格式验收；v4物理掉电尾行/恢复仍`[未验证]`。
+
+## 2026-08-10 网页响应时间与稳定性优化完成
+
+- 基线确认candidate普通目录约18.8 s、精确搜索同量级，selection同步POST约79.41 s，长TF事务会占据单socket并使网页看似卡死。最小实现包括：candidate空搜索快速分页/页内record读取、generation级index/query缓存、启动恢复去重、已验证active catalog复用、静态HTML预载RAM、1024 B HTTP分片、HTTP任务10 ms/配置检查100 ms，以及前端120 ms读/350 ms写节拍。4 KiB TF缓冲实板导致锁死，已撤销并保持32字节对齐512 B。
+- selection和active提交改为后台持久化并立即HTTP202；前端有界轮询token/runtime，普通GET传输失败仅重试一次，写请求绝不自动重试。实测selection POST约5.5–5.7 ms、后台44–58 s；active POST约10.4 ms、后台约86–115 s。激活期间40/40 CAN/runtime请求HTTP200，普通功能未被冻结。candidate普通页约0.09–0.15 s，搜索约0.756 s，冷启动首次可用约16.94 s。
+- 最终`./scripts/verify.sh`为CTest=`34/34`，FLASH/RAM_D1=`123012/247040 B`，text/data/bss=`122552/452/246628`；反汇编确认selection/active直接返回202。最终HEX SHA-256=`539a6f77b8da928651bbee3a121349fd4f3a295c3c5d4afdfced9eae6af46011`；OpenOCD烧录`Programming Finished/Verified OK/Resetting Target`、约3.272 V。
+- 最终网页SHA-256=`f706071375ba7565c89d30a95a94e6cdd45bc21f6d6f5e0cccccd7b0fb9486e4`，TF部署经`cmp`、SHA-256、JS语法、FAT只读检查及安全弹出，板端根页面回读同一内容。应用内浏览器直连`http://192.168.1.88/`可见完整`CAN 网关控制台`，不再是空白页。
+
+## 2026-08-10 真实网页两轮所有功能验收
+
+- 第一轮完整执行：概览/W5500、CAN自动刷新及TX读写、manual读写、时间同步、日志控制、规则保存/删除/恢复、candidate分页/搜索/筛选、ordinal7清除/恢复、真实100071 B DBC文件选择与上传、前8项selection、active激活。最终第一轮active5/candidate18、8 signals，CAN正常且8项RX均GOOD；随后关闭第一轮标签并finalize，确认无残留页面。
+- 第二轮重新新建页面，重复上述所有控制面和状态恢复；真实DBC再次上传，selection形成candidate22，active异步激活后回读active6/candidate22、CRC=`E5CB6C8F`、1 message/8 signals、lastResult=0。激活后台期间网页仍完成CAN读取；激活后CAN正常、8项RX为GOOD。第二轮结束后停止自动刷新并退出网页。
+- 最终独立API审计：CAN TX保持enabled/`0x321`/DLC8/`C2 A5 00 01 02 03 04 05`/1000 ms、requestSeq=appliedSeq=2/result0；manual disabled、requestSeq=appliedSeq=2、输出0/0；日志disabled/STOPPED；规则slot0恢复为PackVoltage/relay1/threshold1300/on/priority1，slot1 disabled；CAN errors/busOff/TEC/REC=0。W5500 link/version=`1/4`，network repair/failure、ACK timeout、recovery均0。
+- 稳定性循环：根页面20次和status/CAN/TX/manual/log/rules/runtime/candidate各10次，共100次全部HTTP200。根页面平均/最大=`284.796/288.737 ms`，普通API平均约`9.906–14.452 ms`、最大`20.512 ms`，candidate page0平均/最大=`141.732/146.285 ms`。本轮证明当前单客户端串行网页和目标接口循环稳定；并发多客户端、网络故障注入及后台TF事务本身进一步缩短不在本轮完成结论内。
+- 用户随后明确要求“提交推送”，已授权将本轮源码、测试、网页和治理记录一并提交并推送到当前`codex/W5500`分支；准确提交标识以Git记录为准。

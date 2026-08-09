@@ -140,9 +140,13 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_recover(
   uint64_t *next_generation);
 
 /*
- * Synchronous, non-reentrant DbcTask APIs.  Each call holds the existing FatFs
- * mutex, fully validates current and its referenced files, and releases all
- * files before returning.  The catalog result contains at most eight items.
+ * Synchronous, non-reentrant DbcTask APIs.  Recovery/publish fully validates
+ * the immutable generation and seeds a generation-scoped query cache.  A
+ * healthy catalog query rechecks the manifest bytes, selection CRC/identity,
+ * index size, and every record it consumes; any mismatch invalidates the cache
+ * and falls back to full referenced-file verification.  Each call holds the
+ * existing FatFs mutex and releases all files before returning.  The catalog
+ * result contains at most eight items.
  */
 LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_query(
   const DbcCandidateCatalogQuery *query,

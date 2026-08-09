@@ -394,3 +394,11 @@ F-75一期Web/手动继电器源码已完成、未烧录：可追溯TF部署源�
 - 本冷启动网页和退出后二次验证已完成：网页candidate896/8、外部Classic 8项GOOD、日志ACTIVE→STOPPED、规则/继电器安全读取通过；退出后八项独立API和ping均通过，manual 0/0安全POST开关也完整回读。lifecycle ACK timeout/recovery均0。
 - 范围边界：本次证明新版网页2.1 s串行及独立5 s交接路径；零间隔任意短连接稳定性仍`[未验证/未关闭风险]`，不写为已根治。
 - Git：`c011c5f Verify W5500 single-socket lifecycle`已推送至`origin/codex/W5500`。
+
+## 2026-08-10 网页响应与双轮稳定性状态
+
+- candidate backend改为generation级已验证缓存、页内record读取、空搜索快速分页及启动恢复去重；静态网页在TF恢复前预载到RAM，HTTP响应分片升至1024 B，HTTP任务/配置检查节拍分别为10/100 ms。512 B TF缓冲保持32字节对齐；4 KiB多扇区实验会造成TF锁死，已完整撤销。
+- selection和active持久化改为后台事务：HTTP POST在约5–10 ms返回202，前端以有界轮询等待token/runtime变化，写请求不自动重试；普通GET仅在传输失败时重试一次。此设计缩短的是用户可见阻塞和socket占用，不把仍需约44–58 s/86–115 s的TF后台事务写成已经变快到毫秒级。
+- 最终固件/网页已分别以HEX SHA-256=`539a6f77...6011`和HTML SHA-256=`f7060713...86e4`部署。统一验证CTest=`34/34`、目标反汇编、OpenOCD Verified、TF `cmp`/哈希/FAT只读检查均通过。
+- 两轮真实页面均完整覆盖所有控制面；第一轮关闭全部网页标签后才新开第二轮。两轮各自都执行真实DBC上传、前8项selection提交和active激活，最终runtime为active6/candidate22、100071 B、1 message/8 signals、CRC=`E5CB6C8F`。CAN正常且8项RX为GOOD，最终manual/log/rules/TX配置均恢复既定安全状态。
+- 最终100次HTTP循环零失败；普通API平均约9.9–14.5 ms，candidate page0约141.7 ms，根页面约284.8 ms。首次冷启动candidate仍约16.94 s，精确搜索约0.756 s，后台持久化仍是长事务；这些是已明确保留的性能边界，不是当前阻断。

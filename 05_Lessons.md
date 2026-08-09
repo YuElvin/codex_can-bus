@@ -143,3 +143,11 @@
 - L-125：前端的“未知”状态不能被误作“禁止用户准备操作”。对candidate selection，日志未知应允许浏览、翻页和跨页编辑，只在提交前串行读取日志状态并保留后端ACTIVE门禁；对规则，活动signalKey目录应异步提供建议而非禁用保存，直接输入仍由后端活动DBC/definition-hash校验。分页渲染只能在candidate token改变时清空待提交set/clear，不能在换页时丢弃用户编辑。
 
 - L-126：宽表日志不能把“每个信号一个写计数”沿用为“每行一个采样”。必须先流式写完整 header（`datetime`加锁定 key），再把每个采样写成一条固定列数的数据行，并只在该行换行成功后递增`rowsWritten`。实体核验应以标准CSV解析同时交叉 header key、每行列数、UTC时间、meta selectedCount/rowsWritten/cleanClose；HTTP STOPPED或肉眼首行不足以证明列没有错位。
+
+- L-127：大DBC分页不能先读全量record再丢弃非本页数据。无搜索时应先以index元数据计算匹配/分页，只读取当前页record；generation级缓存必须同时校验manifest、selection、index尺寸/CRC来源，缓存失配就回退完整验证。搜索天然需要全扫描，必须单独量测并如实保留边界。
+
+- L-128：HTTP快速受理与TF事务完成是两种证据。selection/active返回202只能证明请求已校验并排队，必须继续轮询candidate token/runtime并核对generation、CRC、selected数和lastResult；写请求不能因传输错误自动重试。将长TF持久化移出HTTP等待可提高页面响应稳定性，但不能写成底层写入只需几毫秒。
+
+- L-129：STM32/FatFs缓冲扩大不是免费优化。4 KiB多扇区实验即使理论上减少调用次数，也可能破坏当前DMA/cache/驱动合同并造成TF锁死；必须用实板正反例决定，失败方案立即恢复到明确32字节对齐的512 B，并重新完成构建、烧录和冷启动验证。
+
+- L-130：网页“所有功能”验收需要状态恢复和会话边界。每轮应覆盖真实文件选择、上传、selection、激活及所有控制面，写后以独立GET回读；第一轮关闭全部标签后再新建第二轮，最后还要用接口循环和W5500 lifecycle计数审计。页面提示、HTTP202或单次成功都不能替代最终runtime与安全状态。

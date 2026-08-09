@@ -246,3 +246,11 @@
 - 退出网页后status/runtime/candidate/signals/manual/log/rules/CAN独立串行HTTP均200、ping3/3；manual安全0/0开关request/applied=`1/1→2/2`且输出始终0。lifecycle无ACK timeout/recovery。
 - 当前验证门禁通过；零间隔任意短连接稳定性仍非本轮证明范围，保留`[未验证/未关闭风险]`。下一步为Git差异审计与提交，不再重复写操作。
 - `c011c5f`已推送至`origin/codex/W5500`；工作树收口检查待完成。
+
+## 2026-08-10 网页响应与稳定性优化已完成双轮实板验收
+
+- 当前目标“减小网页所有操作响应时间并提高响应稳定性”已完成实现、构建、烧录、TF网页部署和两轮真实浏览器验收。第一轮覆盖概览、CAN、manual、时间/日志、规则、candidate分页/搜索/筛选/selection、真实100071 B DBC上传与激活；第一轮结束后已关闭全部网页标签，再新开页面完整执行第二轮，第二轮结束后同样退出网页。
+- 最终固件HEX SHA-256=`539a6f77b8da928651bbee3a121349fd4f3a295c3c5d4afdfced9eae6af46011`；`./scripts/verify.sh`为CTest=`34/34`，text/data/bss=`122552/452/246628`，FLASH=`123012 B (93.85%)`、RAM_D1=`247040 B (47.12%)`。反汇编确认selection和active提交直接返回HTTP202，不同步等待TF事务；OpenOCD显示`Programming Finished/Verified OK/Resetting Target`、电压约3.272 V。
+- 最终网页SHA-256=`f706071375ba7565c89d30a95a94e6cdd45bc21f6d6f5e0cccccd7b0fb9486e4`，TF写入后经`cmp`、SHA-256、JS语法、只读FAT检查和安全弹出，板端`GET /`回读同一哈希。candidate普通分页由历史约18.8 s降为约0.09–0.15 s，精确搜索约0.756 s；冷启动candidate首次可用约16.94 s。selection/active POST约5–10 ms即202，后台持久化仍分别约44–58 s和86–115 s，网页轮询期间普通CAN读取保持可用。
+- 最终100次稳定性循环全部HTTP200：根页面20次平均/最大=`284.796/288.737 ms`；status、CAN、TX、manual、log、rules、runtime各10次平均约`9.906–14.452 ms`、最大`20.512 ms`；candidate page0十次平均/最大=`141.732/146.285 ms`。末态W5500 link/version=`1/4`，network repair/failure、ACK timeout、recovery均0；CAN errors/busOff/TEC/REC=0，manual disabled且输出0/0，日志STOPPED，规则slot0已恢复，runtime active6/candidate22/8 signals/`E5CB6C8F`。
+- 当前无硬件阻断。用户已明确授权将本轮源码、网页、测试和治理记录一并提交并推送到`codex/W5500`；准确提交标识以Git记录为准。

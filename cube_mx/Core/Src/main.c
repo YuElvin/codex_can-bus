@@ -1328,7 +1328,7 @@ static void http_periodic_task(void *argument)
     }
     w5500_mutex_give();
     g_http_task_loop_count++;
-    vTaskDelay(pdMS_TO_TICKS(50u));
+    vTaskDelay(pdMS_TO_TICKS(10u));
   }
 }
 
@@ -1600,7 +1600,9 @@ static void bringup_default_task(void *argument)
     g_tf_card_bringup_status = -1;
     Error_Handler();
   }
-  (void)w5500_http_recover_large_dbc_candidate();
+  (void)w5500_http_preload_static_index();
+  const int candidate_recovery_result =
+    w5500_http_recover_large_dbc_candidate();
   bringup_print_status("init");
   g_freertos_bringup_complete = 1u;
 
@@ -1704,10 +1706,12 @@ static void bringup_default_task(void *argument)
   }
   rule_file_load_from_tf();
   (void)w5500_http_recover_large_dbc_active();
-  /* Candidate recovery can observe a transient TF state before the later
-   * active/runtime recovery sequence. Retry after that sequence so a valid
-   * candidate manifest is not left unavailable for the whole boot. */
-  (void)w5500_http_recover_large_dbc_candidate();
+  if (candidate_recovery_result != 0) {
+    /* Retry only an actual early recovery failure. A successful candidate
+     * snapshot is immutable across active/runtime recovery, so revalidating
+     * all candidate files here only extends the TF lock window. */
+    (void)w5500_http_recover_large_dbc_candidate();
+  }
   if (watchdog_start() != 0) {
     Error_Handler();
   }

@@ -90,30 +90,59 @@ DbcCandidateCatalogStatus dbc_candidate_catalog_query(
   page->page = query->page;
   page->page_size = query->page_size;
   const uint64_t skip = (uint64_t)query->page * query->page_size;
+  const bool matched_total_known = query->query_length == 0u;
+  if (matched_total_known) {
+    switch (query->selected_filter) {
+      case DBC_CANDIDATE_FILTER_ALL:
+        page->matched_total = summary->signal_count;
+        break;
+      case DBC_CANDIDATE_FILTER_SELECTED:
+        page->matched_total = selection->selected_count;
+        break;
+      case DBC_CANDIDATE_FILTER_UNSELECTED:
+        page->matched_total =
+          (uint16_t)(summary->signal_count - selection->selected_count);
+        break;
+      default:
+        return DBC_CANDIDATE_CATALOG_INVALID_ARGUMENT;
+    }
+  }
   uint32_t matched = 0u;
   for (uint16_t ordinal = 0u; ordinal < summary->signal_count; ++ordinal) {
-    if (dbc_catalog_index_read_signal(index, summary, ordinal,
-                                      &workspace->signal) !=
-        DBC_CATALOG_INDEX_OK) {
+    const bool selected = dbc_selection_v1_is_selected(selection, ordinal);
+    if (!filter_matches(query->selected_filter, selected)) {
+      continue;
+    }
+    const bool page_needs_item = (uint64_t)matched >= skip &&
+                                 page->item_count < query->page_size;
+    if ((query->query_length != 0u || page_needs_item) &&
+        (dbc_catalog_index_read_signal(index, summary, ordinal,
+                                       &workspace->signal) !=
+           DBC_CATALOG_INDEX_OK ||
+         workspace->signal.ordinal != ordinal ||
+         workspace->signal.key[0] == '\0')) {
       return DBC_CANDIDATE_CATALOG_IO_FAILED;
     }
-    const bool selected = dbc_selection_v1_is_selected(selection, ordinal);
-    if (!filter_matches(query->selected_filter, selected) ||
+    if (query->query_length != 0u &&
         !query_matches(workspace->signal.key, query->query,
                        query->query_length)) {
       continue;
     }
-    if ((uint64_t)matched >= skip &&
-        page->item_count < query->page_size) {
+    if (page_needs_item) {
       DbcCandidateCatalogItem *item = &page->items[page->item_count++];
       item->ordinal = ordinal;
       item->selected = selected;
       memcpy(item->key, workspace->signal.key, sizeof(item->key));
     }
     ++matched;
+    if (matched_total_known && page->item_count == query->page_size) {
+      break;
+    }
   }
-  page->matched_total = (uint16_t)matched;
-  page->has_more = skip + page->item_count < matched;
+  if (!matched_total_known) {
+    page->matched_total = (uint16_t)matched;
+  }
+  page->has_more = skip + page->item_count < page->matched_total;
   return DBC_CANDIDATE_CATALOG_OK;
 }
 

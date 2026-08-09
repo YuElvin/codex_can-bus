@@ -22,6 +22,7 @@ extern void stm32h750_tf_fs_unlock(void);
 #define SIGNAL_SPOOL_BASE MESSAGE_SPOOL_CAPACITY
 #define SIGNAL_SPOOL_CAPACITY \
   (LARGE_DBC_CATALOG_MAX_SIGNALS * LARGE_DBC_INDEX_SIGNAL_RECORD_SIZE)
+#define CANDIDATE_FILE_IO_BUFFER_BYTES LARGE_DBC_UPLOAD_CHUNK_BYTES
 
 typedef struct {
   char upload_tmp[CANDIDATE_PATH_BYTES];
@@ -43,7 +44,18 @@ typedef struct {
   uint32_t capacity;
   uint32_t logical_size;
   bool physical_resize;
+  uint8_t *read_cache;
+  uint32_t read_cache_capacity;
+  uint32_t read_cache_offset;
+  uint32_t read_cache_size;
 } CandidateIndexIoContext;
+
+typedef struct {
+  bool valid;
+  bool uses_previous;
+  DbcManifestV1 manifest;
+  uint8_t manifest_bytes[LARGE_DBC_MANIFEST_SIZE];
+} CandidateQueryCache;
 
 typedef struct {
   LargeDbcCandidateProgressCallback callback;
@@ -78,7 +90,10 @@ static DbcStreamParser g_parser;
 static CandidateIndexIoContext g_message_io_context;
 static CandidateIndexIoContext g_signal_io_context;
 static CandidateIndexIoContext g_index_io_context;
-static uint8_t g_io_buffer[LARGE_DBC_UPLOAD_CHUNK_BYTES];
+static uint8_t g_io_buffer[CANDIDATE_FILE_IO_BUFFER_BYTES]
+  __attribute__((aligned(32)));
+static uint8_t g_index_read_cache[CANDIDATE_FILE_IO_BUFFER_BYTES]
+  __attribute__((aligned(32)));
 static uint8_t g_selection_bytes[LARGE_DBC_SELECTION_TOTAL_SIZE];
 static uint8_t g_manifest_bytes[LARGE_DBC_MANIFEST_SIZE];
 static uint8_t g_current_manifest_bytes[LARGE_DBC_MANIFEST_SIZE];
@@ -99,6 +114,7 @@ static FILINFO g_file_info;
 static DbcManifestV1 g_active_candidate_manifest;
 static DbcManifestV1 g_active_manifest;
 static DbcActiveDescriptor g_active_descriptor;
+static CandidateQueryCache g_candidate_query_cache;
 static bool g_active_source_owned;
 static bool g_active_index_owned;
 static bool g_active_selection_owned;
@@ -138,8 +154,10 @@ bool large_dbc_h1_fault_consume(uint32_t point, uint32_t operation,
 }
 #endif
 
-_Static_assert(sizeof(g_io_buffer) <= LARGE_DBC_UPLOAD_CHUNK_BYTES,
-               "candidate I/O chunk changed");
+_Static_assert(sizeof(g_io_buffer) == CANDIDATE_FILE_IO_BUFFER_BYTES,
+               "candidate file I/O buffer size changed");
+_Static_assert(sizeof(g_index_read_cache) == CANDIDATE_FILE_IO_BUFFER_BYTES,
+               "candidate index read cache size changed");
 _Static_assert(sizeof(DbcStreamParser) > LARGE_DBC_MAX_AUTOMATIC_OBJECT_BYTES,
                "parser is intentionally static");
 _Static_assert(sizeof(DbcCatalogIndexBuilder) > LARGE_DBC_MAX_AUTOMATIC_OBJECT_BYTES,
@@ -279,8 +297,32 @@ static bool index_read_at(void *context, uint32_t offset,
                           uint8_t *data, uint32_t size) {
   CandidateIndexIoContext *io = context;
   UINT read_size = 0u;
-  if (offset > io->logical_size || size > io->logical_size - offset ||
-      io_seek(io->file, (FSIZE_t)(io->base + offset)) != FR_OK ||
+  if (offset > io->logical_size || size > io->logical_size - offset) {
+    return false;
+  }
+  if (io->read_cache != NULL && size <= io->read_cache_capacity) {
+    if (offset >= io->read_cache_offset &&
+        offset - io->read_cache_offset <= io->read_cache_size &&
+        size <= io->read_cache_size - (offset - io->read_cache_offset)) {
+      memcpy(data, io->read_cache + (offset - io->read_cache_offset), size);
+      return true;
+    }
+    uint32_t cached_size = io->logical_size - offset;
+    if (cached_size > io->read_cache_capacity) {
+      cached_size = io->read_cache_capacity;
+    }
+    if (io_seek(io->file, (FSIZE_t)(io->base + offset)) != FR_OK ||
+        io_read(io->file, io->read_cache, (UINT)cached_size, &read_size) != FR_OK ||
+        read_size != (UINT)cached_size) {
+      io->read_cache_size = 0u;
+      return false;
+    }
+    io->read_cache_offset = offset;
+    io->read_cache_size = cached_size;
+    memcpy(data, io->read_cache, size);
+    return true;
+  }
+  if (io_seek(io->file, (FSIZE_t)(io->base + offset)) != FR_OK ||
       io_read(io->file, data, (UINT)size, &read_size) != FR_OK) {
     return false;
   }
@@ -291,6 +333,7 @@ static bool index_write_at(void *context, uint32_t offset,
                            const uint8_t *data, uint32_t size) {
   CandidateIndexIoContext *io = context;
   UINT written_size = 0u;
+  io->read_cache_size = 0u;
   if (offset > io->capacity || size > io->capacity - offset ||
       io_seek(io->file, (FSIZE_t)(io->base + offset)) != FR_OK ||
       io_write(io->file, data, (UINT)size, &written_size) != FR_OK ||
@@ -305,6 +348,7 @@ static bool index_write_at(void *context, uint32_t offset,
 
 static bool index_resize(void *context, uint32_t size) {
   CandidateIndexIoContext *io = context;
+  io->read_cache_size = 0u;
   if (size > io->capacity) {
     return false;
   }
@@ -687,7 +731,9 @@ static __attribute__((noinline)) bool open_index_for_verify(const char *path,
     .base = 0u,
     .capacity = (uint32_t)physical_size,
     .logical_size = (uint32_t)physical_size,
-    .physical_resize = false
+    .physical_resize = false,
+    .read_cache = g_index_read_cache,
+    .read_cache_capacity = sizeof(g_index_read_cache)
   };
   *index_io = catalog_io(&g_index_io_context);
   const DbcCatalogIndexExpectedSource expected = {
@@ -909,6 +955,18 @@ static bool read_manifest_with_references(
                                 &actual, facts);
 }
 
+static bool read_manifest_record(
+  const char *manifest_path,
+  uint8_t bytes[LARGE_DBC_MANIFEST_SIZE],
+  uint8_t expected_object_kind,
+  DbcManifestV1 *manifest) {
+  return manifest_path != NULL && bytes != NULL && manifest != NULL &&
+         read_exact_file(manifest_path, bytes, LARGE_DBC_MANIFEST_SIZE) &&
+         dbc_manifest_v1_decode(bytes, LARGE_DBC_MANIFEST_SIZE, manifest) ==
+           DBC_CANDIDATE_FORMAT_OK &&
+         manifest->object_kind == expected_object_kind;
+}
+
 static bool read_active_manifest_with_references(
   const char *manifest_path,
   uint8_t bytes[LARGE_DBC_MANIFEST_SIZE],
@@ -1026,6 +1084,56 @@ static bool open_active_manifest_catalog(const CandidatePaths *paths,
   return true;
 }
 
+static bool open_verified_manifest_catalog(
+  const CandidatePaths *paths,
+  const DbcManifestV1 *manifest,
+  DbcCatalogIndexSummary *summary,
+  DbcCatalogIndexIo *index_io,
+  DbcSelectionV1 *selection) {
+  if (paths == NULL || manifest == NULL || summary == NULL ||
+      index_io == NULL || selection == NULL ||
+      manifest->selection_size != sizeof(g_selection_bytes) ||
+      !read_exact_file(paths->selection_final, g_selection_bytes,
+                       sizeof(g_selection_bytes)) ||
+      dbc_candidate_crc32(g_selection_bytes, sizeof(g_selection_bytes)) !=
+        manifest->selection_crc32 ||
+      dbc_selection_v1_decode(g_selection_bytes, sizeof(g_selection_bytes),
+                              selection) != DBC_CANDIDATE_FORMAT_OK ||
+      selection->source_size != manifest->source_size ||
+      selection->source_crc32 != manifest->source_crc32 ||
+      selection->catalog_signal_count != manifest->catalog_signal_count ||
+      selection->selected_count != manifest->selected_count ||
+      io_open(&g_index_file, paths->index_final, FA_READ) != FR_OK) {
+    return false;
+  }
+  g_index_open = true;
+  const FSIZE_t physical_size = f_size(&g_index_file);
+  if (physical_size > UINT32_MAX ||
+      (uint32_t)physical_size != manifest->index_size) {
+    (void)io_close(&g_index_file);
+    g_index_open = false;
+    return false;
+  }
+  g_index_io_context = (CandidateIndexIoContext){
+    .file = &g_index_file,
+    .base = 0u,
+    .capacity = (uint32_t)physical_size,
+    .logical_size = (uint32_t)physical_size,
+    .physical_resize = false,
+    .read_cache = g_index_read_cache,
+    .read_cache_capacity = sizeof(g_index_read_cache)
+  };
+  *index_io = catalog_io(&g_index_io_context);
+  *summary = (DbcCatalogIndexSummary){
+    .source_size = manifest->source_size,
+    .source_crc32 = manifest->source_crc32,
+    .message_count = manifest->catalog_message_count,
+    .signal_count = manifest->catalog_signal_count,
+    .total_size = manifest->index_size
+  };
+  return true;
+}
+
 static void descriptor_from_manifest(const DbcManifestV1 *manifest,
                                      DbcCandidateDescriptor *descriptor) {
   *descriptor = (DbcCandidateDescriptor){
@@ -1069,15 +1177,19 @@ static DbcSelectedRuntimeStatus build_prepared_runtime(
   const CandidatePaths *paths,
   const DbcManifestV1 *manifest,
   bool active_manifest,
+  bool references_verified,
   uint64_t runtime_generation,
   const DbcSelectedRuleRequirement *rules,
   size_t rule_count,
   DbcSelectedRuntimeSnapshot *snapshot) {
-  const bool opened = active_manifest ?
-    open_active_manifest_catalog(paths, manifest, &g_catalog_summary,
-                                 &g_catalog_index_io, &g_selection) :
-    open_manifest_catalog(paths, manifest, &g_catalog_summary,
-                          &g_catalog_index_io, &g_selection);
+  const bool opened = references_verified ?
+    open_verified_manifest_catalog(paths, manifest, &g_catalog_summary,
+                                   &g_catalog_index_io, &g_selection) :
+    (active_manifest ?
+      open_active_manifest_catalog(paths, manifest, &g_catalog_summary,
+                                   &g_catalog_index_io, &g_selection) :
+      open_manifest_catalog(paths, manifest, &g_catalog_summary,
+                            &g_catalog_index_io, &g_selection));
   if (!opened) {
     return DBC_SELECTED_RUNTIME_INDEX_ERROR;
   }
@@ -1123,6 +1235,84 @@ static bool snapshot_from_manifest(const DbcManifestV1 *manifest,
          dbc_candidate_token_verify_manifest(snapshot->candidate_token,
                                              manifest) ==
            DBC_CANDIDATE_FORMAT_OK;
+}
+
+static void candidate_query_cache_set(
+  const DbcManifestV1 *manifest,
+  const uint8_t manifest_bytes[LARGE_DBC_MANIFEST_SIZE],
+  bool uses_previous) {
+  if (manifest == NULL || manifest_bytes == NULL || manifest->generation == 0u) {
+    g_candidate_query_cache.valid = false;
+    return;
+  }
+  g_candidate_query_cache.manifest = *manifest;
+  memcpy(g_candidate_query_cache.manifest_bytes, manifest_bytes,
+         sizeof(g_candidate_query_cache.manifest_bytes));
+  g_candidate_query_cache.uses_previous = uses_previous;
+  g_candidate_query_cache.valid = true;
+}
+
+static bool open_cached_candidate_catalog(DbcCatalogIndexSummary *summary,
+                                          DbcCatalogIndexIo *index_io,
+                                          DbcSelectionV1 *selection) {
+  if (!g_candidate_query_cache.valid || summary == NULL || index_io == NULL ||
+      selection == NULL ||
+      !build_paths(g_candidate_query_cache.manifest.generation, &g_paths)) {
+    return false;
+  }
+  const char *manifest_path = g_candidate_query_cache.uses_previous ?
+    g_paths.previous : g_paths.current;
+  if (!read_exact_file(manifest_path, g_current_manifest_bytes,
+                       sizeof(g_current_manifest_bytes)) ||
+      memcmp(g_current_manifest_bytes,
+             g_candidate_query_cache.manifest_bytes,
+             sizeof(g_current_manifest_bytes)) != 0 ||
+      !read_exact_file(g_paths.selection_final, g_selection_bytes,
+                       sizeof(g_selection_bytes)) ||
+      dbc_candidate_crc32(g_selection_bytes, sizeof(g_selection_bytes)) !=
+        g_candidate_query_cache.manifest.selection_crc32 ||
+      dbc_selection_v1_decode(g_selection_bytes, sizeof(g_selection_bytes),
+                              selection) != DBC_CANDIDATE_FORMAT_OK ||
+      selection->candidate_generation !=
+        g_candidate_query_cache.manifest.generation ||
+      selection->selection_generation !=
+        g_candidate_query_cache.manifest.generation ||
+      selection->source_size != g_candidate_query_cache.manifest.source_size ||
+      selection->source_crc32 !=
+        g_candidate_query_cache.manifest.source_crc32 ||
+      selection->catalog_signal_count !=
+        g_candidate_query_cache.manifest.catalog_signal_count ||
+      selection->selected_count !=
+        g_candidate_query_cache.manifest.selected_count ||
+      io_open(&g_index_file, g_paths.index_final, FA_READ) != FR_OK) {
+    return false;
+  }
+  g_index_open = true;
+  const FSIZE_t physical_size = f_size(&g_index_file);
+  if (physical_size > UINT32_MAX ||
+      (uint32_t)physical_size != g_candidate_query_cache.manifest.index_size) {
+    (void)io_close(&g_index_file);
+    g_index_open = false;
+    return false;
+  }
+  g_index_io_context = (CandidateIndexIoContext){
+    .file = &g_index_file,
+    .base = 0u,
+    .capacity = (uint32_t)physical_size,
+    .logical_size = (uint32_t)physical_size,
+    .physical_resize = false,
+    .read_cache = g_index_read_cache,
+    .read_cache_capacity = sizeof(g_index_read_cache)
+  };
+  *index_io = catalog_io(&g_index_io_context);
+  *summary = (DbcCatalogIndexSummary){
+    .source_size = g_candidate_query_cache.manifest.source_size,
+    .source_crc32 = g_candidate_query_cache.manifest.source_crc32,
+    .message_count = g_candidate_query_cache.manifest.catalog_message_count,
+    .signal_count = g_candidate_query_cache.manifest.catalog_signal_count,
+    .total_size = g_candidate_query_cache.manifest.index_size
+  };
+  return true;
 }
 
 static __attribute__((noinline)) bool rename_generation_files(void) {
@@ -1399,6 +1589,7 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_commit(
     status = LARGE_DBC_CANDIDATE_STM32_MANIFEST_FAILED;
     goto done;
   }
+  candidate_query_cache_set(&manifest, g_manifest_bytes, false);
   descriptor_from_manifest(&manifest, published_candidate);
 
 done:
@@ -1429,15 +1620,26 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_recover(
     return LARGE_DBC_CANDIDATE_STM32_LOCK_FAILED;
   }
 
+  char current_path[CANDIDATE_PATH_BYTES];
+  char previous_path[CANDIDATE_PATH_BYTES];
+  memcpy(current_path, g_paths.current, sizeof(current_path));
+  memcpy(previous_path, g_paths.previous, sizeof(previous_path));
   DbcManifestV1 current;
   DbcManifestV1 previous;
   DbcManifestReferenceFacts current_facts;
   DbcManifestReferenceFacts previous_facts;
-  const bool current_valid = read_manifest_with_references(
-    g_paths.current, g_current_manifest_bytes, &current, &current_facts);
-  (void)build_paths(1u, &g_paths);
-  const bool previous_valid = read_manifest_with_references(
-    g_paths.previous, g_previous_manifest_bytes, &previous, &previous_facts);
+  const bool current_record_valid = read_manifest_record(
+    current_path, g_current_manifest_bytes,
+    LARGE_DBC_MANIFEST_OBJECT_CANDIDATE, &current);
+  const bool previous_record_valid = read_manifest_record(
+    previous_path, g_previous_manifest_bytes,
+    LARGE_DBC_MANIFEST_OBJECT_CANDIDATE, &previous);
+  const bool current_valid = current_record_valid &&
+    read_manifest_with_references(current_path, g_current_manifest_bytes,
+                                  &current, &current_facts);
+  const bool previous_valid = !current_valid && previous_record_valid &&
+    read_manifest_with_references(previous_path, g_previous_manifest_bytes,
+                                  &previous, &previous_facts);
 
   DbcManifestV1 selected;
   const DbcManifestRecoverySlot slot =
@@ -1451,10 +1653,10 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_recover(
       LARGE_DBC_MANIFEST_OBJECT_CANDIDATE, &selected);
 
   uint64_t maximum_generation = 0u;
-  if (current_valid && current.generation > maximum_generation) {
+  if (current_record_valid && current.generation > maximum_generation) {
     maximum_generation = current.generation;
   }
-  if (previous_valid && previous.generation > maximum_generation) {
+  if (previous_record_valid && previous.generation > maximum_generation) {
     maximum_generation = previous.generation;
   }
   const DbcCandidateFormatStatus next_status =
@@ -1465,7 +1667,14 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_recover(
   }
   *available = slot != DBC_MANIFEST_RECOVERY_NONE;
   if (*available) {
+    candidate_query_cache_set(
+      &selected,
+      slot == DBC_MANIFEST_RECOVERY_CURRENT ? g_current_manifest_bytes :
+                                              g_previous_manifest_bytes,
+      slot == DBC_MANIFEST_RECOVERY_PREVIOUS);
     descriptor_from_manifest(&selected, recovered_candidate);
+  } else {
+    g_candidate_query_cache.valid = false;
   }
   stm32h750_tf_fs_unlock();
   return LARGE_DBC_CANDIDATE_STM32_OK;
@@ -1507,6 +1716,34 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_query(
     return LARGE_DBC_CANDIDATE_STM32_LOCK_FAILED;
   }
   LargeDbcCandidateStm32Status status = LARGE_DBC_CANDIDATE_STM32_OK;
+  if (open_cached_candidate_catalog(&g_catalog_summary,
+                                    &g_catalog_index_io,
+                                    &g_selection)) {
+    memset(&g_query_result, 0, sizeof(g_query_result));
+    const DbcCandidateCatalogStatus cached_query_status =
+      dbc_candidate_catalog_query(&g_catalog_index_io, &g_catalog_summary,
+                                  &g_selection, query, &g_catalog_workspace,
+                                  &g_query_result.page);
+    const FRESULT cached_close_result = io_close(&g_index_file);
+    g_index_open = false;
+    if (cached_query_status == DBC_CANDIDATE_CATALOG_OK &&
+        cached_close_result == FR_OK &&
+        snapshot_from_manifest(&g_candidate_query_cache.manifest,
+                               &g_query_result.snapshot)) {
+      *result = g_query_result;
+      goto query_done;
+    }
+    if (cached_query_status == DBC_CANDIDATE_CATALOG_INVALID_ARGUMENT) {
+      status = LARGE_DBC_CANDIDATE_STM32_INVALID_ARGUMENT;
+      goto query_done;
+    }
+  }
+  g_candidate_query_cache.valid = false;
+  close_open_files();
+  if (!build_paths(1u, &g_paths)) {
+    status = LARGE_DBC_CANDIDATE_STM32_PATH_FAILED;
+    goto query_done;
+  }
   const FRESULT current_state = io_stat(g_paths.current, &g_file_info);
   if (current_state == FR_NO_FILE) {
     status = LARGE_DBC_CANDIDATE_STM32_NOT_FOUND;
@@ -1548,6 +1785,7 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_query(
     status = LARGE_DBC_CANDIDATE_STM32_FORMAT_FAILED;
     goto query_done;
   }
+  candidate_query_cache_set(&g_work_manifest, g_current_manifest_bytes, false);
   *result = g_query_result;
 
 query_done:
@@ -1582,26 +1820,47 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_update_selection(
   }
 
   LargeDbcCandidateStm32Status status = LARGE_DBC_CANDIDATE_STM32_OK;
-  const FRESULT current_state = io_stat(g_paths.current, &g_file_info);
-  if (current_state == FR_NO_FILE) {
-    status = LARGE_DBC_CANDIDATE_STM32_NOT_FOUND;
-    goto update_done;
-  }
-  if (current_state != FR_OK) {
-    status = LARGE_DBC_CANDIDATE_STM32_IO_FAILED;
-    goto update_done;
-  }
-  if (!read_manifest_with_references(g_paths.current, g_current_manifest_bytes,
-                                     &g_work_manifest, &g_work_facts)) {
-    status = LARGE_DBC_CANDIDATE_STM32_VERIFY_FAILED;
-    goto update_done;
-  }
-  g_temp_paths = g_paths;
-  if (!open_manifest_catalog(&g_temp_paths, &g_work_manifest,
-                             &g_catalog_summary, &g_catalog_index_io,
-                             &g_selection)) {
-    status = LARGE_DBC_CANDIDATE_STM32_VERIFY_FAILED;
-    goto update_done;
+  if (g_candidate_query_cache.valid &&
+      !g_candidate_query_cache.uses_previous &&
+      open_cached_candidate_catalog(&g_catalog_summary,
+                                    &g_catalog_index_io,
+                                    &g_selection)) {
+    g_work_manifest = g_candidate_query_cache.manifest;
+    g_temp_paths = g_paths;
+  } else {
+    g_candidate_query_cache.valid = false;
+    close_open_files();
+    if (!build_paths(1u, &g_paths)) {
+      status = LARGE_DBC_CANDIDATE_STM32_PATH_FAILED;
+      goto update_done;
+    }
+    const FRESULT current_state = io_stat(g_paths.current, &g_file_info);
+    if (current_state == FR_NO_FILE) {
+      status = LARGE_DBC_CANDIDATE_STM32_NOT_FOUND;
+      goto update_done;
+    }
+    if (current_state != FR_OK) {
+      status = LARGE_DBC_CANDIDATE_STM32_IO_FAILED;
+      goto update_done;
+    }
+    if (!read_manifest_with_references(g_paths.current,
+                                       g_current_manifest_bytes,
+                                       &g_work_manifest, &g_work_facts)) {
+      status = LARGE_DBC_CANDIDATE_STM32_VERIFY_FAILED;
+      goto update_done;
+    }
+    g_temp_paths = g_paths;
+    if (!open_manifest_catalog(&g_temp_paths, &g_work_manifest,
+                               &g_catalog_summary, &g_catalog_index_io,
+                               &g_selection)) {
+      status = LARGE_DBC_CANDIDATE_STM32_VERIFY_FAILED;
+      goto update_done;
+    }
+    /* The current manifest and catalog are now fully verified. Publish this
+     * cache even when prepare_update later rejects a stale token, so the next
+     * read immediately converges from a recovered previous snapshot. */
+    candidate_query_cache_set(&g_work_manifest, g_current_manifest_bytes,
+                              false);
   }
   const DbcCandidateCatalogStatus prepared =
     dbc_candidate_selection_prepare_update(
@@ -1682,6 +1941,7 @@ LargeDbcCandidateStm32Status stm32h750_large_dbc_candidate_update_selection(
     status = LARGE_DBC_CANDIDATE_STM32_MANIFEST_FAILED;
     goto update_done;
   }
+  candidate_query_cache_set(&g_formal_manifest, g_manifest_bytes, false);
   if (!snapshot_from_manifest(&g_formal_manifest, published_candidate)) {
     status = LARGE_DBC_CANDIDATE_STM32_FORMAT_FAILED;
     goto update_done;
@@ -2040,7 +2300,7 @@ stm32h750_large_dbc_active_commit(
     goto active_done;
   }
   g_active_runtime_status = build_prepared_runtime(
-    &g_active_candidate_paths, &g_active_candidate_manifest, false,
+    &g_active_candidate_paths, &g_active_candidate_manifest, false, true,
     request->active_generation, request->rules, request->rule_count,
     request->runtime_snapshot);
   if (g_active_runtime_status != DBC_SELECTED_RUNTIME_OK) {
@@ -2162,32 +2422,28 @@ stm32h750_large_dbc_active_recover(
   if (stm32h750_tf_fs_lock() != 0) {
     return LARGE_DBC_ACTIVE_STM32_LOCK_FAILED;
   }
+  char current_path[CANDIDATE_PATH_BYTES];
+  char previous_path[CANDIDATE_PATH_BYTES];
+  memcpy(current_path, g_active_paths.current, sizeof(current_path));
+  memcpy(previous_path, g_active_paths.previous, sizeof(previous_path));
   DbcManifestV1 current;
   DbcManifestV1 previous;
-  bool current_valid = false;
-  bool previous_valid = false;
-  if (!active_valid_manifest_generations(&current_valid, &current,
-                                         &previous_valid, &previous)) {
-    stm32h750_tf_fs_unlock();
-    return LARGE_DBC_ACTIVE_STM32_VERIFY_FAILED;
-  }
+  const bool current_record_valid = read_manifest_record(
+    current_path, g_current_manifest_bytes, LARGE_DBC_MANIFEST_OBJECT_ACTIVE,
+    &current);
+  const bool previous_record_valid = read_manifest_record(
+    previous_path, g_previous_manifest_bytes,
+    LARGE_DBC_MANIFEST_OBJECT_ACTIVE, &previous);
   DbcManifestReferenceFacts current_facts;
   DbcManifestReferenceFacts previous_facts;
-  if (current_valid &&
-      !read_active_manifest_with_references(g_active_paths.current,
-                                            g_current_manifest_bytes,
-                                            &current, &current_facts)) {
-    stm32h750_tf_fs_unlock();
-    return LARGE_DBC_ACTIVE_STM32_VERIFY_FAILED;
-  }
-  (void)build_active_paths(1u, &g_active_paths);
-  if (previous_valid &&
-      !read_active_manifest_with_references(g_active_paths.previous,
-                                            g_previous_manifest_bytes,
-                                            &previous, &previous_facts)) {
-    stm32h750_tf_fs_unlock();
-    return LARGE_DBC_ACTIVE_STM32_VERIFY_FAILED;
-  }
+  const bool current_valid = current_record_valid &&
+    read_active_manifest_with_references(current_path,
+                                         g_current_manifest_bytes,
+                                         &current, &current_facts);
+  const bool previous_valid = !current_valid && previous_record_valid &&
+    read_active_manifest_with_references(previous_path,
+                                         g_previous_manifest_bytes,
+                                         &previous, &previous_facts);
   DbcManifestV1 selected;
   const DbcManifestRecoverySlot slot =
     dbc_manifest_v1_select_current_or_previous(
@@ -2199,10 +2455,10 @@ stm32h750_large_dbc_active_recover(
       previous_valid ? &previous_facts : NULL,
       LARGE_DBC_MANIFEST_OBJECT_ACTIVE, &selected);
   uint64_t maximum_generation = 0u;
-  if (current_valid && current.generation > maximum_generation) {
+  if (current_record_valid && current.generation > maximum_generation) {
     maximum_generation = current.generation;
   }
-  if (previous_valid && previous.generation > maximum_generation) {
+  if (previous_record_valid && previous.generation > maximum_generation) {
     maximum_generation = previous.generation;
   }
   if (dbc_candidate_next_generation(maximum_generation, next_generation) !=
@@ -2224,7 +2480,8 @@ stm32h750_large_dbc_active_recover(
     return LARGE_DBC_ACTIVE_STM32_INVALID_ARGUMENT;
   }
   g_active_runtime_status = build_prepared_runtime(
-    &g_active_paths, &selected, true, selected.generation, rules, rule_count,
+    &g_active_paths, &selected, true, true, selected.generation,
+    rules, rule_count,
     runtime_snapshot);
   if (g_active_runtime_status != DBC_SELECTED_RUNTIME_OK) {
     const LargeDbcActiveStm32Status failed =

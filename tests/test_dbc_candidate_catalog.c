@@ -229,6 +229,7 @@ static bool test_query_search_filter_and_pages(void) {
   ASSERT_TRUE(page.item_count == 1u && page.items[0].ordinal == 5u &&
               !page.has_more);
 
+  g_index_memory.read_count = 0u;
   query = (DbcCandidateCatalogQuery){
     .page = 0u,
     .page_size = 8u,
@@ -241,6 +242,38 @@ static bool test_query_search_filter_and_pages(void) {
               DBC_CANDIDATE_CATALOG_OK);
   ASSERT_TRUE(page.matched_total == 4u && page.item_count == 4u);
   ASSERT_TRUE(page.items[0].ordinal == 0u && page.items[3].ordinal == 9u);
+  ASSERT_TRUE(g_index_memory.read_count == 4u);
+
+  g_index_memory.read_count = 0u;
+  query = (DbcCandidateCatalogQuery){
+    .page = 1u,
+    .page_size = 2u,
+    .query = NULL,
+    .query_length = 0u,
+    .selected_filter = DBC_CANDIDATE_FILTER_ALL
+  };
+  ASSERT_TRUE(dbc_candidate_catalog_query(&index_io, &summary, &selection,
+                                           &query, &g_workspace, &page) ==
+              DBC_CANDIDATE_CATALOG_OK);
+  ASSERT_TRUE(page.matched_total == summary.signal_count &&
+              page.item_count == 2u && page.items[0].ordinal == 2u &&
+              page.items[1].ordinal == 3u && page.has_more);
+  ASSERT_TRUE(g_index_memory.read_count == 2u);
+
+  g_index_memory.read_count = 0u;
+  query = (DbcCandidateCatalogQuery){
+    .page = 0u,
+    .page_size = 8u,
+    .query = NULL,
+    .query_length = 0u,
+    .selected_filter = DBC_CANDIDATE_FILTER_SELECTED
+  };
+  ASSERT_TRUE(dbc_candidate_catalog_query(&index_io, &summary, &selection,
+                                           &query, &g_workspace, &page) ==
+              DBC_CANDIDATE_CATALOG_OK);
+  ASSERT_TRUE(page.matched_total == 4u && page.item_count == 4u);
+  ASSERT_TRUE(g_index_memory.read_count == 4u);
+
   query.page = 99u;
   ASSERT_TRUE(dbc_candidate_catalog_query(&index_io, &summary, &selection,
                                            &query, &g_workspace, &page) ==

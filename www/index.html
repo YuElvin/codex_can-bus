@@ -140,13 +140,17 @@ let candidateSet = new Set();
 let candidateClear = new Set();
 let candidateQueryTimer = 0;
 let candidateRequestSeq = 0;
+let candidateSelectionPending = false;
 let logControlEnabled = false;
 let logControlKnown = false;
-/* The firmware intentionally closes each HTTP/1.1 response. Keep the next
- * browser request outside its bounded socket0 TCP teardown window; this is
- * pacing, not a retry, and preserves the one-request-at-a-time contract. */
-const singleSocketRelistenMs = 2100;
-let nextRequestNotBefore = Date.now() + singleSocketRelistenMs;
+/* The firmware intentionally closes each HTTP/1.1 response.  The HTTP task
+ * now polls every 10 ms and normally completes ACK/DISCON/relisten within a
+ * few polls; keep a bounded margin without imposing the old 2.1 s delay on
+ * every operation.  This remains pacing, not a retry. */
+const singleSocketRelistenMs = 120;
+const writeRelistenMs = 350;
+const readTransportRetryMs = 250;
+let lastRequestFinishedAt = Date.now();
 
 function show(message, kind = 'notice') { const node = $('notice'); node.className = kind; node.textContent = message; }
 function showJson(id, value) { $(id).textContent = JSON.stringify(value, null, 2); }
@@ -157,15 +161,18 @@ async function exclusive(label, work) {
   return request;
 }
 async function api(path, options = {}) {
-  const waitMs=Math.max(0,nextRequestNotBefore-Date.now()); if (waitMs) await sleep(waitMs);
+  const method=String(options.method || 'GET').toUpperCase(); const readOnly=method==='GET' || method==='HEAD';
+  const waitMs=Math.max(0,lastRequestFinishedAt+(readOnly?singleSocketRelistenMs:writeRelistenMs)-Date.now()); if (waitMs) await sleep(waitMs);
   try {
-    const response = await fetch(path, Object.assign({cache:'no-store'}, options));
+    let response;
+    try { response=await fetch(path,Object.assign({cache:'no-store'},options)); }
+    catch (error) { if (!readOnly) throw error; await sleep(readTransportRetryMs); response=await fetch(path,Object.assign({cache:'no-store'},options)); }
     const text = await response.text();
     let payload;
     try { payload = JSON.parse(text); } catch (_) { throw new Error(path + ' 返回非 JSON：' + text); }
     if (!response.ok || !payload.ok) { throw new Error(path + ' HTTP ' + response.status + '：' + text); }
     return payload.data;
-  } finally { nextRequestNotBefore=Date.now()+singleSocketRelistenMs; }
+  } finally { lastRequestFinishedAt=Date.now(); }
 }
 function addCell(row, value) { const cell=document.createElement('td'); cell.textContent=value; row.append(cell); }
 function formatCanId(value) { const id=Number(value); return Number.isInteger(id) && id>=0 && id<=0x7ff ? '0x'+id.toString(16).toUpperCase().padStart(3,'0') : String(value ?? '—'); }
@@ -214,9 +221,9 @@ function renderLogControl(data) {
 function candidateLoggingBlocked() { return !logControlKnown || logControlEnabled || $('log-enabled').checked; }
 function updateCandidateWriteState() {
   const blocked=logControlKnown && (logControlEnabled || $('log-enabled').checked); const changed=candidateSet.size+candidateClear.size;
-  for (const checkbox of document.querySelectorAll('#candidate-body input[type="checkbox"]')) checkbox.disabled=blocked;
-  $('candidate-save').disabled=blocked || !candidateToken || changed===0;
-  $('candidate-write-state').textContent=!logControlKnown ? '可浏览和选择；提交时将读取日志状态' : (blocked ? '日志已启用：禁止修改 selection' : (changed ? '待提交 '+changed+' 项' : '当前没有待提交变更'));
+  for (const checkbox of document.querySelectorAll('#candidate-body input[type="checkbox"]')) checkbox.disabled=blocked || candidateSelectionPending;
+  $('candidate-save').disabled=blocked || candidateSelectionPending || !candidateToken || changed===0;
+  $('candidate-write-state').textContent=candidateSelectionPending ? 'selection 后台事务进行中，可继续使用其他非 TF 功能' : (!logControlKnown ? '可浏览和选择；提交时将读取日志状态' : (blocked ? '日志已启用：禁止修改 selection' : (changed ? '待提交 '+changed+' 项' : '当前没有待提交变更')));
   $('candidate-write-state').className=blocked?'error':'notice';
 }
 function clearCandidateEdits() { candidateBaseline=new Map(); candidateSet.clear(); candidateClear.clear(); }
@@ -261,10 +268,23 @@ async function saveCandidateSelection() {
     if (!candidateToken) throw new Error('请先读取 candidate');
     if (!candidateSet.size && !candidateClear.size) throw new Error('当前页没有变更');
     const body=new URLSearchParams({candidateToken,set:Array.from(candidateSet).sort((a,b)=>a-b).join(','),clear:Array.from(candidateClear).sort((a,b)=>a-b).join(',')}).toString();
-    const data=await exclusive('提交 candidate selection',()=>api('/api/dbc/selection',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
-    if (data && data.candidateToken && String(data.candidateToken)!==candidateToken) { candidateToken=String(data.candidateToken); clearCandidateEdits(); }
-    showJson('dbc-result',data); await loadCandidatePage(candidatePage); show('selection 已提交并回读', 'ok');
+    const previousToken=candidateToken; candidateSelectionPending=true; updateCandidateWriteState();
+    const accepted=await exclusive('提交 candidate selection',()=>api('/api/dbc/selection',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}));
+    showJson('dbc-result',accepted); show('selection 已受理，正在后台持久化；其他非 TF 功能可继续使用', 'notice');
+    const deadline=Date.now()+120000;
+    while (Date.now()<deadline) {
+      await sleep(2000);
+      const q=$('candidate-query').value; const selected=$('candidate-filter').value;
+      const path='/api/dbc/candidate/signals?page='+encodeURIComponent(String(candidatePage))+'&q='+encodeURIComponent(q)+'&selected='+encodeURIComponent(selected);
+      try {
+        const data=await exclusive('回读 candidate selection',()=>api(path));
+        if (String(data.candidateToken ?? '')===previousToken) throw new Error('selection 后台事务未发布，请读取 candidate 状态');
+        renderCandidatePage(data); showJson('dbc-result',data); show('selection 已持久化并回读', 'ok'); return;
+      } catch (error) { if (!String(error.message).includes('candidate_busy')) throw error; }
+    }
+    throw new Error('selection 后台事务超过 120 秒，请读取 candidate 状态，勿重复提交');
   } catch (error) { show(error.message, 'error'); }
+  finally { candidateSelectionPending=false; updateCandidateWriteState(); }
 }
 function canTxFormData() {
   const idText=$('can-tx-id').value.trim(); const id=/^0x[0-9a-f]+$/i.test(idText)?parseInt(idText,16):(/^[0-9]+$/.test(idText)?Number(idText):NaN);
@@ -449,7 +469,6 @@ async function canCycle() {
       const data=await exclusive('CAN 自动刷新',()=>api(path));
       if (!canRoundActive(round)) { completed=false; break; }
       render(data);
-      await sleep(250);
     }
   } catch (error) { canCycleRunning=false; stopCan('自动 CAN 刷新已停止：'+error.message); return; }
   canCycleRunning=false;
@@ -462,7 +481,28 @@ async function uploadDbc() {
   catch (error) { show(error.message, 'error'); }
 }
 async function activateDbc() {
-  try { if (!confirm('确认激活当前 DBC 候选？')) return; const data=await exclusive('激活 DBC',()=>api('/api/dbc/active',{method:'POST'})); invalidateSignalCatalog('活动 DBC 已变化，请先读取两槽规则'); showJson('dbc-result',data); show('DBC 已激活并回读 runtime', 'ok'); }
+  try {
+    if (!confirm('确认激活当前 DBC 候选？')) return;
+    const before=await exclusive('读取激活前 runtime',()=>api('/api/dbc/runtime'));
+    const accepted=await exclusive('激活 DBC',()=>api('/api/dbc/active',{method:'POST'}));
+    showJson('dbc-result',accepted); show('DBC 激活已受理，正在后台持久化；其他非 TF 功能可继续使用', 'notice');
+    const beforeGeneration=String(before.activeGeneration ?? before.generation ?? ''); const deadline=Date.now()+120000;
+    while (Date.now()<deadline) {
+      await sleep(2000);
+      const runtime=await exclusive('回读 DBC runtime',()=>api('/api/dbc/runtime'));
+      const nextGeneration=String(runtime.activeGeneration ?? runtime.generation ?? '');
+      if (nextGeneration!==beforeGeneration) { invalidateSignalCatalog('活动 DBC 已变化，请先读取两槽规则'); showJson('dbc-result',runtime); show('DBC 已激活并回读 runtime', 'ok'); return; }
+      const q='/api/dbc/candidate/signals?page=0&q=&selected=all';
+      try {
+        await exclusive('检查 DBC 激活状态',()=>api(q));
+        const finalRuntime=await exclusive('确认 DBC runtime',()=>api('/api/dbc/runtime')); const finalGeneration=String(finalRuntime.activeGeneration ?? finalRuntime.generation ?? '');
+        if (finalGeneration!==beforeGeneration) { invalidateSignalCatalog('活动 DBC 已变化，请先读取两槽规则'); showJson('dbc-result',finalRuntime); show('DBC 已激活并回读 runtime', 'ok'); return; }
+        throw new Error('DBC 激活后台事务未发布，请读取 runtime 状态');
+      }
+      catch (error) { if (!String(error.message).includes('candidate_busy')) throw error; }
+    }
+    throw new Error('DBC 激活后台事务超过 120 秒，请读取 runtime 状态，勿重复提交');
+  }
   catch (error) { show(error.message, 'error'); }
 }
 $('overview-refresh').onclick=refreshOverview; $('can-start').onclick=startCan; $('can-stop').onclick=()=>stopCan('自动 CAN 刷新已由用户停止');

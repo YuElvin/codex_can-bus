@@ -102,6 +102,7 @@ int w25q128_rule_config_save(uint32_t on_threshold,
                               uint32_t timeout_ms);
 int w5500_bringup_run(void);
 int w5500_bringup_poll(void);
+int w5500_http_preload_static_index(void);
 int w5500_http_dbc_lock(void);
 void w5500_http_dbc_unlock(void);
 int w5500_http_recover_large_dbc_candidate(void);

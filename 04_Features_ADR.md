@@ -454,3 +454,10 @@ D网页源码已加入256 KiB上传、固定高度8项目录、300 ms搜索防�
 - 决策：新会话文件名使用`_signal-v4.csv`，header 的第一个字段固定`datetime`，其后为会话锁定的 selected key；每一采样周期只产生一条按同顺序排列的数据行。`MISSING`/`ERROR`产生空单元格，以保持列对齐。旧v2/v3会话不续写、不迁移。
 - 实现边界：header和数据行均以小片段流式追加，沿用512 B scratch与静态批量缓冲；不在LogTask栈上创建128项快照或整行动态缓冲。`rowsWritten`在一整条数据行换行成功后递增，而不再按信号单元格计数。
 - 现场证据：物理冷启动后active generation3、8项selected均GOOD；1000 ms会话`/log/20260809_222113000_signal-v4.csv`经安全STOPPED和取卡只读解析，header为`datetime`加8个selected key，12条数据行均9列且时间戳合法，meta为`csvFormat=signal-v4`、`selectedCount=8`、`rowsWritten=12`、`rowsDropped/lateSamples/writeFailures=0/0/0`、`cleanClose=true`。v4物理掉电尾行与恢复仍`[未验证]`。
+
+## ADR-053：大DBC网页读写采用缓存分页与异步持久化（2026-08-10）
+
+- 决策：candidate无搜索查询只读取目标页record，并以generation、manifest、selection及index尺寸共同约束已验证缓存；搜索仍执行完整扫描。静态网页启动时预载到RAM，HTTP发送块为1024 B。TF I/O缓冲继续使用32字节对齐的512 B，拒绝实板出现锁死的4 KiB多扇区方案。
+- selection和active POST的合同改为HTTP202 `pending`：请求只负责校验、复制受控输入并排队，后台独占完成TF事务；网页轮询candidate token或runtime直到成功/失败。写请求禁止自动重试，避免不确定交付时重复副作用；普通GET允许一次短延迟传输重试。日志ACTIVE等后端门禁保持不变。
+- 可见响应与后台完成时间必须分开：selection/active受理约5–10 ms，但TF事务实测仍约44–58 s和86–115 s。候选普通分页约0.09–0.15 s、精确搜索约0.756 s，冷启动首次candidate约16.94 s。两轮浏览器激活期间普通CAN读取仍完成，证明长TF事务不再独占HTTP等待窗口。
+- 验收：统一测试34/34、目标反汇编、OpenOCD Verified、TF网页哈希/FAT检查通过；真实网页两轮全功能均成功，轮次间已退出页面。最终100次HTTP循环零失败，runtime active6/candidate22/8 signals，W5500 repair/failure、ACK timeout、recovery均0。本ADR不宣称后台TF写入已缩短到毫秒级，也不覆盖并发多客户端或故障注入场景。
